@@ -4,8 +4,6 @@ import constants from '../helpers/constants.js';
 const routes = Router();
 
 import tenantRoute from './tenant.routes.js';
-import operationRoute from './config.routes.js';
-import questionsRoute from './questions.routes.js';
 
 //HealthCheck
 routes.post('/healthcheck', (req, res) => {
