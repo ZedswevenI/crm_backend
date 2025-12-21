@@ -15,7 +15,6 @@ dotenv.config();
 const Rounds = 12;
 
 const pickTenantId = (req) => (req.body?.entiId || req.body?.tenantId || '').toString().trim();
-
 const safeLower = (v) => (v === null || v === undefined ? '' : String(v)).trim().toLowerCase();
 const safeTrim = (v) => (v === null || v === undefined ? '' : String(v)).trim();
 
@@ -135,8 +134,6 @@ const updateInstitute = async (req, res, next) => {
     const updateDoc = {};
     if (req.body.tenantName !== undefined) updateDoc.tenantName = safeTrim(req.body.tenantName);
     if (req.body.tenantCode !== undefined) updateDoc.tenantCode = safeTrim(req.body.tenantCode);
-    if (req.body.email !== undefined) updateDoc.email = safeLower(req.body.email);
-    if (req.body.phone !== undefined) updateDoc.phone = safeTrim(req.body.phone);
     if (req.body.contactName !== undefined) updateDoc.cntatName = safeTrim(req.body.contactName);
     if (req.body.Address1 !== undefined) updateDoc.entAddress1 = safeTrim(req.body.Address1);
     if (req.body.Address2 !== undefined) updateDoc.entAddress2 = safeTrim(req.body.Address2) || null;

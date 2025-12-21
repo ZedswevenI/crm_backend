@@ -5,7 +5,6 @@ const routes = Router();
 
 import tenantRoute from './tenant.routes.js';
 
-//HealthCheck
 routes.post('/healthcheck', (req, res) => {
   try {
     return res.status(constants.HTTPS_SUCCESS).send({ status: true, message: `CMMS API works!` });
@@ -14,7 +13,6 @@ routes.post('/healthcheck', (req, res) => {
   }
 });
 
-// Other Routes
 routes.use('/ims', tenantRoute);
 
 export default routes;

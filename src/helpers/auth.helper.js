@@ -10,7 +10,7 @@ export const signAccessToken = (user) =>
       userId: user._id,
       CRN: user.userId,
       email: user.email,
-      name: user.full_name
+      name: user.name
     },
     ACCESS_SECRET,
     { expiresIn: '1d' }
@@ -22,7 +22,7 @@ export const signRefreshToken = (user) =>
       userId: user._id,
       CRN: user.userId,
       email: user.email,
-      name: user.full_name
+      name: user.name
     },
     REFRESH_SECRET,
     { expiresIn: '7d' }

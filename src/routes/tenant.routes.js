@@ -7,8 +7,8 @@ import validatetoken from '../middlewares/auth.js';
 import tenantCtrl from '../controller/institute.controller.js';
 
 routes.post('/register', tenantCtrl.createInstitute);
-routes.post('/view', tenantCtrl.viewInstitute);
-routes.post('/update', tenantCtrl.updateCenter);
+routes.post('/view', validatetoken, tenantCtrl.viewInstitute);
+routes.post('/update', validatetoken, tenantCtrl.updateInstitute);
 
 // Center Routes
 routes.post('/center/create', validatetoken, tenantCtrl.createCenter);
