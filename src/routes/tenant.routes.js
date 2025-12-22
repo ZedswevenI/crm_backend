@@ -5,6 +5,7 @@ import validate from '../middlewares/validation.js';
 import constants from '../helpers/constants.js';
 import validatetoken from '../middlewares/auth.js';
 import tenantCtrl from '../controller/institute.controller.js';
+import programCtrl from '../controller/program.controller.js';
 
 routes.post('/register', tenantCtrl.createInstitute);
 routes.post('/view', validatetoken, tenantCtrl.viewInstitute);
@@ -27,6 +28,22 @@ routes.post('/user/list', validatetoken, tenantCtrl.listUsers);
 routes.post('/user/edit', validatetoken, tenantCtrl.updateUser);
 routes.post('/user/delete', validatetoken, tenantCtrl.deleteUser);
 routes.post('/user/view', validatetoken, tenantCtrl.viewUser);
+
+// program Routes
+routes.post('/program/create', validatetoken, programCtrl.createProgram);
+routes.post('/program/list', validatetoken, programCtrl.listPrograms);
+routes.post('/program/edit', validatetoken, programCtrl.updateProgram);
+routes.post('/program/delete', validatetoken, programCtrl.deleteProgram);
+routes.post('/program/view', validatetoken, programCtrl.viewProgram);
+
+// Center Routes
+routes.post('/feeplan/create', validatetoken, tenantCtrl.createFeePlan);
+routes.post('/feeplan/list', validatetoken, tenantCtrl.listFeePlans);
+routes.post('/feeplan/edit', validatetoken, tenantCtrl.updateFeePlan);
+routes.post('/feeplan/delete', validatetoken, tenantCtrl.deleteFeePlan);
+routes.post('/feeplan/view', validatetoken, tenantCtrl.viewFeePlan);
+routes.post('/feeplan/bulkupload', validatetoken, tenantCtrl.bulkUpsertFeePlansFromRows);
+routes.post('/feeplan/setstatus', validatetoken, tenantCtrl.setFeePlanStatus);
 
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Tenant routes' }));
 

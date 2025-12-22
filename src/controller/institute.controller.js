@@ -10,6 +10,8 @@ import Tenant from '../models/tenant.model.js';
 import User from '../models/users.model.js';
 import Center from '../models/center.model.js';
 import Token from '../models/auth.model.js';
+import FeePlan from '../models/feeplan.model.js';
+import Program from '../models/program.model.js';
 
 dotenv.config();
 const Rounds = 12;
@@ -580,6 +582,348 @@ const changePassword = async (req, res, next) => {
   }
 };
 
+// map excel feehead codes -> labels + discount rule
+const FEEHEAD_META = {
+  AM: { label: 'Administrative Charges', discountAllowed: false },
+  AF: { label: 'Admission Fee', discountAllowed: false },
+  IF: { label: 'Infra Fee', discountAllowed: false },
+  TF: { label: 'Tuition Fee', discountAllowed: true },
+  EF: { label: 'Exam Fee', discountAllowed: false },
+  BS: { label: 'Books Fee', discountAllowed: false },
+  GM: { label: 'GMP Fee', discountAllowed: false }
+};
+
+// -------------------- CREATE --------------------
+const createFeePlan = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    const payload = req.body || {};
+    const academicYear = safeTrim(payload.academicYear);
+    const feePlanCode = safeTrim(payload.feePlanCode);
+    const programId = safeTrim(payload.programId);
+    const programName = safeTrim(payload.programName);
+    const programCode = safeTrim(payload.programCode);
+
+    if (!academicYear || !feePlanCode || !programId || !programName || !programCode) {
+      return res.status(400).json({
+        status: false,
+        message: 'academicYear, feePlanCode, programId, programName, programCode are required'
+      });
+    }
+    const feeHeads = Array.isArray(payload.feeHeads) ? payload.feeHeads : [];
+    const instalments = Array.isArray(payload.instalments) ? payload.instalments : [];
+    if (!feeHeads.length) return res.status(400).json({ status: false, message: 'feeHeads is required' });
+    if (!instalments.length) return res.status(400).json({ status: false, message: 'instalments is required' });
+    const doc = await FeePlan.create({
+      tenantId,
+      academicYear,
+      feePlanCode,
+      programId,
+      programName,
+      programCode,
+      feePlanName: payload.feePlanName ? safeTrim(payload.feePlanName) : feePlanCode,
+      chequeFavour: payload.chequeFavour ? safeTrim(payload.chequeFavour) : null,
+      payableAt: payload.payableAt ? safeTrim(payload.payableAt) : null,
+      feeHeads,
+      instalments,
+      totalBaseFee: payload.totalBaseFee ?? 0,
+      totalGST: payload.totalGST ?? 0,
+      totalFee: payload.totalFee ?? 0,
+      status: payload.status || 'Active',
+      isdeleted: false
+    });
+    return res.status(constants.HTTPS_CREATED || 201).json({
+      status: true,
+      message: 'Fee plan created successfully',
+      data: doc
+    });
+  } catch (err) {
+    if (err && err.code === 11000) {
+      const dupField = Object.keys(err.keyPattern || {})[0] || 'unique field';
+      return res.status(409).json({ status: false, message: `Duplicate ${dupField}.` });
+    }
+    return next(err);
+  }
+};
+
+// -------------------- VIEW --------------------
+const viewFeePlan = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const recId = req.body?.recId;
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    if (!recId) return res.status(400).json({ status: false, message: 'recId is required' });
+    const doc = await FeePlan.findOne({ _id: recId, tenantId, isdeleted: false });
+    if (!doc) return res.status(404).json({ status: false, message: 'Fee plan not found' });
+    return res.status(constants.HTTPS_SUCCESS || 200).json({ status: true, data: doc });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+// -------------------- UPDATE --------------------
+const updateFeePlan = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const recId = req.body?.recId;
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    if (!recId) return res.status(400).json({ status: false, message: 'recId is required' });
+    const payload = req.body || {};
+    const updateDoc = {};
+    if (payload.academicYear !== undefined) updateDoc.academicYear = safeTrim(payload.academicYear);
+    if (payload.feePlanCode !== undefined) updateDoc.feePlanCode = safeTrim(payload.feePlanCode);
+    if (payload.feePlanName !== undefined) updateDoc.feePlanName = safeTrim(payload.feePlanName);
+    if (payload.programId !== undefined) updateDoc.programId = safeTrim(payload.programId);
+    if (payload.programName !== undefined) updateDoc.programName = safeTrim(payload.programName);
+    if (payload.programCode !== undefined) updateDoc.programCode = safeTrim(payload.programCode);
+    if (payload.chequeFavour !== undefined) updateDoc.chequeFavour = payload.chequeFavour ? safeTrim(payload.chequeFavour) : null;
+    if (payload.payableAt !== undefined) updateDoc.payableAt = payload.payableAt ? safeTrim(payload.payableAt) : null;
+    if (payload.feeHeads !== undefined) updateDoc.feeHeads = Array.isArray(payload.feeHeads) ? payload.feeHeads : [];
+    if (payload.instalments !== undefined) updateDoc.instalments = Array.isArray(payload.instalments) ? payload.instalments : [];
+    if (payload.status !== undefined) updateDoc.status = payload.status;
+    if (!Object.keys(updateDoc).length) {
+      return res.status(400).json({ status: false, message: 'No fields to update' });
+    }
+    const updated = await FeePlan.findOneAndUpdate({ _id: recId, tenantId, isdeleted: false }, { $set: updateDoc }, { new: true, runValidators: true });
+    if (!updated) return res.status(404).json({ status: false, message: 'Fee plan not found or deleted' });
+    return res.status(constants.HTTPS_SUCCESS || 200).json({
+      status: true,
+      message: 'Fee plan updated successfully',
+      data: updated
+    });
+  } catch (err) {
+    if (err && err.code === 11000) {
+      const dupField = Object.keys(err.keyPattern || {})[0] || 'unique field';
+      return res.status(409).json({ status: false, message: `Duplicate ${dupField}.` });
+    }
+    return next(err);
+  }
+};
+
+// -------------------- DELETE (soft) --------------------
+const deleteFeePlan = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const recId = req.body?.recId;
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    if (!recId) return res.status(400).json({ status: false, message: 'recId is required' });
+    const deleted = await FeePlan.findOneAndUpdate({ _id: recId, tenantId, isdeleted: false }, { $set: { isdeleted: true } }, { new: true });
+    if (!deleted) return res.status(404).json({ status: false, message: 'Fee plan not found or already deleted' });
+    return res.status(constants.HTTPS_SUCCESS || 200).json({
+      status: true,
+      message: 'Fee plan deleted successfully',
+      data: deleted
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+// -------------------- ACTIVE/INACTIVE --------------------
+const setFeePlanStatus = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const recId = req.body?.recId;
+    const status = req.body?.status;
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    if (!recId) return res.status(400).json({ status: false, message: 'recId is required' });
+    if (!['Active', 'Inactive'].includes(status)) {
+      return res.status(400).json({ status: false, message: 'status must be Active or Inactive' });
+    }
+    const updated = await FeePlan.findOneAndUpdate({ _id: recId, tenantId, isdeleted: false }, { $set: { status } }, { new: true });
+    if (!updated) return res.status(404).json({ status: false, message: 'Fee plan not found' });
+    return res.status(200).json({ status: true, message: 'Status updated', data: updated });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+// -------------------- LIST (pagination) --------------------
+const listFeePlans = async (req, res, next) => {
+  try {
+    const tenantId = safeTrim(req.body?.entiId);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required in query' });
+    const listType = req.query.list; // full/paginated
+    const sort = req.query.sort || '-createdAt';
+    const search = safeTrim(req.query.search);
+    const academicYear = safeTrim(req.query.academicYear);
+    const programId = safeTrim(req.query.programId);
+    const programCode = safeTrim(req.query.programCode);
+    const status = safeTrim(req.query.status);
+    const query = { tenantId, isdeleted: false };
+    if (academicYear) query.academicYear = academicYear;
+    if (programId) query.programId = programId;
+    if (programCode) query.programCode = programCode;
+    if (status) query.status = status;
+    if (search) {
+      query.$or = [{ feePlanCode: { $regex: search, $options: 'i' } }, { feePlanName: { $regex: search, $options: 'i' } }, { programName: { $regex: search, $options: 'i' } }, { programCode: { $regex: search, $options: 'i' } }];
+    }
+    let data;
+    let count;
+    let page;
+    if (listType === 'full') {
+      data = await FeePlan.find(query).sort('createdAt');
+      count = data.length;
+    } else {
+      page = parseInt(req.query.page, 10) || 1;
+      const limit = parseInt(req.query.limit, 10) || 10;
+      const skip = (page - 1) * limit;
+      count = await FeePlan.countDocuments(query);
+      data = await FeePlan.find(query).sort(sort).skip(skip).limit(limit);
+    }
+    return res.status(constants.HTTPS_SUCCESS || 200).json({
+      status: true,
+      message: 'Fee plan list retrieved successfully',
+      data,
+      page,
+      count
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const bulkUpsertFeePlansFromRows = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const academicYear = safeTrim(req.body?.academicYear);
+    const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    if (!academicYear) return res.status(400).json({ status: false, message: 'academicYear is required' });
+    if (!rows.length) return res.status(400).json({ status: false, message: 'rows must be a non-empty array' });
+    const groups = new Map();
+    for (const r of rows) {
+      const feePlanCode = safeTrim(r.feeplancode);
+      const programCode = safeTrim(r.programcode);
+      if (!feePlanCode || !programCode) continue;
+      const key = `${feePlanCode}__${programCode}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(r);
+    }
+    const processed = [];
+    const skipped = [];
+    const errors = [];
+    for (const [key, lines] of groups.entries()) {
+      try {
+        const feePlanCode = safeTrim(lines[0].feeplancode);
+        const programCode = safeTrim(lines[0].programcode);
+        const chequeFavour = safeTrim(lines[0].chequefavour) || null;
+        const payableAt = safeTrim(lines[0].payableat) || null;
+        const programDoc = await Program.findOne({
+          tenantId,
+          academicYear,
+          isdeleted: false,
+          programCodes: { $in: [String(programCode).toUpperCase()] }
+        }).lean();
+
+        if (!programDoc) {
+          skipped.push({ feePlanCode, programCode, reason: 'Program not found for this academicYear/programCode' });
+          continue;
+        }
+        const feeHeads = [];
+        let totalBase = 0;
+        let totalGst = 0;
+        let total = 0;
+        for (const l of lines) {
+          const headKey = safeTrim(l.feehead).toUpperCase();
+          const meta = FEEHEAD_META[headKey] || { label: safeTrim(l.feefor) || headKey, discountAllowed: headKey === 'TF' };
+          const amount = toNum(l.amount);
+          const gstPercent = toNum(l.strate); // strate = gst %
+          const gstAmount = Number(((amount * gstPercent) / 100).toFixed(2));
+          const totalAmount = Number((amount + gstAmount).toFixed(2));
+          totalBase += amount;
+          totalGst += gstAmount;
+          total += totalAmount;
+          feeHeads.push({
+            key: headKey,
+            label: meta.label,
+            amount,
+            gstPercent,
+            gstAmount,
+            totalAmount,
+            discountAllowed: !!meta.discountAllowed
+          });
+        }
+        // Instalments from insdate grouping (sum base amounts by insdate)
+        const instMap = new Map();
+        for (const l of lines) {
+          const insdate = safeTrim(l.insdate) || 'On Admission';
+          const amount = toNum(l.amount);
+          instMap.set(insdate, (instMap.get(insdate) || 0) + amount);
+        }
+        const instalments = Array.from(instMap.entries()).map(([label, amt], idx) => ({
+          seq: idx + 1,
+          label,
+          amount: Number(toNum(amt).toFixed(2))
+        }));
+        // Upsert by tenantId+academicYear+feePlanCode+programCode
+        const exists = await FeePlan.findOne({
+          tenantId,
+          academicYear,
+          feePlanCode,
+          programCode,
+          isdeleted: false
+        }).lean();
+        if (exists) {
+          await FeePlan.updateOne(
+            { _id: exists._id },
+            {
+              $set: {
+                programId: programDoc.programId,
+                programName: programDoc.programName,
+                feePlanName: feePlanCode,
+                chequeFavour,
+                payableAt,
+                feeHeads,
+                instalments,
+                totalBaseFee: Number(totalBase.toFixed(2)),
+                totalGST: Number(totalGst.toFixed(2)),
+                totalFee: Number(total.toFixed(2))
+              }
+            }
+          );
+          processed.push({ feePlanCode, programCode, action: 'updated' });
+        } else {
+          await FeePlan.create({
+            tenantId,
+            academicYear,
+            feePlanCode,
+            feePlanName: feePlanCode,
+            programId: programDoc.programId,
+            programName: programDoc.programName,
+            programCode,
+            chequeFavour,
+            payableAt,
+            feeHeads,
+            instalments,
+            totalBaseFee: Number(totalBase.toFixed(2)),
+            totalGST: Number(totalGst.toFixed(2)),
+            totalFee: Number(total.toFixed(2)),
+            status: 'Active',
+            isdeleted: false
+          });
+          processed.push({ feePlanCode, programCode, action: 'created' });
+        }
+      } catch (e) {
+        errors.push({ key, error: e?.message || String(e) });
+      }
+    }
+    return res.status(constants.HTTPS_SUCCESS || 200).json({
+      status: true,
+      message: 'Bulk fee plan import processed',
+      data: {
+        totalGroups: groups.size,
+        processed,
+        skipped,
+        errors
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   createInstitute,
   viewInstitute,
@@ -597,5 +941,12 @@ export default {
   Loginuser,
   refreshToken,
   logout,
-  changePassword
+  changePassword,
+  createFeePlan,
+  bulkUpsertFeePlansFromRows,
+  listFeePlans,
+  viewFeePlan,
+  updateFeePlan,
+  deleteFeePlan,
+  setFeePlanStatus
 };
