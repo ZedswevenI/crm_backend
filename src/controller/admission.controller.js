@@ -541,11 +541,88 @@ const viewAdmission = async (req, res, next) => {
   }
 };
 
+// -------------------------------
+// List admissions (search by registrationNumber via query)
+// -------------------------------
+const listAdmissions = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    if (!tenantId) {
+      return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    }
+
+    // registrationNumber, page, limit come from query string
+    const q = req.query || {};
+    const registrationNumber = safeTrim(q.registrationNumber);
+
+    const pageNum = Math.max(parseInt(q.page, 10) || 1, 1);
+    const limitNum = Math.min(Math.max(parseInt(q.limit, 10) || 20, 1), 100);
+    const skip = (pageNum - 1) * limitNum;
+
+    const query = {
+      tenantId,
+      isdeleted: false
+    };
+
+    // Optional: only active admissions unless explicitly asked
+    if (safeTrim(q.includeInactive).toLowerCase() !== 'yes') {
+      query.status = 'Active';
+    }
+
+    // Search by registrationNumber (partial, case-insensitive)
+    if (registrationNumber) {
+      query.registrationNumber = {
+        $regex: escapeRegex(registrationNumber),
+        $options: 'i'
+      };
+    }
+
+    const [rows, total] = await Promise.all([
+      Admission.find(query, {
+        _id: 0,
+        admissionId: 1,
+        academicYear: 1,
+        registrationNumber: 1,
+        centerId: 1,
+        centerName: 1,
+        programId: 1,
+        programName: 1,
+        programCode: 1,
+        'student.name': 1,
+        'student.phone': 1,
+        status: 1,
+        'workflow.stage': 1,
+        createdAt: 1
+      })
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limitNum)
+        .lean(),
+      Admission.countDocuments(query)
+    ]);
+
+    return res.status(200).json({
+      status: true,
+      message: 'Admissions list fetched',
+      data: {
+        rows,
+        page: pageNum,
+        limit: limitNum,
+        total,
+        pages: Math.ceil(total / limitNum) || 0
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   fetchScholarshipRegistration,
   createAdmissionDraft,
   saveAdmissionPayments,
   submitForApproval,
   approveAdmission,
-  viewAdmission
+  viewAdmission,
+  listAdmissions
 };
