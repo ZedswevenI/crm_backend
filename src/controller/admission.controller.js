@@ -23,22 +23,60 @@ const toNum = (v) => {
 
 const pad = (n, len = 6) => String(n).padStart(len, '0');
 
-// -------------------------------
-// 1) Fetch Scholarship Registration (portal -> cache)
-// -------------------------------
+const hasTestMarks = (doc) => {
+  if (!doc) return false;
+
+  return doc.normalizedScore != null || doc.normalizedPercentage != null || doc.normalizedRank != null || doc.waiverPerInTf != null || doc.gtotal != null || doc.paper1Total != null || doc.paper2Total != null;
+};
+
 const fetchScholarshipRegistration = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     const registrationNumber = safeTrim(req.body?.registrationNumber);
 
-    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-    if (!registrationNumber) return res.status(400).json({ status: false, message: 'registrationNumber is required' });
+    if (!tenantId) {
+      return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    }
+    if (!registrationNumber) {
+      return res.status(400).json({ status: false, message: 'registrationNumber is required' });
+    }
 
+    // 1️⃣ Guard: check if admission already exists for this reg no
+    const existingAdmission = await Admission.findOne({ tenantId, registrationNumber, isdeleted: false }, { _id: 0, admissionId: 1, admissionNo: 1 }).lean();
+
+    if (existingAdmission) {
+      return res.status(400).json({
+        status: false,
+        message: 'Admission already exists for this registration number',
+        data: {
+          admissionId: existingAdmission.admissionId || null,
+          admissionNo: existingAdmission.admissionNo || null
+        }
+      });
+    }
+
+    // 2️⃣ Check scholarship cache first
+    const cachedExisting = await ScholarshipTest.findOne({ tenantId, registrationNumber, isdeleted: false }).lean();
+
+    // if cache has marks already, just return it without hitting external API
+    if (cachedExisting && hasTestMarks(cachedExisting)) {
+      return res.status(200).json({
+        status: true,
+        message: 'Scholarship registration loaded from cache',
+        data: cachedExisting,
+        source: 'cache'
+      });
+    }
+
+    // 3️⃣ Need to sync from external portal (no cache OR cache without marks)
     const host = process.env.EXTERNAL_PORTAL_HOST;
     const apiKey = process.env.EXTERNAL_PORTAL_API_KEY;
 
     if (!host || !apiKey) {
-      return res.status(500).json({ status: false, message: 'External portal config missing (EXTERNAL_PORTAL_HOST / EXTERNAL_PORTAL_API_KEY)' });
+      return res.status(500).json({
+        status: false,
+        message: 'External portal config missing (EXTERNAL_PORTAL_HOST / EXTERNAL_PORTAL_API_KEY)'
+      });
     }
 
     const url = `${host}/api/v1/external/crm/${encodeURIComponent(registrationNumber)}`;
@@ -69,7 +107,10 @@ const fetchScholarshipRegistration = async (req, res, next) => {
           { upsert: true }
         );
 
-        return res.status(401).json({ status: false, message: 'External portal unauthorized (Invalid API Key)' });
+        return res.status(401).json({
+          status: false,
+          message: 'External portal unauthorized (Invalid API Key)'
+        });
       }
 
       if (status === 404) {
@@ -102,7 +143,11 @@ const fetchScholarshipRegistration = async (req, res, next) => {
         { upsert: true }
       );
 
-      return res.status(500).json({ status: false, message: 'External portal error', error: data || e?.message });
+      return res.status(500).json({
+        status: false,
+        message: 'External portal error',
+        error: data || e?.message
+      });
     }
 
     const body = resp?.data;
@@ -119,12 +164,15 @@ const fetchScholarshipRegistration = async (req, res, next) => {
         },
         { upsert: true }
       );
-      return res.status(500).json({ status: false, message: 'Invalid response from external portal' });
+      return res.status(500).json({
+        status: false,
+        message: 'Invalid response from external portal'
+      });
     }
 
     const d = body.data;
 
-    // Upsert cache
+    // Upsert cache (either new doc, or update existing partial doc with marks)
     const up = {
       tenantId,
       registrationNumber: safeTrim(d.registrationNumber),
@@ -164,12 +212,14 @@ const fetchScholarshipRegistration = async (req, res, next) => {
       lastSyncMessage: body?.message || 'OK',
       raw: body
     };
+
     const cached = await ScholarshipTest.findOneAndUpdate({ tenantId, registrationNumber: up.registrationNumber, isdeleted: false }, { $set: up, $setOnInsert: { isdeleted: false, status: 'Active' } }, { new: true, upsert: true }).lean();
 
     return res.status(200).json({
       status: true,
       message: 'Scholarship registration retrieved',
-      data: cached
+      data: cached,
+      source: 'external'
     });
   } catch (err) {
     return next(err);
@@ -563,16 +613,12 @@ const listAdmissions = async (req, res, next) => {
       tenantId,
       isdeleted: false
     };
-
-    // Optional: only active admissions unless explicitly asked
     if (safeTrim(q.includeInactive).toLowerCase() !== 'yes') {
       query.status = 'Active';
     }
-
-    // Search by registrationNumber (partial, case-insensitive)
     if (registrationNumber) {
       query.registrationNumber = {
-        $regex: escapeRegex(registrationNumber),
+        $regex: registrationNumber,
         $options: 'i'
       };
     }
