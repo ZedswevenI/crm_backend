@@ -1,7 +1,7 @@
 import constants from '../helpers/constants.js';
 import Program from '../models/program.model.js';
 
-const pickTenantId = (req) => (req.body?.entiId || req.body?.tenantId || '').toString().trim();
+const pickTenantId = (req) => (req.body?.entiId || '').toString().trim();
 const safeTrim = (v) => (v === null || v === undefined ? '' : String(v)).trim();
 
 const createProgram = async (req, res, next) => {
@@ -11,16 +11,14 @@ const createProgram = async (req, res, next) => {
     const payload = req.body || {};
     const doc = await Program.create({
       tenantId,
-      academicYear: safeTrim(payload.academicYear),
-      studyingClass: safeTrim(payload.studyingClass),
-      goingToClass: payload.goingToClass ? safeTrim(payload.goingToClass) : null,
+      eligibleToClass: safeTrim(payload.eligibleToClass),
       programName: safeTrim(payload.programName),
-      programCodes: payload.programCodes,
-      programType: payload.programType ? safeTrim(payload.programType) : null,
-      duration: payload.duration ? safeTrim(payload.duration) : null,
+      programCodes: safeTrim(payload.programCodes),
       target: payload.target ? safeTrim(payload.target) : null,
+      duration: payload.duration ? safeTrim(payload.duration) : null,
+      version: safeTrim(payload.version),
+      programType: payload.programType ? safeTrim(payload.programType) : null,
       excelId: payload.excelId ?? null,
-      options: Array.isArray(payload.options) ? payload.options : [],
       status: payload.status || 'Active',
       isdeleted: false
     });
@@ -61,16 +59,14 @@ const updateProgram = async (req, res, next) => {
     if (!recId) return res.status(400).json({ status: false, message: 'recId is required' });
     const payload = req.body || {};
     const updateDoc = {};
-    if (payload.academicYear !== undefined) updateDoc.academicYear = safeTrim(payload.academicYear);
-    if (payload.studyingClass !== undefined) updateDoc.studyingClass = safeTrim(payload.studyingClass);
-    if (payload.goingToClass !== undefined) updateDoc.goingToClass = payload.goingToClass ? safeTrim(payload.goingToClass) : null;
+    if (payload.eligibleToClass !== undefined) updateDoc.eligibleToClass = safeTrim(payload.eligibleToClass);
     if (payload.programName !== undefined) updateDoc.programName = safeTrim(payload.programName);
-    if (payload.programCodes !== undefined) updateDoc.programCodes = payload.programCodes;
-    if (payload.programType !== undefined) updateDoc.programType = payload.programType ? safeTrim(payload.programType) : null;
-    if (payload.duration !== undefined) updateDoc.duration = payload.duration ? safeTrim(payload.duration) : null;
+    if (payload.programCodes !== undefined) updateDoc.programCodes = safeTrim(payload.programCodes);
     if (payload.target !== undefined) updateDoc.target = payload.target ? safeTrim(payload.target) : null;
+    if (payload.duration !== undefined) updateDoc.duration = payload.duration ? safeTrim(payload.duration) : null;
+    if (payload.version !== undefined) updateDoc.version = safeTrim(payload.version);
+    if (payload.programType !== undefined) updateDoc.programType = payload.programType ? safeTrim(payload.programType) : null;
     if (payload.excelId !== undefined) updateDoc.excelId = payload.excelId ?? null;
-    if (payload.options !== undefined) updateDoc.options = Array.isArray(payload.options) ? payload.options : [];
     if (payload.status !== undefined) updateDoc.status = payload.status;
     if (!Object.keys(updateDoc).length) {
       return res.status(400).json({ status: false, message: 'No fields to update' });
@@ -111,18 +107,20 @@ const deleteProgram = async (req, res, next) => {
 
 const listPrograms = async (req, res, next) => {
   try {
-    const tenantId = safeTrim(req.body?.entiId);
-    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required in query' });
+    const tenantId = safeTrim(req.body?.entiId || req.body?.tenantId);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required in body' });
     const listType = req.query.list;
     const sort = req.query.sort || '-createdAt';
     const search = safeTrim(req.query.search);
-    const academicYear = safeTrim(req.query.academicYear);
-    const studyingClass = safeTrim(req.query.studyingClass);
+    const eligibleToClass = safeTrim(req.query.eligibleToClass);
     const status = safeTrim(req.query.status);
+    const target = safeTrim(req.query.target);
+    const duration = safeTrim(req.query.duration);
     const query = { tenantId, isdeleted: false };
-    if (academicYear) query.academicYear = academicYear;
-    if (studyingClass) query.studyingClass = studyingClass;
+    if (eligibleToClass) query.eligibleToClass = eligibleToClass;
     if (status) query.status = status;
+    if (target) query.target = target;
+    if (duration) query.duration = duration;
     if (search) {
       query.$or = [
         { programName: { $regex: search, $options: 'i' } },
@@ -130,7 +128,7 @@ const listPrograms = async (req, res, next) => {
         { target: { $regex: search, $options: 'i' } },
         { duration: { $regex: search, $options: 'i' } },
         { programCodes: { $regex: search, $options: 'i' } },
-        { 'options.version': { $regex: search, $options: 'i' } }
+        { version: { $regex: search, $options: 'i' } }
       ];
     }
     let data;
@@ -158,10 +156,112 @@ const listPrograms = async (req, res, next) => {
   }
 };
 
+const importPrograms = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    const payload = req.body || {};
+    const rows = Array.isArray(payload.rows) ? payload.rows : [];
+    const mode = safeTrim(payload.mode || 'insert').toLowerCase();
+    if (!rows.length) {
+      return res.status(400).json({ status: false, message: 'rows must be a non-empty array' });
+    }
+    const docs = [];
+    const rowErrors = [];
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i] || {};
+      const programName = safeTrim(r.programName);
+      const eligibleToClass = safeTrim(r.eligibleToClass);
+      const programCodes = safeTrim(r.programCodes);
+      const version = safeTrim(r.version);
+      if (!programName || !eligibleToClass || !programCodes || !version) {
+        rowErrors.push({
+          row: i + 1,
+          message: 'programName, eligibleToClass, programCodes, version are required'
+        });
+        continue;
+      }
+      docs.push({
+        tenantId,
+        excelId: r.excelId ?? null,
+        programName,
+        eligibleToClass,
+        programCodes,
+        target: r.target ? safeTrim(r.target) : null,
+        duration: r.duration ? safeTrim(r.duration) : null,
+        version,
+        programType: r.programType ? safeTrim(r.programType) : null,
+        status: r.status ? safeTrim(r.status) : 'Active',
+        isdeleted: false
+      });
+    }
+    if (!docs.length) {
+      return res.status(400).json({ status: false, message: 'No valid rows to import', rowErrors });
+    }
+    if (mode === 'upsert') {
+      const ops = docs.map((d) => ({
+        updateOne: {
+          filter: {
+            tenantId: d.tenantId,
+            eligibleToClass: d.eligibleToClass,
+            programName: d.programName,
+            version: d.version,
+            isdeleted: false
+          },
+          update: { $set: d },
+          upsert: true
+        }
+      }));
+      const result = await Program.bulkWrite(ops, { ordered: false });
+      return res.status(constants.HTTPS_SUCCESS || 200).json({
+        status: true,
+        message: 'Program import completed (upsert)',
+        rowErrors,
+        summary: {
+          received: rows.length,
+          valid: docs.length,
+          upserted: result.upsertedCount || 0,
+          modified: result.modifiedCount || 0,
+          matched: result.matchedCount || 0
+        }
+      });
+    }
+    let inserted = [];
+    let insertErrs = [];
+    try {
+      inserted = await Program.insertMany(docs, { ordered: false });
+    } catch (e) {
+      inserted = e?.insertedDocs || [];
+      insertErrs = Array.isArray(e?.writeErrors)
+        ? e.writeErrors.map((we) => ({
+            index: we.index,
+            code: we.code,
+            message: we.errmsg || we.message
+          }))
+        : [{ message: e?.message || 'Bulk insert error' }];
+    }
+    return res.status(constants.HTTPS_SUCCESS || 200).json({
+      status: true,
+      message: 'Program import completed (insert)',
+      rowErrors,
+      summary: {
+        received: rows.length,
+        valid: docs.length,
+        inserted: inserted.length,
+        failed: insertErrs.length
+      },
+      insertErrors: insertErrs
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   createProgram,
   viewProgram,
   updateProgram,
   deleteProgram,
-  listPrograms
+  listPrograms,
+  importPrograms
 };
