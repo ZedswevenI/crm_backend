@@ -40,7 +40,7 @@ const fetchScholarshipRegistration = async (req, res, next) => {
     const existingAdmission = await Admission.findOne({ tenantId, registrationNumber, isdeleted: false }, { _id: 0, admissionId: 1, admissionNo: 1, registrationNumber }).lean();
     if (existingAdmission) {
       return res.status(400).json({
-        status: false,
+        status: true,
         message: 'Admission already exists for this registration number',
         data: {
           admissionId: existingAdmission.admissionId || null,
@@ -174,6 +174,7 @@ const fetchScholarshipRegistration = async (req, res, next) => {
       testDate: safeTrim(d.testDate) || null,
       testCity: safeTrim(d.testCity) || null,
       testCentre: safeTrim(d.testCentre) || null,
+      testName: safeTrim(d.testName) || null,
       centerCode: safeTrim(d.centerCode) || null,
       programName: safeTrim(d.programName) || null,
       programCode: safeTrim(d.programCode) || null,
@@ -238,6 +239,7 @@ const createAdmissionDraft = async (req, res, next) => {
     const userId = pickUserId(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
     const p = req.body || {};
+    const sm = p.schoolMarks || {};
     const academicYear = safeTrim(p.academicYear);
     const sourceType = safeTrim(p.sourceType);
     const feePlanId = safeTrim(p.feePlanId);
@@ -305,6 +307,11 @@ const createAdmissionDraft = async (req, res, next) => {
         stage: 'DRAFT'
       },
       status: 'Active',
+      schoolMarks: {
+        overallPct: sm.overallPct === '' || sm.overallPct === null || sm.overallPct === undefined ? null : toNum(sm.overallPct),
+        coreSubjectPct: sm.coreSubjectPct === '' || sm.coreSubjectPct === null || sm.coreSubjectPct === undefined ? null : toNum(sm.coreSubjectPct),
+        remarks: safeTrim(sm.remarks) || null
+      },
       isdeleted: false,
       createdBy: userId || null,
       updatedBy: userId || null
@@ -517,22 +524,30 @@ const listAdmissions = async (req, res, next) => {
       return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
     }
     const q = req.query || {};
-    const registrationNumber = safeTrim(q.registrationNumber);
     const pageNum = Math.max(parseInt(q.page, 10) || 1, 1);
     const limitNum = Math.min(Math.max(parseInt(q.limit, 10) || 20, 1), 100);
     const skip = (pageNum - 1) * limitNum;
-    const query = {
-      tenantId,
-      isdeleted: false
-    };
+    const registrationNumber = safeTrim(q.registrationNumber);
+    const admissionNo = safeTrim(q.admissionNo);
+    const search = safeTrim(q.search);
+    const statusFilter = safeTrim(q.status).toLowerCase();
+    const query = { tenantId, isdeleted: false };
     if (safeTrim(q.includeInactive).toLowerCase() !== 'yes') {
       query.status = 'Active';
     }
+    if (statusFilter && statusFilter !== 'all') {
+      if (statusFilter === 'approved') query['workflow.stage'] = 'CONFIRMED';
+      else if (statusFilter === 'rejected') query['workflow.stage'] = 'REJECTED';
+      else if (statusFilter === 'waiting' || statusFilter === 'waitingforapproval') query['workflow.stage'] = 'APPROVAL_SENT';
+    }
     if (registrationNumber) {
-      query.registrationNumber = {
-        $regex: registrationNumber,
-        $options: 'i'
-      };
+      query.registrationNumber = { $regex: registrationNumber, $options: 'i' };
+    }
+    if (admissionNo) {
+      query.admissionNo = { $regex: admissionNo, $options: 'i' };
+    }
+    if (search) {
+      query.$or = [{ admissionNo: { $regex: search, $options: 'i' } }, { registrationNumber: { $regex: search, $options: 'i' } }, { 'student.name': { $regex: search, $options: 'i' } }, { 'student.phone': { $regex: search, $options: 'i' } }];
     }
     const [rows, total] = await Promise.all([
       Admission.find(query, {
@@ -550,6 +565,9 @@ const listAdmissions = async (req, res, next) => {
         'student.phone': 1,
         status: 1,
         'workflow.stage': 1,
+        'workflow.approvedAt': 1,
+        'workflow.finalFee': 1,
+        fee: 1,
         createdAt: 1
       })
         .sort({ createdAt: -1 })
@@ -574,6 +592,113 @@ const listAdmissions = async (req, res, next) => {
   }
 };
 
+const rejectAdmission = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = pickUserId(req);
+    const admissionId = safeTrim(req.body?.admissionId);
+    const reason = safeTrim(req.body?.reason);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    if (!admissionId) return res.status(400).json({ status: false, message: 'admissionId is required' });
+    if (!userId) return res.status(400).json({ status: false, message: 'userId is required' });
+    if (!reason) return res.status(400).json({ status: false, message: 'reason is required' });
+    const admission = await Admission.findOne({ tenantId, admissionId, isdeleted: false });
+    if (!admission) return res.status(404).json({ status: false, message: 'Admission not found' });
+    if (admission.workflow?.stage !== 'APPROVAL_SENT') {
+      return res.status(400).json({
+        status: false,
+        message: 'Only admissions in APPROVAL_SENT stage can be rejected'
+      });
+    }
+    admission.workflow.stage = 'REJECTED';
+    admission.workflow.rejectedAt = new Date();
+    admission.workflow.rejectedBy = userId;
+    admission.workflow.rejectionReason = reason || null;
+    admission.updatedBy = userId;
+    await admission.save();
+    return res.status(200).json({
+      status: true,
+      message: 'Admission rejected',
+      data: { admissionId, stage: admission.workflow.stage }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const updateAdmission = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = pickUserId(req);
+    const admissionId = safeTrim(req.body?.admissionId);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    if (!admissionId) return res.status(400).json({ status: false, message: 'admissionId is required' });
+    if (!userId) return res.status(400).json({ status: false, message: 'userId is required' });
+    const admission = await Admission.findOne({ tenantId, admissionId, isdeleted: false });
+    if (!admission) return res.status(404).json({ status: false, message: 'Admission not found' });
+    const stage = safeTrim(admission?.workflow?.stage).toUpperCase();
+    if (!['DRAFT', 'REJECTED'].includes(stage)) {
+      return res.status(400).json({
+        status: false,
+        message: 'Only DRAFT/REJECTED admissions can be edited'
+      });
+    }
+    const p = req.body || {};
+    const student = p.student || {};
+    const test = p.test || {};
+    const fee = p.fee || {};
+    const sm = p.schoolMarks || {};
+    if (safeTrim(student.name)) admission.student.name = safeTrim(student.name);
+    if (safeTrim(student.phone)) admission.student.phone = safeTrim(student.phone);
+    if (student.email !== undefined) admission.student.email = safeTrim(student.email) ? safeTrim(student.email).toLowerCase() : null;
+    if (student.parentName !== undefined) admission.student.parentName = safeTrim(student.parentName) || null;
+    if (student.parentPhone !== undefined) admission.student.parentPhone = safeTrim(student.parentPhone) || null;
+    if (student.address !== undefined) admission.student.address = safeTrim(student.address) || null;
+    if (student.city !== undefined) admission.student.city = safeTrim(student.city) || null;
+    if (student.className !== undefined) admission.student.className = safeTrim(student.className) || null;
+    if (p.centerId !== undefined) admission.centerId = safeTrim(p.centerId) || null;
+    if (p.centerName !== undefined) admission.centerName = safeTrim(p.centerName) || admission.centerName;
+    if (p.programId !== undefined) admission.programId = safeTrim(p.programId) || null;
+    if (p.programName !== undefined) admission.programName = safeTrim(p.programName) || admission.programName;
+    if (p.programCode !== undefined) admission.programCode = safeTrim(p.programCode) || null;
+    if (p.batchId !== undefined) admission.batchId = safeTrim(p.batchId) || null;
+    if (p.batchName !== undefined) admission.batchName = safeTrim(p.batchName) || null;
+    if (p.classLabel !== undefined) admission.classLabel = safeTrim(p.classLabel) || null;
+    if (Object.keys(test).length) {
+      admission.test = admission.test || {};
+      Object.assign(admission.test, test);
+    }
+    if (p.feePlanId !== undefined) admission.feePlanId = safeTrim(p.feePlanId) || admission.feePlanId;
+    if (p.feePlanCode !== undefined) admission.feePlanCode = safeTrim(p.feePlanCode) || admission.feePlanCode;
+    admission.fee = admission.fee || {};
+    if (fee.baseFee !== undefined) admission.fee.baseFee = toNum(fee.baseFee);
+    if (fee.finalFee !== undefined) admission.fee.finalFee = toNum(fee.finalFee);
+    if (fee.testScholarshipPct !== undefined) admission.fee.testScholarshipPct = toNum(fee.testScholarshipPct);
+    if (fee.scholarshipPct !== undefined) admission.fee.scholarshipPct = toNum(fee.scholarshipPct);
+    if (fee.additionalScholarshipPct !== undefined) admission.fee.additionalScholarshipPct = toNum(fee.additionalScholarshipPct);
+    if (fee.totalDiscountPct !== undefined) admission.fee.totalDiscountPct = toNum(fee.totalDiscountPct);
+    if (Array.isArray(fee.breakup)) admission.fee.breakup = fee.breakup;
+    admission.schoolMarks = admission.schoolMarks || {};
+    if (sm.overallPct !== undefined) admission.schoolMarks.overallPct = sm.overallPct === '' ? null : toNum(sm.overallPct);
+    if (sm.coreSubjectPct !== undefined) admission.schoolMarks.coreSubjectPct = sm.coreSubjectPct === '' ? null : toNum(sm.coreSubjectPct);
+    if (sm.remarks !== undefined) admission.schoolMarks.remarks = safeTrim(sm.remarks) || null;
+    admission.workflow = admission.workflow || {};
+    if (stage === 'REJECTED') {
+      admission.workflow.stage = 'DRAFT';
+      admission.workflow.rejectionReason = admission.workflow.rejectionReason;
+    }
+    admission.updatedBy = userId;
+    await admission.save();
+    return res.status(200).json({
+      status: true,
+      message: 'Admission updated',
+      data: { admissionId: admission.admissionId, stage: admission.workflow.stage }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   fetchScholarshipRegistration,
   createAdmissionDraft,
@@ -581,5 +706,7 @@ export default {
   submitForApproval,
   approveAdmission,
   viewAdmission,
-  listAdmissions
+  listAdmissions,
+  rejectAdmission,
+  updateAdmission
 };

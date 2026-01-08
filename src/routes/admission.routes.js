@@ -12,6 +12,8 @@ routes.post('/create', validatetoken, admisCtrl.createAdmissionDraft);
 routes.post('/payments/save', validatetoken, admisCtrl.saveAdmissionPayments);
 routes.post('/submit-approval', validatetoken, admisCtrl.submitForApproval);
 routes.post('/approve', validatetoken, admisCtrl.approveAdmission);
+routes.post('/reject', validatetoken, admisCtrl.rejectAdmission);
+routes.post('/update', validatetoken, admisCtrl.updateAdmission);
 routes.post('/view', validatetoken, admisCtrl.viewAdmission);
 routes.post('/list', validatetoken, admisCtrl.listAdmissions);
 

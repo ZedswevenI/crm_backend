@@ -52,6 +52,7 @@ const admissionSchema = new mongoose.Schema(
       testDate: { type: String, required: false, trim: true, default: null },
       testCity: { type: String, required: false, trim: true, default: null },
       testCentre: { type: String, required: false, trim: true, default: null },
+      testName: { type: String, required: false, trim: true, default: null },
       centerCode: { type: String, required: false, trim: true, default: null },
       resultCategory: { type: String, required: false, trim: true, default: null },
       paper1Total: { type: String, required: false, trim: true, default: null },
@@ -93,7 +94,7 @@ const admissionSchema = new mongoose.Schema(
     workflow: {
       stage: {
         type: String,
-        enum: ['DRAFT', 'PAYMENTS_SUBMITTED', 'FEE_CALC_GENERATED', 'APPROVAL_SENT', 'CONFIRMED'],
+        enum: ['DRAFT', 'PAYMENTS_SUBMITTED', 'FEE_CALC_GENERATED', 'APPROVAL_SENT', 'CONFIRMED', 'REJECTED'],
         default: 'DRAFT'
       },
       paymentsSubmittedAt: { type: Date, required: false, default: null },
@@ -101,7 +102,10 @@ const admissionSchema = new mongoose.Schema(
       approvalSentAt: { type: Date, required: false, default: null },
       confirmedAt: { type: Date, required: false, default: null },
       approvedBy: { type: String, required: false, trim: true, default: null },
-      approvedAt: { type: Date, required: false, default: null }
+      approvedAt: { type: Date, required: false, default: null },
+      rejectedAt: { type: Date, required: false, default: null },
+      rejectedBy: { type: String, required: false, trim: true, default: null },
+      rejectionReason: { type: String, required: false, trim: true, default: null }
     },
     print: {
       feeAcknowledgementPrintedAt: { type: Date, required: false, default: null },
@@ -109,6 +113,11 @@ const admissionSchema = new mongoose.Schema(
       feeCalculationPrintedAt: { type: Date, required: false, default: null }
     },
     status: { type: String, enum: ['Active', 'Inactive'], default: 'Active' },
+    schoolMarks: {
+      overallPct: { type: Number, required: false, default: null },
+      coreSubjectPct: { type: Number, required: false, default: null },
+      remarks: { type: String, required: false, trim: true, default: null }
+    },
     isdeleted: { type: Boolean, required: true, default: false },
     approvedBy: { type: String, required: false, default: null, ref: 'user' },
     createdBy: { type: String, required: false, default: null, ref: 'user' },

@@ -31,6 +31,7 @@ const scholarshipTestSchema = new mongoose.Schema(
     testDate: { type: String, required: false, trim: true, default: null },
     testCity: { type: String, required: false, trim: true, default: null },
     testCentre: { type: String, required: false, trim: true, default: null },
+    testName: { type: String, required: false, trim: true, default: null },
     centerCode: { type: String, required: false, trim: true, default: null },
     programName: { type: String, required: false, trim: true, default: null },
     programCode: { type: String, required: false, trim: true, default: null },
