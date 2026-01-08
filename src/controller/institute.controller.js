@@ -773,25 +773,21 @@ const listFeePlans = async (req, res, next) => {
   try {
     const tenantId = safeTrim(req.body?.entiId);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required in body' });
-
-    const listType = req.query.list; // full/paginated
+    const listType = req.query.list;
     const sort = req.query.sort || '-createdAt';
-
     const search = safeTrim(req.query.search);
     const academicYear = safeTrim(req.query.academicYear);
     const programCode = safeTrim(req.query.programCode);
+    const programId = safeTrim(req.query.programId);
     const status = safeTrim(req.query.status);
-
     const query = { tenantId, isdeleted: false };
-
     if (academicYear) query.academicYear = academicYear;
     if (programCode) query.programCode = programCode;
+    if (programId) query.programId = programId;
     if (status) query.status = status;
-
     if (search) {
       query.$or = [{ feePlanName: { $regex: search, $options: 'i' } }, { feePlanDisplayName: { $regex: search, $options: 'i' } }, { programName: { $regex: search, $options: 'i' } }, { programCode: { $regex: search, $options: 'i' } }];
     }
-
     let data;
     let count;
     let page;

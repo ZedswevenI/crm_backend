@@ -50,7 +50,9 @@ const scholarshipTestSchema = new mongoose.Schema(
     lastSyncMessage: { type: String, required: false, trim: true, default: null },
     raw: { type: Object, required: false, default: null },
     status: { type: String, enum: ['Active', 'Inactive'], default: 'Active' },
-    isdeleted: { type: Boolean, required: true, default: false }
+    isdeleted: { type: Boolean, required: true, default: false },
+    createdBy: { type: String, required: false, default: null, ref: 'user' },
+    updatedBy: { type: String, required: false, default: null, ref: 'user' }
   },
   { timestamps: true }
 );

@@ -36,7 +36,8 @@ const admissionSchema = new mongoose.Schema(
       address: { type: String, required: false, trim: true, default: null },
       city: { type: String, required: false, trim: true, default: null },
       schoolName: { type: String, required: false, trim: true, default: null },
-      className: { type: String, required: false, trim: true, default: null }
+      className: { type: String, required: false, trim: true, default: null },
+      studentRegNo: { type: String, required: false, trim: true, default: null }
     },
     centerId: { type: String, required: false, trim: true, default: null },
     centerName: { type: String, required: true, trim: true },
@@ -108,12 +109,14 @@ const admissionSchema = new mongoose.Schema(
       feeCalculationPrintedAt: { type: Date, required: false, default: null }
     },
     status: { type: String, enum: ['Active', 'Inactive'], default: 'Active' },
-    isdeleted: { type: Boolean, required: true, default: false }
+    isdeleted: { type: Boolean, required: true, default: false },
+    approvedBy: { type: String, required: false, default: null, ref: 'user' },
+    createdBy: { type: String, required: false, default: null, ref: 'user' },
+    updatedBy: { type: String, required: false, default: null, ref: 'user' }
   },
   { timestamps: true }
 );
 
-// indexes
 admissionSchema.index({ tenantId: 1, admissionId: 1, isdeleted: 1 }, { unique: true });
 admissionSchema.index({ tenantId: 1, registrationNumber: 1, isdeleted: 1 });
 admissionSchema.index({ tenantId: 1, programCode: 1, isdeleted: 1 });
