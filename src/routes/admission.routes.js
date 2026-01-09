@@ -16,6 +16,7 @@ routes.post('/reject', validatetoken, admisCtrl.rejectAdmission);
 routes.post('/update', validatetoken, admisCtrl.updateAdmission);
 routes.post('/view', validatetoken, admisCtrl.viewAdmission);
 routes.post('/list', validatetoken, admisCtrl.listAdmissions);
+routes.post('/paymenttemplate', validatetoken, admisCtrl.getPaymentTemplate);
 
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Admission routes' }));
 

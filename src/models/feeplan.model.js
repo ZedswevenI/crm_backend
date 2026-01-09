@@ -28,32 +28,18 @@ const feePlanSchema = new mongoose.Schema(
   {
     tenantId: { type: String, required: true, trim: true, index: true },
     feePlanId: { type: String, required: true, default: uuid, trim: true },
-
     academicYear: { type: String, required: true, trim: true },
-
-    // keep programCode only (as you asked)
     programCode: { type: String, required: true, trim: true },
-
-    // optional - can be filled from Program master
     programId: { type: String, required: false, trim: true, default: null },
     programName: { type: String, required: false, trim: true, default: null },
-
-    // Excel feeplancode -> feePlanName
     feePlanName: { type: String, required: true, trim: true },
-
-    // second field: “while storing show it like this”
-    // auto-generated combined display name
     feePlanDisplayName: { type: String, required: true, trim: true },
-
     currency: { type: String, default: 'INR' },
-
     feeHeads: { type: [feeHeadSchema], required: true, default: [] },
     instalments: { type: [instalmentSchema], required: true, default: [] },
-
     totalBaseFee: { type: Number, required: true, default: 0 },
     totalGST: { type: Number, required: true, default: 0 },
     totalFee: { type: Number, required: true, default: 0 },
-
     status: { type: String, enum: ['Active', 'Inactive'], default: 'Active' },
     isdeleted: { type: Boolean, required: true, default: false }
   },

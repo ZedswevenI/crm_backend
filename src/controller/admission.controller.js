@@ -2,9 +2,10 @@ import axios from 'axios';
 import constants from '../helpers/constants.js';
 import Center from '../models/center.model.js';
 import ScholarshipTest from '../models/scholarship.model.js';
-import Admission from '../models/admission.model.js'; // your schema :contentReference[oaicite:1]{index=1}
+import Admission from '../models/admission.model.js';
 import Payment from '../models/admissionpayments.model.js';
 import Counter from '../models/counter.model.js';
+import FeePlan from '../models/feeplan.model.js';
 
 const pickTenantId = (req) => String(req.body?.entiId || req.body?.tenantId || '').trim();
 const safeTrim = (v) => (v === null || v === undefined ? '' : String(v)).trim();
@@ -455,6 +456,9 @@ const submitForApproval = async (req, res, next) => {
     if (admission.workflow?.stage === 'DRAFT') {
       return res.status(400).json({ status: false, message: 'Submit payments first' });
     }
+    if (!['PAYMENTS_SUBMITTED', 'FEE_CALC_GENERATED'].includes(String(admission.workflow?.stage || ''))) {
+      return res.status(400).json({ status: false, message: 'Payments must be submitted before sending for approval' });
+    }
     admission.workflow.stage = 'APPROVAL_SENT';
     admission.workflow.approvalSentAt = new Date();
     admission.updatedBy = userId;
@@ -510,6 +514,8 @@ const viewAdmission = async (req, res, next) => {
     if (!admissionId) return res.status(400).json({ status: false, message: 'admissionId is required' });
     const admission = await Admission.findOne({ tenantId, admissionId, isdeleted: false }).lean();
     if (!admission) return res.status(404).json({ status: false, message: 'Admission not found' });
+    const feePlan = await FeePlan.findOne({ tenantId, feePlanId: admission?.feePlanId, isdeleted: false }, { _id: 0, feePlanName: 1, feePlanCode: 1 }).lean();
+    admission.feePlanName = feePlan?.feePlanName || null;
     const payments = await Payment.find({ tenantId, admissionId, isdeleted: false }).sort({ createdAt: 1 }).lean();
     return res.status(200).json({ status: true, data: { admission, payments } });
   } catch (err) {
@@ -699,6 +705,74 @@ const updateAdmission = async (req, res, next) => {
   }
 };
 
+const getPaymentTemplate = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const admissionId = safeTrim(req.body?.admissionId);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    if (!admissionId) return res.status(400).json({ status: false, message: 'admissionId is required' });
+    const admission = await Admission.findOne({ tenantId, admissionId, isdeleted: false }).lean();
+    if (!admission) return res.status(404).json({ status: false, message: 'Admission not found' });
+    const feePlanId = safeTrim(admission?.feePlanId);
+    if (!feePlanId) return res.status(400).json({ status: false, message: 'feePlanId missing in admission' });
+    const feePlan = await FeePlan.findOne({ tenantId, feePlanId, isdeleted: false }).lean();
+    if (!feePlan) return res.status(404).json({ status: false, message: 'Fee plan not found' });
+    const instalments = Array.isArray(feePlan.instalments) ? feePlan.instalments : [];
+    const chequeTemplate = instalments
+      .sort((a, b) => toNum(a.seq) - toNum(b.seq))
+      .map((x, idx) => {
+        const sno = Number.isFinite(Number(x.seq)) ? Number(x.seq) : idx + 1;
+        const label = safeTrim(x.label);
+        const amount = toNum(x.amount);
+        const dueDate = parseDateFromLabel(label);
+        return {
+          sno,
+          instalmentLabel: label,
+          chequeDate: null,
+          dueDate,
+          favourOf: safeTrim(admission?.centerName || admission?.academics?.centreName) || '—',
+          mode: 'PDC',
+          amount
+        };
+      });
+    const neftSplitAmount = Number(admission?.payments?.neft?.splitAmount || 0);
+    return res.status(200).json({
+      status: true,
+      message: 'Payment template loaded',
+      data: {
+        admissionId,
+        feePlanId,
+        neftSplitAmount,
+        chequeTemplate
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+function parseDateFromLabel(label) {
+  const s = safeTrim(label);
+  if (!s) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+  if (m) {
+    const dd = String(m[1]).padStart(2, '0');
+    const mm = String(m[2]).padStart(2, '0');
+    const yyyy = m[3];
+    return `${yyyy}-${mm}-${dd}`;
+  }
+  const d = new Date(s);
+  if (!isNaN(d.getTime())) {
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  }
+
+  return null;
+}
+
 export default {
   fetchScholarshipRegistration,
   createAdmissionDraft,
@@ -708,5 +782,6 @@ export default {
   viewAdmission,
   listAdmissions,
   rejectAdmission,
-  updateAdmission
+  updateAdmission,
+  getPaymentTemplate
 };
