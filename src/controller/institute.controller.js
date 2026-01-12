@@ -15,11 +15,14 @@ import Program from '../models/program.model.js';
 import Staff from '../models/staff.model.js';
 import Subject from '../models/subject.model.js';
 import Department from '../models/department.model.js';
+import BankAccount from '../models/insbankAccount.model.js';
 
 dotenv.config();
 const Rounds = 12;
 
 const pickTenantId = (req) => (req.body?.entiId || req.body?.tenantId || '').toString().trim();
+const pickUserId = (req) => String(req.body?.userId || '').trim();
+const buildRegex = (s) => ({ $regex: s, $options: 'i' });
 const safeLower = (v) => (v === null || v === undefined ? '' : String(v)).trim().toLowerCase();
 const safeTrim = (v) => (v === null || v === undefined ? '' : String(v)).trim();
 const toNum = (v) => {
@@ -1545,6 +1548,293 @@ const bulkImportStaff = async (req, res, next) => {
   }
 };
 
+const ensureSingleDefault = async (tenantId, keepBankAccountId) => {
+  await BankAccount.updateMany({ tenantId, isdeleted: false, _id: { $ne: keepBankAccountId } }, { $set: { isDefault: false } });
+};
+
+const createBankAccount = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = pickUserId(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    const payload = req.body || {};
+    const bankName = safeTrim(payload.bankName);
+    const accountName = safeTrim(payload.accountName);
+    const accountNumber = safeTrim(payload.accountNumber);
+    const ifsc = safeTrim(payload.ifsc) || null;
+    const branch = safeTrim(payload.branch) || null;
+    const isDefault = payload.isDefault === true;
+    if (!bankName || !accountName || !accountNumber) {
+      return res.status(400).json({ status: false, message: 'bankName, accountName, accountNumber are required' });
+    }
+    const doc = await BankAccount.create({
+      tenantId,
+      bankName,
+      accountName,
+      accountNumber,
+      ifsc,
+      branch,
+      isDefault,
+      statusFlag: 'Active',
+      isdeleted: false,
+      createdBy: userId || null,
+      updatedBy: userId || null
+    });
+    if (isDefault) await ensureSingleDefault(tenantId, doc._id);
+    return res.status(200).json({ status: true, message: 'Bank account created', data: { recId: doc._id } });
+  } catch (err) {
+    if (err?.code === 11000) {
+      return res.status(400).json({ status: false, message: 'Bank account already exists (duplicate account number)' });
+    }
+    return next(err);
+  }
+};
+
+const updateBankAccount = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = pickUserId(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    const doc = await BankAccount.findOne({ tenantId, _id: req.body.recId, isdeleted: false });
+    if (!doc) return res.status(404).json({ status: false, message: 'Bank account not found' });
+    const bankName = safeTrim(req.body?.bankName);
+    const accountName = safeTrim(req.body?.accountName);
+    const accountNumber = safeTrim(req.body?.accountNumber);
+    const ifsc = safeTrim(req.body?.ifsc);
+    const branch = safeTrim(req.body?.branch);
+    if (bankName) doc.bankName = bankName;
+    if (accountName) doc.accountName = accountName;
+    if (accountNumber) doc.accountNumber = accountNumber;
+    if (req.body?.ifsc !== undefined) doc.ifsc = ifsc || null;
+    if (req.body?.branch !== undefined) doc.branch = branch || null;
+    if (req.body?.statusFlag) doc.statusFlag = safeTrim(req.body.statusFlag) === 'Inactive' ? 'Inactive' : 'Active';
+    if (req.body?.isDefault !== undefined) doc.isDefault = req.body.isDefault === true;
+    doc.updatedBy = userId || null;
+    await doc.save();
+    if (doc.isDefault) await ensureSingleDefault(tenantId, doc._id);
+    return res.status(200).json({ status: true, message: 'Bank account updated', data: { doc } });
+  } catch (err) {
+    if (err?.code === 11000) {
+      return res.status(400).json({ status: false, message: 'Duplicate account number' });
+    }
+    return next(err);
+  }
+};
+
+const listBankAccounts = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    const q = req.query || {};
+    const list = safeTrim(q.list).toLowerCase();
+    const includeInactive = safeTrim(q.includeInactive).toLowerCase() === 'yes';
+    const search = safeTrim(q.search);
+    const query = { tenantId, isdeleted: false };
+    if (!includeInactive) query.statusFlag = 'Active';
+    if (search) {
+      query.$or = [{ bankName: buildRegex(search) }, { accountName: buildRegex(search) }, { accountNumber: buildRegex(search) }, { ifsc: buildRegex(search) }, { branch: buildRegex(search) }];
+    }
+    if (list === 'full') {
+      const rows = await BankAccount.find(query, {
+        _id: 1,
+        bankName: 1,
+        accountName: 1,
+        accountNumber: 1,
+        ifsc: 1,
+        branch: 1,
+        isDefault: 1,
+        depositEnabled: 1,
+        statusFlag: 1
+      })
+        .sort({ isDefault: -1, bankName: 1, accountName: 1 })
+        .lean();
+
+      return res.status(200).json({ status: true, message: 'Bank accounts fetched', data: rows });
+    }
+    const pageNum = Math.max(parseInt(q.page, 10) || 1, 1);
+    const limitNum = Math.min(Math.max(parseInt(q.limit, 10) || 20, 1), 200);
+    const skip = (pageNum - 1) * limitNum;
+    const [rows, total] = await Promise.all([BankAccount.find(query).sort({ createdAt: -1 }).skip(skip).limit(limitNum).lean(), BankAccount.countDocuments(query)]);
+    return res.status(200).json({
+      status: true,
+      message: 'Bank accounts fetched',
+      data: { rows, page: pageNum, limit: limitNum, total, pages: Math.ceil(total / limitNum) || 0 }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const viewBankAccount = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    const doc = await BankAccount.findOne({ tenantId, _id: req.body.recId, isdeleted: false }).lean();
+    if (!doc) return res.status(404).json({ status: false, message: 'Bank account not found' });
+    return res.status(200).json({ status: true, message: 'Bank account loaded', data: { bankAccount: doc } });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const deleteBankAccount = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = pickUserId(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    const doc = await BankAccount.findOne({ tenantId, _id: req.body.recId, isdeleted: false });
+    if (!doc) return res.status(404).json({ status: false, message: 'Bank account not found' });
+    doc.isdeleted = true;
+    doc.statusFlag = 'Inactive';
+    doc.isDefault = false;
+    doc.updatedBy = userId || null;
+    await doc.save();
+    return res.status(200).json({ status: true, message: 'Bank account deleted', data: { doc } });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const isTruthy = (v) => {
+  const s = String(v ?? '')
+    .trim()
+    .toLowerCase();
+  return v === true || s === 'true' || s === '1' || s === 'yes' || s === 'y';
+};
+
+const buildKey = (tenantId, bankName, accountNumber) => `${tenantId}::${safeTrim(bankName).toUpperCase()}::${safeTrim(accountNumber)}`;
+
+const ensureSingleDefault1 = async (tenantId, keepRecId, session) => {
+  await BankAccount.updateMany({ tenantId, isdeleted: false, _id: { $ne: keepRecId } }, { $set: { isDefault: false } }, { session });
+};
+
+const bulkImportBankAccounts = async (req, res, next) => {
+  const session = await mongoose.startSession();
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = pickUserId(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    let rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+    const skipDuplicates = req.body?.skipDuplicates !== false;
+    if (!rows.length) return res.status(400).json({ status: false, message: 'rows is required (non-empty array)' });
+    rows = rows.map((r) => ({
+      bankName: safeTrim(r.bankName),
+      accountName: safeTrim(r.accountName),
+      accountNumber: safeTrim(r.accountNumber),
+      ifsc: safeTrim(r.ifsc) || null,
+      branch: safeTrim(r.branch) || null,
+      isDefault: isTruthy(r.isDefault),
+      statusFlag: safeTrim(r.statusFlag) === 'Inactive' ? 'Inactive' : 'Active'
+    }));
+    const invalid = rows
+      .map((r, idx) => {
+        const errs = [];
+        if (!r.bankName) errs.push('bankName required');
+        if (!r.accountName) errs.push('accountName required');
+        if (!r.accountNumber) errs.push('accountNumber required');
+        return errs.length ? { row: idx + 1, errors: errs } : null;
+      })
+      .filter(Boolean);
+    if (invalid.length) {
+      return res.status(400).json({ status: false, message: 'Validation failed', data: { invalid } });
+    }
+    const firstDefaultIndex = rows.findIndex((x) => x.isDefault);
+    if (firstDefaultIndex >= 0) {
+      rows = rows.map((x, i) => (i === firstDefaultIndex ? x : { ...x, isDefault: false }));
+    }
+    session.startTransaction();
+    const seen = new Set();
+    const fileDupIdx = [];
+    const cleanRows = [];
+    for (let i = 0; i < rows.length; i++) {
+      const key = buildKey(tenantId, rows[i].bankName, rows[i].accountNumber);
+      if (seen.has(key)) {
+        fileDupIdx.push(i);
+      } else {
+        seen.add(key);
+        cleanRows.push(rows[i]);
+      }
+    }
+    const or = cleanRows.map((r) => ({
+      tenantId,
+      isdeleted: false,
+      bankName: r.bankName,
+      accountNumber: r.accountNumber
+    }));
+    const existing = or.length ? await BankAccount.find({ $or: or }, { bankName: 1, accountNumber: 1 }).session(session).lean() : [];
+    const existingKeySet = new Set((existing || []).map((x) => buildKey(tenantId, x.bankName, x.accountNumber)));
+    let toInsert = cleanRows;
+    let duplicatesSkipped = 0;
+    if (skipDuplicates) {
+      const filtered = [];
+      for (const r of cleanRows) {
+        const key = buildKey(tenantId, r.bankName, r.accountNumber);
+        if (existingKeySet.has(key)) duplicatesSkipped++;
+        else filtered.push(r);
+      }
+      toInsert = filtered;
+    } else if (existingKeySet.size) {
+      await session.abortTransaction();
+      return res.status(400).json({
+        status: false,
+        message: 'Duplicates found in database. Enable skipDuplicates to ignore them.',
+        data: { duplicates: Array.from(existingKeySet).slice(0, 50) }
+      });
+    }
+    const insertDocs = toInsert.map((r) => ({
+      tenantId,
+      bankName: r.bankName,
+      accountName: r.accountName,
+      accountNumber: r.accountNumber,
+      ifsc: r.ifsc,
+      branch: r.branch,
+      isDefault: r.isDefault === true,
+      statusFlag: r.statusFlag,
+      isdeleted: false,
+      createdBy: userId || null,
+      updatedBy: userId || null
+    }));
+    let inserted = 0;
+    let defaultRecId = null;
+    if (insertDocs.length) {
+      const created = await BankAccount.insertMany(insertDocs, { session, ordered: false });
+      inserted = created?.length || 0;
+      const defaultDoc = (created || []).find((x) => x.isDefault === true);
+      if (defaultDoc) defaultRecId = defaultDoc._id;
+    }
+    if (defaultRecId) {
+      await ensureSingleDefault1(tenantId, defaultRecId, session);
+    }
+    await session.commitTransaction();
+    return res.status(200).json({
+      status: true,
+      message: 'Bulk import completed',
+      data: {
+        received: rows.length,
+        inserted,
+        duplicatesSkipped: duplicatesSkipped + fileDupIdx.length,
+        fileDuplicatesSkipped: fileDupIdx.length,
+        dbDuplicatesSkipped: duplicatesSkipped,
+        defaultApplied: !!defaultRecId
+      }
+    });
+  } catch (err) {
+    try {
+      await session.abortTransaction();
+    } catch (_) {}
+    if (err?.code === 11000) {
+      return res.status(200).json({
+        status: true,
+        message: 'Bulk import completed by ignoring duplicates',
+        data: { note: 'Some rows were duplicates and were ignored' }
+      });
+    }
+    return next(err);
+  } finally {
+    session.endSession();
+  }
+};
+
 export default {
   createInstitute,
   viewInstitute,
@@ -1575,5 +1865,11 @@ export default {
   updateStaff,
   deleteStaff,
   viewStaff,
-  bulkImportStaff
+  bulkImportStaff,
+  createBankAccount,
+  updateBankAccount,
+  listBankAccounts,
+  viewBankAccount,
+  deleteBankAccount,
+  bulkImportBankAccounts
 };

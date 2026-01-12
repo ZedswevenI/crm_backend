@@ -338,6 +338,19 @@ const saveAdmissionPayments = async (req, res, next) => {
     if (!admission) return res.status(404).json({ status: false, message: 'Admission not found' });
     const neftRefs = Array.isArray(req.body?.neftRefs) ? req.body.neftRefs : [];
     const cheques = Array.isArray(req.body?.cheques) ? req.body.cheques : [];
+    const locked = await Payment.exists({
+      tenantId,
+      admissionId,
+      isdeleted: false,
+      paymentType: 'CHEQUE',
+      status: { $in: ['DEPOSITED', 'CLEARED', 'FAILED', 'CANCELLED'] }
+    });
+    if (locked) {
+      return res.status(400).json({
+        status: false,
+        message: 'Payments cannot be edited because some cheques are already processed (Deposited/Cleared/Failed/Cancelled).'
+      });
+    }
     await Payment.updateMany({ tenantId, admissionId, isdeleted: false }, { $set: { isdeleted: true } });
     const docs = [];
     for (const r of neftRefs) {
@@ -401,8 +414,19 @@ const saveAdmissionPayments = async (req, res, next) => {
           dueDate,
           favourOf,
           mode,
-          bankName: safeTrim(c.bankName) || null
-        }
+          bankName: safeTrim(c.bankName) || null,
+          plannedDepositDate: safeTrim(c.dueDate) || dueDate || null
+        },
+        depositBatch: null,
+        extensions: [],
+        replacement: null,
+        audit: [
+          {
+            action: 'CREATE',
+            by: userId || null,
+            remarks: 'Created from admission payments'
+          }
+        ]
       });
     }
     if (!docs.length) {

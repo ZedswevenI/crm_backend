@@ -2,17 +2,30 @@ import mongoose from 'mongoose';
 import { v4 as uuid } from 'uuid';
 uuid();
 
-/**
- * Payment Ledger (per admission, multiple entries)
- * - Stores NEFT refs and Cheques (PDC/CDC) as separate payment rows
- * - Supports status flow and accounts reporting
- */
+const PAYMENT_TYPES = ['NEFT', 'CHEQUE'];
+const PAYMENT_STATUS = ['PENDING', 'SUBMITTED', 'DEPOSITED', 'EXTENTION_REQUESTED', 'CLEARED', 'FAILED', 'CANCELLED'];
+const CHEQUE_MODES = ['PDC', 'CDC'];
+
+const AUDIT_ACTIONS = ['CREATE', 'UPDATE', 'STATUS_CHANGE', 'DEPOSIT_BATCH_ADD', 'DEPOSIT_BATCH_REMOVE', 'RECONCILE', 'REPLACE_INIT', 'REPLACED_BY', 'EXTENSION_REQUEST', 'EXTENSION_APPROVE', 'EXTENSION_REJECT', 'REMARK'];
+
+const AuditSchema = new mongoose.Schema(
+  {
+    at: { type: Date, required: true, default: Date.now },
+    by: { type: String, required: false, default: null, ref: 'user' },
+    action: { type: String, enum: AUDIT_ACTIONS, required: true },
+    fromStatus: { type: String, enum: PAYMENT_STATUS, required: false, default: null },
+    toStatus: { type: String, enum: PAYMENT_STATUS, required: false, default: null },
+    remarks: { type: String, required: false, trim: true, default: null },
+    meta: { type: Object, required: false, default: null }
+  },
+  { _id: false }
+);
 
 const paymentSchema = new mongoose.Schema(
   {
     tenantId: { type: String, ref: 'tenant', required: true, trim: true, index: true },
     paymentId: { type: String, required: true, default: uuid, trim: true },
-    admissionId: { type: String, required: true, trim: true, index: true },
+    admissionId: { type: String, required: true, ref: 'admission', trim: true, index: true },
     admissionNo: { type: String, required: false, trim: true, default: null },
     academicYear: { type: String, required: false, trim: true, default: null },
     centerId: { type: String, required: false, trim: true, default: null },
@@ -26,12 +39,8 @@ const paymentSchema = new mongoose.Schema(
     paymentType: { type: String, enum: ['NEFT', 'CHEQUE'], required: true },
     amount: { type: Number, required: true },
     remarks: { type: String, required: false, trim: true, default: null },
-    status: {
-      type: String,
-      enum: ['PENDING', 'SUBMITTED', 'DEPOSITED', 'CLEARED', 'FAILED', 'CANCELLED'],
-      default: 'PENDING'
-    },
-    submittedOn: { type: String, required: false, trim: true, default: null }, // UI date string
+    status: { type: String, enum: PAYMENT_STATUS, default: 'PENDING' },
+    submittedOn: { type: String, required: false, trim: true, default: null },
     depositedOn: { type: String, required: false, trim: true, default: null },
     clearedOn: { type: String, required: false, trim: true, default: null },
     failedOn: { type: String, required: false, trim: true, default: null },
@@ -49,11 +58,24 @@ const paymentSchema = new mongoose.Schema(
       dueDate: { type: String, required: false, trim: true, default: null },
       favourOf: { type: String, required: false, trim: true, default: null },
       mode: { type: String, enum: ['PDC', 'CDC'], required: false, default: null },
-      bankName: { type: String, required: false, trim: true, default: null }
+      bankName: { type: String, required: false, trim: true, default: null },
+      plannedDepositDate: { type: String, required: false, trim: true, default: null }
     },
+    depositBatchId: { type: String, required: false, trim: true, default: null, index: true },
+    mergeGroupId: { type: String, required: false, trim: true, default: null, index: true },
+    replacement: {
+      replacesPaymentId: { type: String, required: false, trim: true, default: null, index: true },
+      replacedByPaymentId: { type: String, required: false, trim: true, default: null, index: true },
+      reason: { type: String, required: false, trim: true, default: null },
+      replacedAt: { type: Date, required: false, default: null },
+      replacedBy: { type: String, required: false, default: null, ref: 'user' }
+    },
+    audit: { type: [AuditSchema], required: false, default: [] },
     batchId: { type: String, required: false, trim: true, default: null },
     statusFlag: { type: String, enum: ['Active', 'Inactive'], default: 'Active' },
-    isdeleted: { type: Boolean, required: true, default: false }
+    isdeleted: { type: Boolean, required: true, default: false },
+    createdBy: { type: String, required: false, default: null, ref: 'user' },
+    updatedBy: { type: String, required: false, default: null, ref: 'user' }
   },
   { timestamps: true }
 );
@@ -66,6 +88,12 @@ paymentSchema.index({ tenantId: 1, academicYear: 1, isdeleted: 1 });
 paymentSchema.index({ tenantId: 1, centerId: 1, isdeleted: 1 });
 paymentSchema.index({ tenantId: 1, programCode: 1, isdeleted: 1 });
 paymentSchema.index({ tenantId: 1, 'cheque.dueDate': 1, status: 1, isdeleted: 1 });
+paymentSchema.index({ tenantId: 1, 'cheque.plannedDepositDate': 1, status: 1, isdeleted: 1 });
+paymentSchema.index({ tenantId: 1, 'replacement.replacesPaymentId': 1, isdeleted: 1 });
+paymentSchema.index({ tenantId: 1, 'replacement.replacedByPaymentId': 1, isdeleted: 1 });
+paymentSchema.index({ tenantId: 1, 'extensions.status': 1, isdeleted: 1 });
+paymentSchema.index({ tenantId: 1, depositBatchId: 1, isdeleted: 1 });
+paymentSchema.index({ tenantId: 1, mergeGroupId: 1, isdeleted: 1 });
 
 // ---------------- Validation ----------------
 paymentSchema.pre('validate', function (next) {

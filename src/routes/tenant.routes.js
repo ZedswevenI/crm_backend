@@ -47,6 +47,14 @@ routes.post('/feeplan/view', validatetoken, tenantCtrl.viewFeePlan);
 routes.post('/feeplan/bulkupload', validatetoken, tenantCtrl.bulkUpsertFeePlansFromRows);
 routes.post('/feeplan/setstatus', validatetoken, tenantCtrl.setFeePlanStatus);
 
+// Center Routes
+routes.post('/bankac/create', validatetoken, tenantCtrl.createBankAccount);
+routes.post('/bankac/list', validatetoken, tenantCtrl.listBankAccounts);
+routes.post('/bankac/edit', validatetoken, tenantCtrl.updateBankAccount);
+routes.post('/bankac/delete', validatetoken, tenantCtrl.deleteBankAccount);
+routes.post('/bankac/view', validatetoken, tenantCtrl.viewBankAccount);
+routes.post('/bankac/bulkupload', validatetoken, tenantCtrl.bulkImportBankAccounts);
+
 // Department Routes
 routes.post('/dept/create', validatetoken, manageCtrl.createDepartment);
 routes.post('/dept/list', validatetoken, manageCtrl.listDepartments);

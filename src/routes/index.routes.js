@@ -5,6 +5,7 @@ const routes = Router();
 
 import tenantRoute from './tenant.routes.js';
 import admissionRoute from './admission.routes.js';
+import accountsRoute from './accounts.routes.js';
 
 routes.post('/healthcheck', (req, res) => {
   try {
@@ -16,5 +17,6 @@ routes.post('/healthcheck', (req, res) => {
 
 routes.use('/ims', tenantRoute);
 routes.use('/admi', admissionRoute);
+routes.use('/accounts', accountsRoute);
 
 export default routes;
