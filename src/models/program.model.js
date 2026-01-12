@@ -8,8 +8,8 @@ const programSchema = new mongoose.Schema(
     eligibleToClass: { type: String, required: true, trim: true },
     programName: { type: String, required: true, trim: true },
     programCodes: { type: String, required: true, trim: true },
-    target: { type: String, required: false, trim: true, default: null }, // UI: Stream
-    duration: { type: String, required: false, trim: true, default: null }, // UI: Duration Type
+    target: { type: String, required: false, trim: true, default: null },
+    duration: { type: String, required: false, trim: true, default: null },
     version: { type: String, required: true, trim: true },
     programType: { type: String, required: false, trim: true, default: null },
     excelId: { type: Number, required: false, default: null },

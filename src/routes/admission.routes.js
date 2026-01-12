@@ -18,6 +18,8 @@ routes.post('/view', validatetoken, admisCtrl.viewAdmission);
 routes.post('/list', validatetoken, admisCtrl.listAdmissions);
 routes.post('/paymenttemplate', validatetoken, admisCtrl.getPaymentTemplate);
 
+routes.post('/create/student', validatetoken, admisCtrl.createStudentProfileFromAdmission);
+
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Admission routes' }));
 
 export default routes;

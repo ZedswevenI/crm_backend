@@ -6,6 +6,8 @@ import Admission from '../models/admission.model.js';
 import Payment from '../models/admissionpayments.model.js';
 import Counter from '../models/counter.model.js';
 import FeePlan from '../models/feeplan.model.js';
+import StudentProfile from '../models/studentProfile.model.js';
+import { RequestPaymentConfiguration$ } from '@aws-sdk/client-s3';
 
 const pickTenantId = (req) => String(req.body?.entiId || req.body?.tenantId || '').trim();
 const safeTrim = (v) => (v === null || v === undefined ? '' : String(v)).trim();
@@ -493,43 +495,6 @@ const submitForApproval = async (req, res, next) => {
   }
 };
 
-const approveAdmission = async (req, res, next) => {
-  try {
-    const tenantId = pickTenantId(req);
-    const admissionId = safeTrim(req.body?.admissionId);
-    const userId = safeTrim(req.user?.userId || req.body?.userId);
-    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-    if (!admissionId) return res.status(400).json({ status: false, message: 'admissionId is required' });
-    const admission = await Admission.findOne({ tenantId, admissionId, isdeleted: false });
-    if (!admission) return res.status(404).json({ status: false, message: 'Admission not found' });
-    if (admission.workflow?.stage !== 'APPROVAL_SENT') {
-      return res.status(400).json({ status: false, message: 'Admission must be in APPROVAL_SENT stage' });
-    }
-    const programCode = safeTrim(admission.programCode);
-    const centerId = safeTrim(admission?.centerId);
-    const centerCoderaw = await Center.findOne({ centerId: centerId }, { centerCode: 1 });
-    const centerCode = centerCoderaw.centerCode;
-    const studentRegNo = await nextAdmissionRegNo({ tenantId, programCode, centerCode, academicYear: admission.academicYear });
-    admission.student = admission.student || {};
-    admission.admissionNo = studentRegNo;
-    admission.student.studentRegNo = studentRegNo;
-    admission.workflow.stage = 'CONFIRMED';
-    admission.workflow.approvedBy = userId || null;
-    admission.workflow.approvedAt = new Date();
-    admission.workflow.confirmedAt = new Date();
-    admission.updatedBy = userId;
-    admission.approvedBy = userId;
-    await admission.save();
-    return res.status(200).json({
-      status: true,
-      message: 'Admission approved',
-      data: { admissionId, studentRegNo }
-    });
-  } catch (err) {
-    return next(err);
-  }
-};
-
 const viewAdmission = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
@@ -797,6 +762,304 @@ function parseDateFromLabel(label) {
   return null;
 }
 
+const upsertStudentProfileFromAdmission = async ({ tenantId, admission, userId }) => {
+  if (!tenantId || !admission) return null;
+  const admissionId = safeTrim(admission.admissionId);
+  const admissionNo = safeTrim(admission.admissionNo);
+  if (!admissionId || !admissionNo) return null;
+  const student = admission.student || {};
+  const up = {
+    tenantId,
+    admissionId,
+    admissionNo,
+    registrationNumber: safeTrim(admission.registrationNumber) || null,
+    portalStudentId: safeTrim(admission.portalStudentId) || null,
+    student: {
+      name: safeTrim(student.name),
+      phone: safeTrim(student.phone),
+      email: safeTrim(student.email) ? safeTrim(student.email).toLowerCase() : null,
+      parentName: safeTrim(student.parentName) || safeTrim(student.fatherName) || null,
+      parentPhone: safeTrim(student.parentPhone) || null
+    },
+    academicYear: safeTrim(admission.academicYear),
+    programId: safeTrim(admission.programId) || null,
+    programCode: safeTrim(admission.programCode) || null,
+    programName: safeTrim(admission.programName) || null,
+    centerId: safeTrim(admission.centerId) || null,
+    centerCode: safeTrim(admission.centerCode) || null,
+    centerName: safeTrim(admission.centerName) || null,
+    batchId: null,
+    batchCode: null,
+    status: 'ACTIVE',
+    isdeleted: false,
+    updatedBy: userId || null
+  };
+  const existing = await StudentProfile.findOne({ tenantId, admissionNo, isdeleted: false }, { _id: 0, batchId: 1, batchCode: 1 }).lean();
+  if (existing?.batchId) up.batchId = existing.batchId;
+  if (existing?.batchCode) up.batchCode = existing.batchCode;
+  const doc = await StudentProfile.findOneAndUpdate({ tenantId, admissionNo }, { $set: up, $setOnInsert: { createdBy: userId || null } }, { new: true, upsert: true }).lean();
+  return doc;
+};
+
+const approveAdmission = async (req, res, next) => {
+  const session = await Admission.startSession();
+  try {
+    session.startTransaction();
+    const tenantId = pickTenantId(req);
+    const admissionId = safeTrim(req.body?.admissionId);
+    const userId = safeTrim(req.user?.userId || req.body?.userId);
+    if (!tenantId) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    }
+    if (!admissionId) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({ status: false, message: 'admissionId is required' });
+    }
+    const admission = await Admission.findOne({ tenantId, admissionId, isdeleted: false }).session(session);
+    if (!admission) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(404).json({ status: false, message: 'Admission not found' });
+    }
+    if (admission.workflow?.stage !== 'APPROVAL_SENT') {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({ status: false, message: 'Admission must be in APPROVAL_SENT stage' });
+    }
+    const programCode = safeTrim(admission.programCode);
+    const centerId = safeTrim(admission?.centerId);
+    const centerCoderaw = await Center.findOne({ centerId: centerId }, { centerCode: 1 }).session(session);
+    const centerCode = safeTrim(centerCoderaw?.centerCode);
+    const studentRegNo = await nextAdmissionRegNo({
+      tenantId,
+      programCode,
+      centerCode,
+      academicYear: admission.academicYear
+    });
+    admission.student = admission.student || {};
+    admission.admissionNo = studentRegNo;
+    admission.student.studentRegNo = studentRegNo;
+    admission.workflow.stage = 'CONFIRMED';
+    admission.workflow.approvedBy = userId || null;
+    admission.workflow.approvedAt = new Date();
+    admission.workflow.confirmedAt = new Date();
+    admission.updatedBy = userId;
+    admission.approvedBy = userId;
+    await admission.save({ session });
+    const profile = await StudentProfile.findOneAndUpdate(
+      { tenantId, admissionNo: studentRegNo },
+      {
+        $set: {
+          tenantId,
+          admissionId: safeTrim(admission.admissionId),
+          admissionNo: studentRegNo,
+          registrationNumber: safeTrim(admission.registrationNumber) || null,
+          portalStudentId: safeTrim(admission.portalStudentId) || null,
+          student: {
+            name: safeTrim(admission.student?.name),
+            phone: safeTrim(admission.student?.phone),
+            email: safeTrim(admission.student?.email) ? safeTrim(admission.student?.email).toLowerCase() : null,
+            parentName: safeTrim(admission.student?.parentName) || safeTrim(admission.student?.fatherName) || null,
+            parentPhone: safeTrim(admission.student?.parentPhone) || null
+          },
+          academicYear: safeTrim(admission.academicYear),
+          programId: safeTrim(admission.programId) || null,
+          programCode: safeTrim(admission.programCode) || null,
+          programName: safeTrim(admission.programName) || null,
+          centerId: safeTrim(admission.centerId) || null,
+          centerCode: safeTrim(centerCode) || null,
+          centerName: safeTrim(admission.centerName) || null,
+          status: 'ACTIVE',
+          isdeleted: false,
+          updatedBy: userId || null
+        },
+        $setOnInsert: { createdBy: userId || null }
+      },
+      { new: true, upsert: true, session }
+    );
+    await session.commitTransaction();
+    session.endSession();
+    return res.status(200).json({
+      status: true,
+      message: 'Admission approved',
+      data: { admissionId, studentRegNo, profileCreated: !!profile }
+    });
+  } catch (err) {
+    try {
+      await session.abortTransaction();
+      session.endSession();
+    } catch {}
+    return next(err);
+  }
+};
+
+const listConfirmedAdmissionsWithoutProfile = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    const pageNum = Math.max(parseInt(req.query.page || '1', 10), 1);
+    const limitNum = Math.min(Math.max(parseInt(req.query.limit || '20', 10), 1), 200);
+    const skip = (pageNum - 1) * limitNum;
+    const search = safeTrim(req.query.search);
+    const match = {
+      tenantId,
+      isdeleted: false,
+      status: 'Active',
+      'workflow.stage': 'CONFIRMED',
+      admissionNo: { $ne: null }
+    };
+    if (search) {
+      const rx = new RegExp(escapeRegex(search), 'i');
+      match.$or = [{ admissionNo: rx }, { registrationNumber: rx }, { 'student.name': rx }, { 'student.phone': rx }];
+    }
+    const pipeline = [
+      { $match: match },
+      {
+        $lookup: {
+          from: 'studentprofiles',
+          let: { t: '$tenantId', an: '$admissionNo' },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [{ $eq: ['$tenantId', '$$t'] }, { $eq: ['$admissionNo', '$$an'] }, { $eq: ['$isdeleted', false] }]
+                }
+              }
+            },
+            { $project: { _id: 0, admissionNo: 1 } }
+          ],
+          as: 'sp'
+        }
+      },
+      { $match: { $or: [{ sp: { $exists: false } }, { sp: { $size: 0 } }] } },
+      { $sort: { createdAt: -1 } },
+      {
+        $facet: {
+          rows: [
+            { $skip: skip },
+            { $limit: limitNum },
+            {
+              $project: {
+                _id: 0,
+                admissionId: 1,
+                admissionNo: 1,
+                academicYear: 1,
+                registrationNumber: 1,
+                centerId: 1,
+                centerName: 1,
+                programId: 1,
+                programName: 1,
+                programCode: 1,
+                student: 1,
+                'workflow.stage': 1,
+                'workflow.confirmedAt': 1,
+                createdAt: 1
+              }
+            }
+          ],
+          meta: [{ $count: 'total' }]
+        }
+      }
+    ];
+    const agg = await Admission.aggregate(pipeline);
+    const rows = agg?.[0]?.rows || [];
+    const total = agg?.[0]?.meta?.[0]?.total || 0;
+    return res.status(constants.HTTPS_SUCCESS).json({
+      status: true,
+      message: 'Confirmed admissions without student profile fetched',
+      data: {
+        rows,
+        page: pageNum,
+        limit: limitNum,
+        total,
+        pages: Math.ceil(total / limitNum) || 0
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const createStudentProfileFromAdmission = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = safeTrim(req.user?.userId || req.body?.userId);
+    const admissionId = safeTrim(req.body?.admissionId);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    if (!admissionId) return res.status(400).json({ status: false, message: 'admissionId is required' });
+    const admission = await Admission.findOne({ tenantId, admissionId, isdeleted: false }).lean();
+    if (!admission) return res.status(404).json({ status: false, message: 'Admission not found' });
+    const stage = safeTrim(admission?.workflow?.stage).toUpperCase();
+    if (stage !== 'CONFIRMED') {
+      return res.status(400).json({
+        status: false,
+        message: 'Admission is not CONFIRMED. Only confirmed admissions can create student profile.'
+      });
+    }
+    const admissionNo = safeTrim(admission?.admissionNo);
+    if (!admissionNo) {
+      return res.status(400).json({
+        status: false,
+        message: 'admissionNo missing in confirmed admission. Please re-approve or fix admission.'
+      });
+    }
+    const existing = await StudentProfile.findOne({ tenantId, admissionNo, isdeleted: false }, { _id: 0, studentId: 1, admissionNo: 1, batchId: 1, batchCode: 1 }).lean();
+    if (existing) {
+      return res.status(200).json({
+        status: true,
+        message: 'Student profile already exists',
+        data: existing
+      });
+    }
+    const student = admission.student || {};
+    const up = {
+      tenantId,
+      admissionId: safeTrim(admission.admissionId),
+      admissionNo,
+      registrationNumber: safeTrim(admission.registrationNumber) || null,
+      portalStudentId: safeTrim(admission.portalStudentId) || null,
+      student: {
+        name: safeTrim(student.name),
+        phone: safeTrim(student.phone),
+        email: safeTrim(student.email) ? safeTrim(student.email).toLowerCase() : null,
+        parentName: safeTrim(student.parentName) || safeTrim(student.fatherName) || null,
+        parentPhone: safeTrim(student.parentPhone) || null
+      },
+      academicYear: safeTrim(admission.academicYear),
+      programId: safeTrim(admission.programId) || null,
+      programCode: safeTrim(admission.programCode) || null,
+      programName: safeTrim(admission.programName) || null,
+      centerId: safeTrim(admission.centerId) || null,
+      centerCode: safeTrim(admission.centerCode) || null,
+      centerName: safeTrim(admission.centerName) || null,
+      batchId: null,
+      batchCode: null,
+      status: 'ACTIVE',
+      isdeleted: false,
+      createdBy: userId || null,
+      updatedBy: userId || null
+    };
+    const doc = await StudentProfile.create(up);
+    return res.status(constants.HTTPS_CREATED || 201).json({
+      status: true,
+      message: 'Student profile created',
+      data: {
+        studentId: doc.studentId,
+        admissionId: doc.admissionId,
+        admissionNo: doc.admissionNo
+      }
+    });
+  } catch (err) {
+    if (String(err?.code) === '11000') {
+      return res.status(409).json({ status: false, message: 'Student profile already exists for this admissionNo' });
+    }
+    return next(err);
+  }
+};
+
 export default {
   fetchScholarshipRegistration,
   createAdmissionDraft,
@@ -807,5 +1070,7 @@ export default {
   listAdmissions,
   rejectAdmission,
   updateAdmission,
-  getPaymentTemplate
+  getPaymentTemplate,
+  listConfirmedAdmissionsWithoutProfile,
+  createStudentProfileFromAdmission
 };

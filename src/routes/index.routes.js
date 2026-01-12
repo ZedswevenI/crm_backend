@@ -6,6 +6,8 @@ const routes = Router();
 import tenantRoute from './tenant.routes.js';
 import admissionRoute from './admission.routes.js';
 import accountsRoute from './accounts.routes.js';
+import batchRoute from './batch.route.js';
+import timetableRoute from './timetable.routes.js';
 
 routes.post('/healthcheck', (req, res) => {
   try {
@@ -18,5 +20,7 @@ routes.post('/healthcheck', (req, res) => {
 routes.use('/ims', tenantRoute);
 routes.use('/admi', admissionRoute);
 routes.use('/accounts', accountsRoute);
+routes.use('/batch', batchRoute);
+routes.use('/timetable', timetableRoute);
 
 export default routes;
