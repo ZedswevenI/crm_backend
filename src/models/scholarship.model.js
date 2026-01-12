@@ -11,7 +11,7 @@ uuid();
 
 const scholarshipTestSchema = new mongoose.Schema(
   {
-    tenantId: { type: String, required: true, trim: true, index: true },
+    tenantId: { type: String, ref: 'tenant', required: true, trim: true, index: true },
     testId: { type: String, required: true, default: uuid, trim: true },
     registrationNumber: { type: String, required: true, trim: true },
     studentId: { type: String, required: false, trim: true, default: null },

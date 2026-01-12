@@ -14,7 +14,7 @@ const neftRefSchema = new mongoose.Schema(
 
 const admissionSchema = new mongoose.Schema(
   {
-    tenantId: { type: String, required: true, trim: true, index: true },
+    tenantId: { type: String, required: true, ref: 'tenant', trim: true, index: true },
     admissionId: { type: String, required: true, default: uuid, trim: true },
     admissionNo: { type: String, required: false, trim: true, default: null },
     sourceType: { type: String, enum: ['PORTAL', 'DIRECT'], required: true },

@@ -13,7 +13,7 @@ const ROLE_LEVELS = ['L1', 'L2', 'L3', 'L4'];
 
 const userSchema = new mongoose.Schema(
   {
-    tenantId: { type: String, required: true, trim: true, index: true },
+    tenantId: { type: String, required: true, ref: 'tenant', trim: true, index: true },
     userId: { type: String, required: true, default: uuid, trim: true },
     name: { type: String, required: true, trim: true },
     email: {

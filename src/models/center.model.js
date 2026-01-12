@@ -4,7 +4,7 @@ uuid();
 
 const centerSchema = new mongoose.Schema(
   {
-    tenantId: { type: String, required: true, trim: true, index: true },
+    tenantId: { type: String, ref: 'tenant', required: true, trim: true, index: true },
     centerId: { type: String, required: true, default: uuid, trim: true },
     centerName: { type: String, required: true, trim: true },
     centerCode: { type: String, required: true, trim: true },

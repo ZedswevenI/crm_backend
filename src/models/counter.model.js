@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 
 const counterSchema = new mongoose.Schema(
   {
-    tenantId: { type: String, required: true, trim: true, index: true },
+    tenantId: { type: String, ref: 'tenant', required: true, trim: true, index: true },
     key: { type: String, required: true, trim: true },
     seq: { type: Number, required: true, default: 0 }
   },

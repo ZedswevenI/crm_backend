@@ -5,6 +5,7 @@ import validate from '../middlewares/validation.js';
 import constants from '../helpers/constants.js';
 import validatetoken from '../middlewares/auth.js';
 import tenantCtrl from '../controller/institute.controller.js';
+import manageCtrl from '../controller/insorg.controller.js';
 import programCtrl from '../controller/program.controller.js';
 
 routes.post('/register', tenantCtrl.createInstitute);
@@ -45,6 +46,30 @@ routes.post('/feeplan/delete', validatetoken, tenantCtrl.deleteFeePlan);
 routes.post('/feeplan/view', validatetoken, tenantCtrl.viewFeePlan);
 routes.post('/feeplan/bulkupload', validatetoken, tenantCtrl.bulkUpsertFeePlansFromRows);
 routes.post('/feeplan/setstatus', validatetoken, tenantCtrl.setFeePlanStatus);
+
+// Department Routes
+routes.post('/dept/create', validatetoken, manageCtrl.createDepartment);
+routes.post('/dept/list', validatetoken, manageCtrl.listDepartments);
+routes.post('/dept/view', validatetoken, manageCtrl.viewDepartment);
+routes.post('/dept/update', validatetoken, manageCtrl.updateDepartment);
+routes.post('/dept/delete', validatetoken, manageCtrl.deleteDepartment);
+routes.post('/dept/import', validatetoken, manageCtrl.bulkImportDepartments);
+
+// Subject Routes
+routes.post('/subject/create', validatetoken, manageCtrl.createSubject);
+routes.post('/subject/list', validatetoken, manageCtrl.listSubject);
+routes.post('/subject/view', validatetoken, manageCtrl.viewSubject);
+routes.post('/subject/update', validatetoken, manageCtrl.updateSubject);
+routes.post('/subject/delete', validatetoken, manageCtrl.deleteSubject);
+routes.post('/subject/import', validatetoken, manageCtrl.bulkImportSubject);
+
+// Staff Routes
+routes.post('/staff/create', validatetoken, tenantCtrl.createStaff);
+routes.post('/staff/list', validatetoken, tenantCtrl.listStaff);
+routes.post('/staff/view', validatetoken, tenantCtrl.viewStaff);
+routes.post('/staff/update', validatetoken, tenantCtrl.updateStaff);
+routes.post('/staff/delete', validatetoken, tenantCtrl.deleteStaff);
+routes.post('/staff/import', validatetoken, tenantCtrl.bulkImportStaff);
 
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Tenant routes' }));
 

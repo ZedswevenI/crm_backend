@@ -10,7 +10,7 @@ uuid();
 
 const paymentSchema = new mongoose.Schema(
   {
-    tenantId: { type: String, required: true, trim: true, index: true },
+    tenantId: { type: String, ref: 'tenant', required: true, trim: true, index: true },
     paymentId: { type: String, required: true, default: uuid, trim: true },
     admissionId: { type: String, required: true, trim: true, index: true },
     admissionNo: { type: String, required: false, trim: true, default: null },

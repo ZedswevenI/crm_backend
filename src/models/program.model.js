@@ -3,7 +3,7 @@ import { v4 as uuid } from 'uuid';
 
 const programSchema = new mongoose.Schema(
   {
-    tenantId: { type: String, required: true, trim: true, index: true },
+    tenantId: { type: String, ref: 'tenant', required: true, trim: true, index: true },
     programId: { type: String, required: true, default: uuid, trim: true },
     eligibleToClass: { type: String, required: true, trim: true },
     programName: { type: String, required: true, trim: true },

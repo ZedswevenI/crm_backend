@@ -26,7 +26,7 @@ const instalmentSchema = new mongoose.Schema(
 
 const feePlanSchema = new mongoose.Schema(
   {
-    tenantId: { type: String, required: true, trim: true, index: true },
+    tenantId: { type: String, ref: 'tenant', required: true, trim: true, index: true },
     feePlanId: { type: String, required: true, default: uuid, trim: true },
     academicYear: { type: String, required: true, trim: true },
     programCode: { type: String, required: true, trim: true },
