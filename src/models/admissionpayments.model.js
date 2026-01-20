@@ -10,7 +10,9 @@ const AUDIT_ACTIONS = ['CREATE', 'UPDATE', 'STATUS_CHANGE', 'DEPOSIT_BATCH_ADD',
 
 const AuditSchema = new mongoose.Schema(
   {
-    at: { type: Date, required: true, default: Date.now },
+    // ✅ epoch ms
+    at: { type: Number, required: true, default: () => Date.now() },
+
     by: { type: String, required: false, default: null, ref: 'user' },
     action: { type: String, enum: AUDIT_ACTIONS, required: true },
     fromStatus: { type: String, enum: PAYMENT_STATUS, required: false, default: null },
@@ -36,41 +38,71 @@ const paymentSchema = new mongoose.Schema(
     studentName: { type: String, required: true, trim: true },
     studentPhone: { type: String, required: false, trim: true, default: null },
     registrationNumber: { type: String, required: false, trim: true, default: null },
-    paymentType: { type: String, enum: ['NEFT', 'CHEQUE'], required: true },
+
+    paymentType: { type: String, enum: PAYMENT_TYPES, required: true },
     amount: { type: Number, required: true },
     remarks: { type: String, required: false, trim: true, default: null },
+
     status: { type: String, enum: PAYMENT_STATUS, default: 'PENDING' },
-    submittedOn: { type: String, required: false, trim: true, default: null },
-    depositedOn: { type: String, required: false, trim: true, default: null },
-    clearedOn: { type: String, required: false, trim: true, default: null },
-    failedOn: { type: String, required: false, trim: true, default: null },
+
+    // ✅ epoch ms
+    submittedOn: { type: Number, required: false, default: null },
+    depositedOn: { type: Number, required: false, default: null },
+    clearedOn: { type: Number, required: false, default: null },
+    failedOn: { type: Number, required: false, default: null },
+
     failureReason: { type: String, required: false, trim: true, default: null },
+
     neft: {
       utr: { type: String, required: false, trim: true, default: null },
-      paidOn: { type: String, required: false, trim: true, default: null }, // date
+
+      // ✅ epoch ms
+      paidOn: { type: Number, required: false, default: null },
+
       bankName: { type: String, required: false, trim: true, default: null },
       referenceNote: { type: String, required: false, trim: true, default: null }
     },
+
     cheque: {
       sno: { type: Number, required: false, default: null },
       chequeNo: { type: String, required: false, trim: true, default: null },
-      chequeDate: { type: String, required: false, trim: true, default: null },
-      dueDate: { type: String, required: false, trim: true, default: null },
+
+      // ✅ chequeDate is the date written on the cheque
+      chequeDate: { type: Number, required: false, default: null },
+
+      // ✅ dueDate is the instalment due date (correct mapping)
+      dueDate: { type: Number, required: false, default: null },
+
       favourOf: { type: String, required: false, trim: true, default: null },
-      mode: { type: String, enum: ['PDC', 'CDC'], required: false, default: null },
+      mode: { type: String, enum: CHEQUE_MODES, required: false, default: null },
       bankName: { type: String, required: false, trim: true, default: null },
-      plannedDepositDate: { type: String, required: false, trim: true, default: null }
+
+      // ✅ keep plannedDepositDate separate (often = dueDate)
+      plannedDepositDate: { type: Number, required: false, default: null },
+
+      // ✅ added: for UI “Description”
+      instalmentLabel: { type: String, required: false, trim: true, default: null },
+
+      // ✅ added: explicit instalment due date (same as dueDate, but clearer)
+      instalmentDate: { type: Number, required: false, default: null }
     },
+
     depositBatchId: { type: String, required: false, trim: true, default: null, index: true },
     mergeGroupId: { type: String, required: false, trim: true, default: null, index: true },
+
     replacement: {
       replacesPaymentId: { type: String, required: false, trim: true, default: null, index: true },
       replacedByPaymentId: { type: String, required: false, trim: true, default: null, index: true },
       reason: { type: String, required: false, trim: true, default: null },
-      replacedAt: { type: Date, required: false, default: null },
+
+      // ✅ epoch ms
+      replacedAt: { type: Number, required: false, default: null },
+
       replacedBy: { type: String, required: false, default: null, ref: 'user' }
     },
+
     audit: { type: [AuditSchema], required: false, default: [] },
+
     batchId: { type: String, required: false, trim: true, default: null },
     statusFlag: { type: String, enum: ['Active', 'Inactive'], default: 'Active' },
     isdeleted: { type: Boolean, required: true, default: false },
@@ -91,7 +123,6 @@ paymentSchema.index({ tenantId: 1, 'cheque.dueDate': 1, status: 1, isdeleted: 1 
 paymentSchema.index({ tenantId: 1, 'cheque.plannedDepositDate': 1, status: 1, isdeleted: 1 });
 paymentSchema.index({ tenantId: 1, 'replacement.replacesPaymentId': 1, isdeleted: 1 });
 paymentSchema.index({ tenantId: 1, 'replacement.replacedByPaymentId': 1, isdeleted: 1 });
-paymentSchema.index({ tenantId: 1, 'extensions.status': 1, isdeleted: 1 });
 paymentSchema.index({ tenantId: 1, depositBatchId: 1, isdeleted: 1 });
 paymentSchema.index({ tenantId: 1, mergeGroupId: 1, isdeleted: 1 });
 
@@ -105,28 +136,34 @@ paymentSchema.pre('validate', function (next) {
         return next(err);
       }
     }
+
     if (this.paymentType === 'CHEQUE') {
       if (!this.cheque?.chequeNo) {
         const err = new Error('Cheque number is required');
         err.statusCode = 400;
         return next(err);
       }
+
+      // ✅ dueDate is mandatory (instalment due date)
       if (!this.cheque?.dueDate) {
-        const err = new Error('Cheque due date is required');
+        const err = new Error('Cheque due date (instalment due date) is required');
         err.statusCode = 400;
         return next(err);
       }
+
       if (!this.cheque?.mode) {
         const err = new Error('Cheque mode (PDC/CDC) is required');
         err.statusCode = 400;
         return next(err);
       }
+
       if (!this.cheque?.favourOf) {
         const err = new Error('Cheque favourOf is required');
         err.statusCode = 400;
         return next(err);
       }
     }
+
     next();
   } catch (e) {
     return next(e);

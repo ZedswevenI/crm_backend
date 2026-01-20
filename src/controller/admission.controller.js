@@ -30,24 +30,90 @@ const hasTestMarks = (doc) => {
   return doc.normalizedScore != null || doc.normalizedPercentage != null || doc.normalizedRank != null || doc.waiverPerInTf != null || doc.gtotal != null || doc.paper1Total != null || doc.paper2Total != null;
 };
 
+const toEpochOrNull = (v) => {
+  if (v === null || v === undefined || v === '') return null;
+  if (typeof v === 'number' && Number.isFinite(v)) return v > 0 ? v : 0;
+  const n = Number(String(v).trim());
+  if (Number.isFinite(n) && String(v).trim().match(/^\d+$/)) return n;
+  const s = safeTrim(v);
+  if (!s) return null;
+  let m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) {
+    const yyyy = Number(m[1]);
+    const mm = Number(m[2]) - 1;
+    const dd = Number(m[3]);
+    return new Date(yyyy, mm, dd, 0, 0, 0, 0).getTime();
+  }
+  m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+  if (m) {
+    const dd = Number(m[1]);
+    const mm = Number(m[2]) - 1;
+    const yyyy = Number(m[3]);
+    return new Date(yyyy, mm, dd, 0, 0, 0, 0).getTime();
+  }
+  const d = new Date(s);
+  if (!isNaN(d.getTime())) return d.getTime();
+  return null;
+};
+
+const round2 = (n) => Number((toNum(n) || 0).toFixed(2));
+
+const discountedAmountIfNeeded = ({ amount, discountApplied, fee }) => {
+  const amt = toNum(amount);
+  if (!discountApplied) return round2(amt);
+  const t = toNum(fee?.testScholarshipPct);
+  const s = toNum(fee?.scholarshipPct);
+  const a = toNum(fee?.additionalScholarshipPct);
+  const factor = (1 - t / 100) * (1 - s / 100) * (1 - a / 100);
+  const out = amt * factor;
+  return round2(out);
+};
+const academicYear3 = (academicYearRaw) => {
+  const s = safeTrim(academicYearRaw);
+  const m = s.match(/(\d{4})\s*[-–]\s*(\d{4})/);
+  if (m) {
+    const y1 = m[1];
+    const y2 = m[2];
+    return `${y1.slice(2, 4)}${y2.slice(3, 4)}`;
+  }
+  const m2 = s.match(/(\d{4})/);
+  if (m2) return `${m2[1].slice(1, 4)}`;
+  return '000';
+};
+
+const nextAdmissionRegNo = async ({ tenantId, programCode, centerCode, academicYear }) => {
+  const p = safeTrim(programCode).toUpperCase();
+  const c = safeTrim(centerCode).toUpperCase();
+  const y3 = academicYear3(academicYear);
+  if (!p || !c) {
+    throw new Error('programCode and centerCode are required to generate registration number');
+  }
+  const key = `ADM_REG_${p}_${c}_${y3}`;
+  const counter = await Counter.findOneAndUpdate({ tenantId, key }, { $inc: { seq: 1 } }, { new: true, upsert: true }).lean();
+  const seq = Number(counter?.seq || 0);
+  return `${p}${c}${y3}${padN(seq, 4)}`;
+};
+
 const fetchScholarshipRegistration = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     const registrationNumber = safeTrim(req.body?.registrationNumber);
+    const userId = pickUserId(req);
     if (!tenantId) {
       return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
     }
     if (!registrationNumber) {
       return res.status(400).json({ status: false, message: 'registrationNumber is required' });
     }
-    const existingAdmission = await Admission.findOne({ tenantId, registrationNumber, isdeleted: false }, { _id: 0, admissionId: 1, admissionNo: 1, registrationNumber }).lean();
+    const existingAdmission = await Admission.findOne({ tenantId, registrationNumber, isdeleted: false }).lean();
     if (existingAdmission) {
       return res.status(400).json({
         status: true,
         message: 'Admission already exists for this registration number',
         data: {
           admissionId: existingAdmission.admissionId || null,
-          admissionNo: existingAdmission.admissionNo || null
+          admissionNo: existingAdmission.admissionNo || null,
+          admission: existingAdmission
         }
       });
     }
@@ -78,57 +144,22 @@ const fetchScholarshipRegistration = async (req, res, next) => {
     } catch (e) {
       const status = e?.response?.status;
       const data = e?.response?.data;
+      const syncSet = {
+        lastSyncAt: Date.now(),
+        lastSyncMessage: data?.message || e?.message || 'External error',
+        raw: data || null,
+        updatedBy: userId || null,
+        ...(cachedExisting ? {} : { createdBy: userId || null })
+      };
       if (status === 401) {
-        await ScholarshipTest.updateOne(
-          { tenantId, registrationNumber, isdeleted: false },
-          {
-            $set: {
-              lastSyncAt: new Date(),
-              lastSyncStatus: 'UNAUTHORIZED',
-              lastSyncMessage: data?.message || 'Invalid API Key',
-              raw: data || null,
-              createdBy: req.body.userId,
-              updatedBy: req.body.userId
-            }
-          },
-          { upsert: true }
-        );
-        return res.status(401).json({
-          status: false,
-          message: 'External portal unauthorized (Invalid API Key)'
-        });
+        await ScholarshipTest.updateOne({ tenantId, registrationNumber, isdeleted: false }, { $set: { ...syncSet, lastSyncStatus: 'UNAUTHORIZED' }, $setOnInsert: { status: 'Active', isdeleted: false, tenantId, registrationNumber } }, { upsert: true });
+        return res.status(401).json({ status: false, message: 'External portal unauthorized (Invalid API Key)' });
       }
       if (status === 404) {
-        await ScholarshipTest.updateOne(
-          { tenantId, registrationNumber, isdeleted: false },
-          {
-            $set: {
-              lastSyncAt: new Date(),
-              lastSyncStatus: 'NOT_FOUND',
-              lastSyncMessage: data?.message || 'Registration not found',
-              raw: data || null,
-              createdBy: req.body.userId,
-              updatedBy: req.body.userId
-            }
-          },
-          { upsert: true }
-        );
+        await ScholarshipTest.updateOne({ tenantId, registrationNumber, isdeleted: false }, { $set: { ...syncSet, lastSyncStatus: 'NOT_FOUND' }, $setOnInsert: { status: 'Active', isdeleted: false, tenantId, registrationNumber } }, { upsert: true });
         return res.status(404).json({ status: false, message: 'Registration not found' });
       }
-      await ScholarshipTest.updateOne(
-        { tenantId, registrationNumber, isdeleted: false },
-        {
-          $set: {
-            lastSyncAt: new Date(),
-            lastSyncStatus: 'ERROR',
-            lastSyncMessage: data?.message || e?.message || 'External error',
-            raw: data || null,
-            createdBy: req.body.userId,
-            updatedBy: req.body.userId
-          }
-        },
-        { upsert: true }
-      );
+      await ScholarshipTest.updateOne({ tenantId, registrationNumber, isdeleted: false }, { $set: { ...syncSet, lastSyncStatus: 'ERROR' }, $setOnInsert: { status: 'Active', isdeleted: false, tenantId, registrationNumber } }, { upsert: true });
       return res.status(500).json({
         status: false,
         message: 'External portal error',
@@ -141,13 +172,14 @@ const fetchScholarshipRegistration = async (req, res, next) => {
         { tenantId, registrationNumber, isdeleted: false },
         {
           $set: {
-            lastSyncAt: new Date(),
+            lastSyncAt: Date.now(),
             lastSyncStatus: 'ERROR',
             lastSyncMessage: body?.message || 'Invalid external response',
             raw: body || null,
-            createdBy: req.body.userId,
-            updatedBy: req.body.userId
-          }
+            updatedBy: userId || null,
+            ...(cachedExisting ? {} : { createdBy: userId || null })
+          },
+          $setOnInsert: { status: 'Active', isdeleted: false, tenantId, registrationNumber }
         },
         { upsert: true }
       );
@@ -166,7 +198,7 @@ const fetchScholarshipRegistration = async (req, res, next) => {
       name: safeTrim(d.name) || null,
       email: safeTrim(d.email) ? safeTrim(d.email).toLowerCase() : null,
       mobileNo: safeTrim(d.mobileNo) || null,
-      dateOfBirth: safeTrim(d.dateOfBirth) || null,
+      dateOfBirth: toEpochOrNull(d.dateOfBirth),
       gender: safeTrim(d.gender) || null,
       fatherName: safeTrim(d.fatherName) || null,
       motherName: safeTrim(d.motherName) || null,
@@ -174,7 +206,7 @@ const fetchScholarshipRegistration = async (req, res, next) => {
       city: safeTrim(d.city) || null,
       schoolName: safeTrim(d.schoolName) || null,
       className: safeTrim(d.className) || null,
-      testDate: safeTrim(d.testDate) || null,
+      testDate: toEpochOrNull(d.testDate),
       testCity: safeTrim(d.testCity) || null,
       testCentre: safeTrim(d.testCentre) || null,
       testName: safeTrim(d.testName) || null,
@@ -192,13 +224,13 @@ const fetchScholarshipRegistration = async (req, res, next) => {
       programOffered2: safeTrim(d.programOffered2) || null,
       waiverPerInTf: d.waiverPerInTf === null || d.waiverPerInTf === undefined ? null : Number(d.waiverPerInTf),
       studyCentre: safeTrim(d.studyCentre) || null,
-      lastSyncAt: new Date(),
+      lastSyncAt: Date.now(),
       lastSyncStatus: 'SUCCESS',
       lastSyncMessage: body?.message || 'OK',
       raw: body,
-      createdBy: req.body.userId
+      updatedBy: userId || null
     };
-    const cached = await ScholarshipTest.findOneAndUpdate({ tenantId, registrationNumber: up.registrationNumber, isdeleted: false }, { $set: up, $setOnInsert: { isdeleted: false, status: 'Active' } }, { new: true, upsert: true }).lean();
+    const cached = await ScholarshipTest.findOneAndUpdate({ tenantId, registrationNumber: up.registrationNumber, isdeleted: false }, { $set: up, $setOnInsert: { isdeleted: false, status: 'Active', createdBy: userId || null } }, { new: true, upsert: true }).lean();
     return res.status(200).json({
       status: true,
       message: 'Scholarship registration retrieved',
@@ -210,37 +242,12 @@ const fetchScholarshipRegistration = async (req, res, next) => {
   }
 };
 
-const academicYear3 = (academicYearRaw) => {
-  const s = safeTrim(academicYearRaw);
-  const m = s.match(/(\d{4})\s*[-–]\s*(\d{4})/);
-  if (m) {
-    const y1 = m[1];
-    const y2 = m[2];
-    return `${y1.slice(2, 4)}${y2.slice(3, 4)}`;
-  }
-  const m2 = s.match(/(\d{4})/);
-  if (m2) return `${m2[1].slice(1, 4)}`;
-  return '000';
-};
-
-const nextAdmissionRegNo = async ({ tenantId, programCode, centerCode, academicYear }) => {
-  const p = safeTrim(programCode).toUpperCase();
-  const c = safeTrim(centerCode).toUpperCase();
-  const y3 = academicYear3(academicYear);
-  if (!p || !c) {
-    throw new Error('programCode and centerCode are required to generate registration number');
-  }
-  const key = `ADM_REG_${p}_${c}_${y3}`;
-  const counter = await Counter.findOneAndUpdate({ tenantId, key }, { $inc: { seq: 1 } }, { new: true, upsert: true }).lean();
-  const seq = Number(counter?.seq || 0);
-  return `${p}${c}${y3}${padN(seq, 4)}`;
-};
-
 const createAdmissionDraft = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     const userId = pickUserId(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+
     const p = req.body || {};
     const sm = p.schoolMarks || {};
     const academicYear = safeTrim(p.academicYear);
@@ -248,21 +255,37 @@ const createAdmissionDraft = async (req, res, next) => {
     const feePlanId = safeTrim(p.feePlanId);
     const centerName = safeTrim(p.centerName);
     const programName = safeTrim(p.programName);
+
     if (!academicYear || !sourceType || !feePlanId || !centerName || !programName) {
       return res.status(400).json({
         status: false,
         message: 'academicYear, sourceType, feePlanId, centerName, programName are required'
       });
     }
+
     const student = p.student || {};
     if (!safeTrim(student.name) || !safeTrim(student.phone)) {
       return res.status(400).json({ status: false, message: 'student.name and student.phone are required' });
     }
+
+    // ✅ optional: prevent duplicate admission creation for same registrationNumber if provided
+    const regNo = safeTrim(p.registrationNumber) || null;
+    if (regNo) {
+      const exists = await Admission.findOne({ tenantId, registrationNumber: regNo, isdeleted: false }, { _id: 0, admissionId: 1, admissionNo: 1 }).lean();
+      if (exists) {
+        return res.status(200).json({
+          status: true,
+          message: 'Admission already exists for this registration number',
+          data: exists
+        });
+      }
+    }
+
     const doc = await Admission.create({
       tenantId,
       academicYear,
       sourceType,
-      registrationNumber: safeTrim(p.registrationNumber) || null,
+      registrationNumber: regNo,
       portalStudentId: safeTrim(p.portalStudentId) || null,
       scholarshipTestId: safeTrim(p.scholarshipTestId) || null,
       student: {
@@ -271,7 +294,10 @@ const createAdmissionDraft = async (req, res, next) => {
         lastName: safeTrim(student.lastName) || null,
         email: safeTrim(student.email) ? safeTrim(student.email).toLowerCase() : null,
         phone: safeTrim(student.phone),
-        dateOfBirth: safeTrim(student.dateOfBirth) || null,
+
+        // (model change pending) keep but if you convert to Number later, this already supports epoch
+        dateOfBirth: student.dateOfBirth === undefined ? null : toEpochOrNull(student.dateOfBirth),
+
         gender: safeTrim(student.gender) || null,
         fatherName: safeTrim(student.fatherName) || null,
         motherName: safeTrim(student.motherName) || null,
@@ -290,7 +316,10 @@ const createAdmissionDraft = async (req, res, next) => {
       batchId: safeTrim(p.batchId) || null,
       batchName: safeTrim(p.batchName) || null,
       classLabel: safeTrim(p.classLabel) || null,
+
+      // (model change pending) if you convert test dates to epoch later, this already supports it
       test: p.test || {},
+
       feePlanId,
       feePlanCode: safeTrim(p.feePlanCode) || null,
       fee: {
@@ -306,9 +335,7 @@ const createAdmissionDraft = async (req, res, next) => {
         neft: { splitAmount: toNum(p.payments?.neft?.splitAmount), refs: [], totalEntered: 0 },
         chequeSummary: { totalCheques: 0, totalAmount: 0, pendingCount: 0, clearedCount: 0, bouncedCount: 0 }
       },
-      workflow: {
-        stage: 'DRAFT'
-      },
+      workflow: { stage: 'DRAFT' },
       status: 'Active',
       schoolMarks: {
         overallPct: sm.overallPct === '' || sm.overallPct === null || sm.overallPct === undefined ? null : toNum(sm.overallPct),
@@ -319,6 +346,7 @@ const createAdmissionDraft = async (req, res, next) => {
       createdBy: userId || null,
       updatedBy: userId || null
     });
+
     return res.status(constants.HTTPS_CREATED || 201).json({
       status: true,
       message: 'Admission draft created',
@@ -358,6 +386,7 @@ const saveAdmissionPayments = async (req, res, next) => {
     for (const r of neftRefs) {
       const utr = safeTrim(r.utr);
       const amt = toNum(r.amount);
+      const paidOn = toEpochOrNull(r.paidOn);
       if (!utr || amt <= 0) continue;
       docs.push({
         tenantId,
@@ -376,10 +405,10 @@ const saveAdmissionPayments = async (req, res, next) => {
         amount: amt,
         remarks: safeTrim(r.remarks) || null,
         status: 'SUBMITTED',
-        submittedOn: safeTrim(r.paidOn) || null,
+        submittedOn: paidOn,
         neft: {
           utr,
-          paidOn: safeTrim(r.paidOn) || null,
+          paidOn,
           bankName: safeTrim(r.bankName) || null,
           referenceNote: safeTrim(r.referenceNote) || null
         }
@@ -387,11 +416,14 @@ const saveAdmissionPayments = async (req, res, next) => {
     }
     for (const c of cheques) {
       const chequeNo = safeTrim(c.chequeNo);
-      const dueDate = safeTrim(c.dueDate);
+      const dueDate = toEpochOrNull(c.dueDate);
+      const chequeDate = toEpochOrNull(c.chequeDate);
       const favourOf = safeTrim(c.favourOf);
       const mode = safeTrim(c.mode);
       const amt = toNum(c.amount);
+
       if (!chequeNo || !dueDate || !favourOf || !['PDC', 'CDC'].includes(mode) || amt <= 0) continue;
+
       docs.push({
         tenantId,
         admissionId,
@@ -412,16 +444,13 @@ const saveAdmissionPayments = async (req, res, next) => {
         cheque: {
           sno: c.sno ?? null,
           chequeNo,
-          chequeDate: safeTrim(c.chequeDate) || null,
+          chequeDate,
           dueDate,
           favourOf,
           mode,
           bankName: safeTrim(c.bankName) || null,
-          plannedDepositDate: safeTrim(c.dueDate) || dueDate || null
+          plannedDepositDate: toEpochOrNull(c.plannedDepositDate) || dueDate || null
         },
-        depositBatch: null,
-        extensions: [],
-        replacement: null,
         audit: [
           {
             action: 'CREATE',
@@ -651,6 +680,9 @@ const updateAdmission = async (req, res, next) => {
     if (student.address !== undefined) admission.student.address = safeTrim(student.address) || null;
     if (student.city !== undefined) admission.student.city = safeTrim(student.city) || null;
     if (student.className !== undefined) admission.student.className = safeTrim(student.className) || null;
+    if (student.dateOfBirth !== undefined) {
+      admission.student.dateOfBirth = toEpochOrNull(student.dateOfBirth);
+    }
     if (p.centerId !== undefined) admission.centerId = safeTrim(p.centerId) || null;
     if (p.centerName !== undefined) admission.centerName = safeTrim(p.centerName) || admission.centerName;
     if (p.programId !== undefined) admission.programId = safeTrim(p.programId) || null;
@@ -661,7 +693,9 @@ const updateAdmission = async (req, res, next) => {
     if (p.classLabel !== undefined) admission.classLabel = safeTrim(p.classLabel) || null;
     if (Object.keys(test).length) {
       admission.test = admission.test || {};
-      Object.assign(admission.test, test);
+      const t = { ...test };
+      if (t.testDate !== undefined) t.testDate = toEpochOrNull(t.testDate);
+      Object.assign(admission.test, t);
     }
     if (p.feePlanId !== undefined) admission.feePlanId = safeTrim(p.feePlanId) || admission.feePlanId;
     if (p.feePlanCode !== undefined) admission.feePlanCode = safeTrim(p.feePlanCode) || admission.feePlanCode;
@@ -694,37 +728,69 @@ const updateAdmission = async (req, res, next) => {
   }
 };
 
+function parseDateFromLabel(label) {
+  return toEpochOrNull(label);
+}
+
 const getPaymentTemplate = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     const admissionId = safeTrim(req.body?.admissionId);
+
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
     if (!admissionId) return res.status(400).json({ status: false, message: 'admissionId is required' });
+
     const admission = await Admission.findOne({ tenantId, admissionId, isdeleted: false }).lean();
     if (!admission) return res.status(404).json({ status: false, message: 'Admission not found' });
+
     const feePlanId = safeTrim(admission?.feePlanId);
     if (!feePlanId) return res.status(400).json({ status: false, message: 'feePlanId missing in admission' });
+
     const feePlan = await FeePlan.findOne({ tenantId, feePlanId, isdeleted: false }).lean();
     if (!feePlan) return res.status(404).json({ status: false, message: 'Fee plan not found' });
-    const instalments = Array.isArray(feePlan.instalments) ? feePlan.instalments : [];
-    const chequeTemplate = instalments
+
+    const instalmentsRaw = Array.isArray(feePlan.instalments) ? feePlan.instalments : [];
+
+    // ✅ build discounted instalment list (preserve count e.g., 26)
+    const instalments = instalmentsRaw
+      .slice()
       .sort((a, b) => toNum(a.seq) - toNum(b.seq))
       .map((x, idx) => {
-        const sno = Number.isFinite(Number(x.seq)) ? Number(x.seq) : idx + 1;
-        const label = safeTrim(x.label);
-        const amount = toNum(x.amount);
-        const dueDate = parseDateFromLabel(label);
+        const seq = Number.isFinite(Number(x.seq)) ? Number(x.seq) : idx + 1;
+        const label = safeTrim(x.label) || null;
+        const feeHead = safeTrim(x.feeHead) || null;
+        const dueDate = typeof x.instalmentDate === 'number' ? x.instalmentDate : toEpochOrNull(x.instalmentDate);
+        const mode = safeTrim(x.mode) || null;
+        const chequeFavour = safeTrim(x.chequeFavour) || safeTrim(admission?.centerName) || null;
+        const discountApplied = !!x.discountApplied;
+
+        const amt = discountedAmountIfNeeded({
+          amount: x.amount,
+          discountApplied,
+          fee: admission?.fee
+        });
+
         return {
-          sno,
-          instalmentLabel: label,
-          chequeDate: null,
-          dueDate,
-          favourOf: safeTrim(admission?.centerName || admission?.academics?.centreName) || '—',
-          mode: 'PDC',
-          amount
+          seq,
+          feeHead,
+          label,
+          instalmentDate: Number.isFinite(Number(dueDate)) ? Number(dueDate) : null, // ✅ epoch (0 allowed)
+          amount: amt,
+          mode,
+          chequeFavour,
+          discountApplied
         };
       });
-    const neftSplitAmount = Number(admission?.payments?.neft?.splitAmount || 0);
+    const neftSplitAmount = round2(instalments.filter((i) => toNum(i.instalmentDate) === 0).reduce((s, i) => s + toNum(i.amount), 0));
+    const byDateMap = new Map();
+    for (const i of instalments) {
+      const k = toNum(i.instalmentDate);
+      const prev = byDateMap.get(k) || { instalmentDate: k, amount: 0 };
+      prev.amount = round2(prev.amount + toNum(i.amount));
+      byDateMap.set(k, prev);
+    }
+    const groupedByDate = Array.from(byDateMap.values()).sort((a, b) => toNum(a.instalmentDate) - toNum(b.instalmentDate));
+    console.log('[getPaymentTemplate] discounted instalments =>', instalments);
     return res.status(200).json({
       status: true,
       message: 'Payment template loaded',
@@ -732,35 +798,14 @@ const getPaymentTemplate = async (req, res, next) => {
         admissionId,
         feePlanId,
         neftSplitAmount,
-        chequeTemplate
+        instalments,
+        groupedByDate
       }
     });
   } catch (err) {
     return next(err);
   }
 };
-
-function parseDateFromLabel(label) {
-  const s = safeTrim(label);
-  if (!s) return null;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-  const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
-  if (m) {
-    const dd = String(m[1]).padStart(2, '0');
-    const mm = String(m[2]).padStart(2, '0');
-    const yyyy = m[3];
-    return `${yyyy}-${mm}-${dd}`;
-  }
-  const d = new Date(s);
-  if (!isNaN(d.getTime())) {
-    const yyyy = d.getFullYear();
-    const mm = String(d.getMonth() + 1).padStart(2, '0');
-    const dd = String(d.getDate()).padStart(2, '0');
-    return `${yyyy}-${mm}-${dd}`;
-  }
-
-  return null;
-}
 
 const upsertStudentProfileFromAdmission = async ({ tenantId, admission, userId }) => {
   if (!tenantId || !admission) return null;
