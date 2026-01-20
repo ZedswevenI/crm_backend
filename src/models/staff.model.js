@@ -11,14 +11,15 @@ const staffSchema = new mongoose.Schema(
   {
     tenantId: { type: String, required: true, ref: 'tenant', trim: true, index: true },
     staffId: { type: String, required: true, default: uuid, trim: true },
+    employeeId: { type: String, required: true, trim: true },
     staffCode: { type: String, required: true, trim: true, index: true },
     staffName: { type: String, required: true, trim: true, index: true },
     role: { type: String, enum: STAFF_ROLES, required: true, trim: true, index: true },
     phone: { type: String, required: true, trim: true, index: true },
     email: { type: String, required: false, trim: true, lowercase: true, default: null, index: true },
     centerId: { type: String, required: true, ref: 'center', default: null },
-    joiningDate: { type: String, required: true, trim: true },
-    relievingDate: { type: String, required: false, trim: true, default: null },
+    joiningDate: { type: Number, required: true, trim: true },
+    relievingDate: { type: Number, required: false, trim: true, default: null },
     facultyType: { type: String, enum: FACULTY_TYPES, required: false, default: null },
     subject: { type: mongoose.Schema.Types.ObjectId, ref: 'subject', required: false, allow: null },
     payroll: { type: String, enum: PAYROLL_TYPES, required: true, trim: true, index: true },
@@ -34,6 +35,7 @@ const staffSchema = new mongoose.Schema(
 
 staffSchema.index({ tenantId: 1, staffId: 1, isdeleted: 1 }, { unique: true });
 staffSchema.index({ tenantId: 1, staffCode: 1, isdeleted: 1 }, { unique: true });
+staffSchema.index({ tenantId: 1, employeeId: 1, isdeleted: 1 }, { unique: true });
 staffSchema.index({ tenantId: 1, phone: 1, isdeleted: 1 }, { unique: true });
 staffSchema.index({ tenantId: 1, email: 1, isdeleted: 1 }, { unique: true, sparse: true });
 staffSchema.index({ tenantId: 1, centerId: 1, isdeleted: 1 });

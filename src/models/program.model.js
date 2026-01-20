@@ -5,13 +5,16 @@ const programSchema = new mongoose.Schema(
   {
     tenantId: { type: String, ref: 'tenant', required: true, trim: true, index: true },
     programId: { type: String, required: true, default: uuid, trim: true },
-    eligibleToClass: { type: String, required: true, trim: true },
+    eligibleToClass: { type: Number, required: true, min: 5, max: 13, index: true },
+    startingClass: { type: Number, required: true, min: 5, max: 13, index: true },
+    endingClass: { type: Number, required: false, min: 5, max: 13, index: true },
     programName: { type: String, required: true, trim: true },
     programCodes: { type: String, required: true, trim: true },
     target: { type: String, required: false, trim: true, default: null },
-    duration: { type: String, required: false, trim: true, default: null },
+    duration: { type: Number, required: true, min: 1, max: 6, default: null },
     version: { type: String, required: true, trim: true },
     programType: { type: String, required: false, trim: true, default: null },
+    subjects: { type: [mongoose.Schema.Types.ObjectId], ref: 'subject', required: false, default: [] },
     excelId: { type: Number, required: false, default: null },
     status: { type: String, enum: ['Active', 'Inactive'], default: 'Active' },
     isdeleted: { type: Boolean, required: true, default: false }
@@ -51,6 +54,33 @@ programSchema.pre('validate', function (next) {
       err.statusCode = 400;
       return next(err);
     }
+    const eligible = Number(this.eligibleToClass);
+    const start = Number(this.startingClass);
+    const dur = Number(this.duration);
+    if (!Number.isFinite(eligible) || eligible < 5 || eligible > 13) {
+      const err = new Error('eligibleToClass must be between 5 and 13');
+      err.statusCode = 400;
+      return next(err);
+    }
+    if (!Number.isFinite(start) || start < 5 || start > 13) {
+      const err = new Error('startingClass must be between 5 and 13');
+      err.statusCode = 400;
+      return next(err);
+    }
+    if (!Number.isFinite(dur) || dur < 1 || dur > 6) {
+      const err = new Error('duration must be between 1 and 6');
+      err.statusCode = 400;
+      return next(err);
+    }
+    const end = start + dur - 1;
+    if (end > 13) {
+      const err = new Error('Calculated endingClass exceeds max 13');
+      err.statusCode = 400;
+      return next(err);
+    }
+    this.endingClass = end;
+    const subs = Array.isArray(this.subjects) ? this.subjects : [];
+    this.subjects = Array.from(new Set(subs.map((x) => String(x)))).map((x) => new mongoose.Types.ObjectId(x));
     next();
   } catch (err) {
     return next(err);

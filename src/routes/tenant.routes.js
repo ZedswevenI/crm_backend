@@ -36,6 +36,7 @@ routes.post('/program/list', validatetoken, programCtrl.listPrograms);
 routes.post('/program/edit', validatetoken, programCtrl.updateProgram);
 routes.post('/program/delete', validatetoken, programCtrl.deleteProgram);
 routes.post('/program/view', validatetoken, programCtrl.viewProgram);
+routes.post('/program/addsubjects', validatetoken, programCtrl.addProgramSubjects);
 routes.post('/program/import', validatetoken, programCtrl.importPrograms);
 
 // Center Routes

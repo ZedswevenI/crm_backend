@@ -44,10 +44,67 @@ const safeUpper = (v) => {
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(String(id || ''));
 
 const normalizePhone = (v) => safeTrim(v).replace(/\s+/g, '');
+
 const normalizeEmail = (v) => {
   const s = safeTrim(v);
   return s ? s.toLowerCase() : null;
 };
+
+const MONTHS = {
+  jan: 0,
+  feb: 1,
+  mar: 2,
+  apr: 3,
+  may: 4,
+  jun: 5,
+  jul: 6,
+  aug: 7,
+  sep: 8,
+  oct: 9,
+  nov: 10,
+  dec: 11
+};
+
+const toEpochMs = (v) => {
+  if (v === null || v === undefined) return null;
+  if (typeof v === 'number' && Number.isFinite(v)) {
+    if (v > 1000000000000) return Math.trunc(v);
+    if (v > 20000) {
+      const ms = Math.round((v - 25569) * 86400 * 1000);
+      return ms > 0 ? ms : null;
+    }
+    return v > 0 ? Math.trunc(v) : null;
+  }
+  if (v instanceof Date && !isNaN(v.getTime())) return v.getTime();
+  const s = safeTrim(v);
+  if (!s) return null;
+  if (/^on\s*admission$/i.test(s)) return 0;
+  let m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+  if (m) {
+    const dd = Number(m[1]);
+    const mm = Number(m[2]) - 1;
+    let yy = Number(m[3]);
+    if (yy < 100) yy = 2000 + yy;
+    const ms = new Date(yy, mm, dd).getTime();
+    return isNaN(ms) ? null : ms;
+  }
+  m = s.match(/^(\d{1,2})[\-\s]([A-Za-z]{3})[\-\s](\d{2,4})$/);
+  if (m) {
+    const dd = Number(m[1]);
+    const mon = MONTHS[String(m[2] || '').toLowerCase()];
+    let yy = Number(m[3]);
+    if (yy < 100) yy = 2000 + yy;
+    if (mon === undefined) return null;
+    const ms = new Date(yy, mon, dd).getTime();
+    return isNaN(ms) ? null : ms;
+  }
+  const t = Date.parse(s);
+  if (!isNaN(t)) return t;
+
+  return null;
+};
+
+const normalizeFeeHeadKey = (k) => safeTrim(k).toUpperCase();
 
 const buildSort = (raw) => {
   const s = safeTrim(raw);
@@ -61,6 +118,7 @@ const toStaffResponse = (d) => {
   return {
     _id: d._id,
     staffId: d.staffId,
+    employeeId: d.employeeId,
     staffCode: d.staffCode,
     staffName: d.staffName,
     role: d.role,
@@ -701,6 +759,8 @@ const FEEHEAD_META = {
 const createFeePlan = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
+    const userId = pickUserId(req);
+
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
 
     const payload = req.body || {};
@@ -709,46 +769,61 @@ const createFeePlan = async (req, res, next) => {
     const feePlanName = safeTrim(payload.feePlanName);
 
     if (!academicYear || !programCode || !feePlanName) {
-      return res.status(400).json({
-        status: false,
-        message: 'academicYear, programCode, feePlanName are required'
-      });
+      return res.status(400).json({ status: false, message: 'academicYear, programCode, feePlanName are required' });
     }
 
     const feeHeads = Array.isArray(payload.feeHeads) ? payload.feeHeads : [];
-    const instalments = Array.isArray(payload.instalments) ? payload.instalments : [];
+    let instalments = Array.isArray(payload.instalments) ? payload.instalments : [];
 
     if (!feeHeads.length) return res.status(400).json({ status: false, message: 'feeHeads is required' });
     if (!instalments.length) return res.status(400).json({ status: false, message: 'instalments is required' });
+
+    const headKeys = new Set(feeHeads.map((h) => normalizeFeeHeadKey(h.key)));
+
+    // normalize instalments to schema fields
+    instalments = instalments.map((x, idx) => {
+      const feeHead = normalizeFeeHeadKey(x.feeHead || x.feehead || x.feeHeadKey || '');
+      const instalmentDate = toEpochMs(x.instalmentDate ?? x.instalmentdate ?? x.date ?? x.insdate);
+      const label = x.label ? safeTrim(x.label) : safeTrim(x.feefor) || (instalmentDate ? new Date(instalmentDate).toDateString() : 'On Admission');
+
+      return {
+        seq: toNum(x.seq) || idx + 1,
+        feeHead,
+        label,
+        instalmentDate: instalmentDate === null ? 0 : instalmentDate,
+        amount: Number(toNum(x.amount).toFixed(2)),
+        mode: x.mode ? safeTrim(x.mode) : null,
+        chequeFavour: x.chequeFavour ? safeTrim(x.chequeFavour) : x.chequefavour ? safeTrim(x.chequefavour) : null,
+        discountApplied: feeHead === 'TF'
+      };
+    });
+
+    const bad = instalments.find((i) => !i.feeHead || !headKeys.has(i.feeHead));
+    if (bad) return res.status(400).json({ status: false, message: 'Invalid instalment feeHead (must exist in feeHeads)' });
 
     const doc = await FeePlan.create({
       tenantId,
       academicYear,
       programCode,
-
       programId: payload.programId ? safeTrim(payload.programId) : null,
       programName: payload.programName ? safeTrim(payload.programName) : null,
-
       feePlanName,
       currency: payload.currency ? safeTrim(payload.currency) : 'INR',
-
       feeHeads,
       instalments,
-
-      // schema will recalc totals, but allow passing also
-      totalBaseFee: payload.totalBaseFee ?? 0,
-      totalGST: payload.totalGST ?? 0,
-      totalFee: payload.totalFee ?? 0,
-
       status: payload.status || 'Active',
+
+      centerCode: payload.centerCode ? safeTrim(payload.centerCode) : null,
+      testDate: payload.testDate ? toEpochMs(payload.testDate) : null,
+      validTill: payload.validTill ? toEpochMs(payload.validTill) : null,
+
+      createdBy: userId || null,
+      updatedBy: userId || null,
+
       isdeleted: false
     });
 
-    return res.status(constants.HTTPS_CREATED || 201).json({
-      status: true,
-      message: 'Fee plan created successfully',
-      data: doc
-    });
+    return res.status(constants.HTTPS_CREATED || 201).json({ status: true, message: 'Fee plan created successfully', data: doc });
   } catch (err) {
     if (err && err.code === 11000) {
       const dupField = Object.keys(err.keyPattern || {})[0] || 'unique field';
@@ -758,7 +833,7 @@ const createFeePlan = async (req, res, next) => {
   }
 };
 
-// -------------------- VIEW --------------------
+// ========================= VIEW =========================
 const viewFeePlan = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
@@ -776,10 +851,11 @@ const viewFeePlan = async (req, res, next) => {
   }
 };
 
-// -------------------- UPDATE --------------------
+// ========================= UPDATE =========================
 const updateFeePlan = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
+    const userId = pickUserId(req);
     const recId = req.body?.recId;
 
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
@@ -797,9 +873,35 @@ const updateFeePlan = async (req, res, next) => {
     if (payload.feePlanName !== undefined) updateDoc.feePlanName = safeTrim(payload.feePlanName);
     if (payload.currency !== undefined) updateDoc.currency = payload.currency ? safeTrim(payload.currency) : 'INR';
 
+    if (payload.centerCode !== undefined) updateDoc.centerCode = payload.centerCode ? safeTrim(payload.centerCode) : null;
+    if (payload.testDate !== undefined) updateDoc.testDate = payload.testDate ? toEpochMs(payload.testDate) : null;
+    if (payload.validTill !== undefined) updateDoc.validTill = payload.validTill ? toEpochMs(payload.validTill) : null;
+
     if (payload.feeHeads !== undefined) updateDoc.feeHeads = Array.isArray(payload.feeHeads) ? payload.feeHeads : [];
-    if (payload.instalments !== undefined) updateDoc.instalments = Array.isArray(payload.instalments) ? payload.instalments : [];
+
+    if (payload.instalments !== undefined) {
+      const rawInst = Array.isArray(payload.instalments) ? payload.instalments : [];
+      updateDoc.instalments = rawInst.map((x, idx) => {
+        const feeHead = normalizeFeeHeadKey(x.feeHead || x.feehead || x.feeHeadKey || '');
+        const instalmentDate = toEpochMs(x.instalmentDate ?? x.instalmentdate ?? x.date ?? x.insdate);
+        const label = x.label ? safeTrim(x.label) : safeTrim(x.feefor) || (instalmentDate ? new Date(instalmentDate).toDateString() : 'On Admission');
+        return {
+          seq: toNum(x.seq) || idx + 1,
+          feeHead,
+          label,
+          instalmentDate: instalmentDate === null ? 0 : instalmentDate,
+          amount: Number(toNum(x.amount).toFixed(2)),
+          mode: x.mode ? safeTrim(x.mode) : null,
+          chequeFavour: x.chequeFavour ? safeTrim(x.chequeFavour) : x.chequefavour ? safeTrim(x.chequefavour) : null,
+          discountApplied: feeHead === 'TF'
+        };
+      });
+    }
+
     if (payload.status !== undefined) updateDoc.status = payload.status;
+
+    // always update updatedBy if userId present
+    if (userId) updateDoc.updatedBy = userId;
 
     if (!Object.keys(updateDoc).length) {
       return res.status(400).json({ status: false, message: 'No fields to update' });
@@ -809,11 +911,7 @@ const updateFeePlan = async (req, res, next) => {
 
     if (!updated) return res.status(404).json({ status: false, message: 'Fee plan not found or deleted' });
 
-    return res.status(constants.HTTPS_SUCCESS || 200).json({
-      status: true,
-      message: 'Fee plan updated successfully',
-      data: updated
-    });
+    return res.status(constants.HTTPS_SUCCESS || 200).json({ status: true, message: 'Fee plan updated successfully', data: updated });
   } catch (err) {
     if (err && err.code === 11000) {
       const dupField = Object.keys(err.keyPattern || {})[0] || 'unique field';
@@ -823,72 +921,50 @@ const updateFeePlan = async (req, res, next) => {
   }
 };
 
-// -------------------- DELETE (soft) --------------------
+// ========================= DELETE =========================
 const deleteFeePlan = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
+    const userId = pickUserId(req);
     const recId = req.body?.recId;
 
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
     if (!recId) return res.status(400).json({ status: false, message: 'recId is required' });
 
-    const deleted = await FeePlan.findOneAndUpdate({ _id: recId, tenantId, isdeleted: false }, { $set: { isdeleted: true } }, { new: true });
+    const deleted = await FeePlan.findOneAndUpdate({ _id: recId, tenantId, isdeleted: false }, { $set: { isdeleted: true, ...(userId ? { updatedBy: userId } : {}) } }, { new: true });
 
     if (!deleted) return res.status(404).json({ status: false, message: 'Fee plan not found or already deleted' });
 
-    return res.status(constants.HTTPS_SUCCESS || 200).json({
-      status: true,
-      message: 'Fee plan deleted successfully',
-      data: deleted
-    });
+    return res.status(constants.HTTPS_SUCCESS || 200).json({ status: true, message: 'Fee plan deleted successfully', data: deleted });
   } catch (err) {
     return next(err);
   }
 };
 
-// -------------------- ACTIVE/INACTIVE --------------------
-const setFeePlanStatus = async (req, res, next) => {
-  try {
-    const tenantId = pickTenantId(req);
-    const recId = req.body?.recId;
-    const status = req.body?.status;
-
-    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-    if (!recId) return res.status(400).json({ status: false, message: 'recId is required' });
-    if (!['Active', 'Inactive'].includes(status)) {
-      return res.status(400).json({ status: false, message: 'status must be Active or Inactive' });
-    }
-
-    const updated = await FeePlan.findOneAndUpdate({ _id: recId, tenantId, isdeleted: false }, { $set: { status } }, { new: true });
-
-    if (!updated) return res.status(404).json({ status: false, message: 'Fee plan not found' });
-
-    return res.status(200).json({ status: true, message: 'Status updated', data: updated });
-  } catch (err) {
-    return next(err);
-  }
-};
-
-// -------------------- LIST (pagination) --------------------
+// ========================= LIST =========================
 const listFeePlans = async (req, res, next) => {
   try {
     const tenantId = safeTrim(req.body?.entiId);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required in body' });
+
     const listType = req.query.list;
-    const sort = req.query.sort || '-createdAt';
+    const sort = safeTrim(req.query.sort) || '-createdAt';
     const search = safeTrim(req.query.search);
     const academicYear = safeTrim(req.query.academicYear);
     const programCode = safeTrim(req.query.programCode);
     const programId = safeTrim(req.query.programId);
     const status = safeTrim(req.query.status);
+
     const query = { tenantId, isdeleted: false };
     if (academicYear) query.academicYear = academicYear;
     if (programCode) query.programCode = programCode;
     if (programId) query.programId = programId;
     if (status) query.status = status;
+
     if (search) {
       query.$or = [{ feePlanName: { $regex: search, $options: 'i' } }, { feePlanDisplayName: { $regex: search, $options: 'i' } }, { programName: { $regex: search, $options: 'i' } }, { programCode: { $regex: search, $options: 'i' } }];
     }
+
     let data;
     let count;
     let page;
@@ -905,23 +981,17 @@ const listFeePlans = async (req, res, next) => {
       data = await FeePlan.find(query).sort(sort).skip(skip).limit(limit);
     }
 
-    return res.status(constants.HTTPS_SUCCESS || 200).json({
-      status: true,
-      message: 'Fee plan list retrieved successfully',
-      data,
-      page,
-      count
-    });
+    return res.status(constants.HTTPS_SUCCESS || 200).json({ status: true, message: 'Fee plan list retrieved successfully', data, page, count });
   } catch (err) {
     return next(err);
   }
 };
 
-// -------------------- BULK UPSERT IMPORT (Excel rows) --------------------
-// payload: { entiId, academicYear, rows:[ {feeplancode, programcode, feehead, amount, strate, insdate, ...} ] }
+// ========================= BULK IMPORT (NO MERGE) =========================
 const bulkUpsertFeePlansFromRows = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
+    const userId = pickUserId(req);
     const academicYear = safeTrim(req.body?.academicYear);
     const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
 
@@ -929,7 +999,7 @@ const bulkUpsertFeePlansFromRows = async (req, res, next) => {
     if (!academicYear) return res.status(400).json({ status: false, message: 'academicYear is required' });
     if (!rows.length) return res.status(400).json({ status: false, message: 'rows must be a non-empty array' });
 
-    // group by feePlanName (feeplancode) + programCode (programcode)
+    // group by feeplancode + programcode
     const groups = new Map();
     for (const r of rows) {
       const feePlanName = safeTrim(r.feeplancode);
@@ -950,9 +1020,12 @@ const bulkUpsertFeePlansFromRows = async (req, res, next) => {
         const feePlanName = safeTrim(lines[0].feeplancode);
         const programCode = safeTrim(lines[0].programcode);
 
+        // plan-level optional fields
+        const centerCode = safeTrim(lines[0].centres) || null;
+        const testDate = toEpochMs(lines[0].testdate);
+        const validTill = toEpochMs(lines[0].validity);
+
         // Resolve program from Program master using programCodes CSV string.
-        // Your Program schema stores programCodes as CSV string now.
-        // So use regex to match token boundaries.
         const codeUpper = String(programCode).trim().toUpperCase();
         const tokenRegex = new RegExp(`(^|,\\s*)${codeUpper}(\\s*,|$)`, 'i');
 
@@ -968,13 +1041,14 @@ const bulkUpsertFeePlansFromRows = async (req, res, next) => {
         }
 
         // -------- feeHeads aggregation by feehead key --------
-        const headAgg = new Map(); // key => {base, gst, label, discountAllowed, gstPercent}
+        const headAgg = new Map();
+
         for (const l of lines) {
           const headKey = safeTrim(l.feehead).toUpperCase();
           if (!headKey) continue;
 
           const amount = toNum(l.amount); // base
-          const gstPercent = toNum(l.strate); // strate = gst %
+          const gstPercent = toNum(l.strate); // gst %
           const gstAmount = Number(((amount * gstPercent) / 100).toFixed(2));
           const totalAmount = Number((amount + gstAmount).toFixed(2));
 
@@ -1000,7 +1074,6 @@ const bulkUpsertFeePlansFromRows = async (req, res, next) => {
           x.gst += gstAmount;
           x.total += totalAmount;
 
-          // if gstPercent varies, keep 0 (not critical since gstAmount is summed)
           if (Number(x.gstPercent) !== Number(gstPercent)) x.gstPercent = 0;
         }
 
@@ -1018,29 +1091,49 @@ const bulkUpsertFeePlansFromRows = async (req, res, next) => {
         let totalBase = 0;
         let totalGst = 0;
         let totalFee = 0;
+
         feeHeads.forEach((h) => {
           totalBase += Number(h.amount || 0);
           totalGst += Number(h.gstAmount || 0);
           totalFee += Number(h.totalAmount || 0);
         });
 
-        // -------- instalments: group by insdate using TOTAL AMOUNT (base+gst) --------
-        // Important: model validates instalments sum == totalFee (which includes GST).
-        const instMap = new Map();
+        // -------- instalments: NO MERGE. each row -> one instalment --------
+        const headKeys = new Set(feeHeads.map((h) => String(h.key || '').toUpperCase()));
+
+        const instLines = [];
         for (const l of lines) {
-          const label = safeTrim(l.insdate) || 'On Admission';
-          const amount = toNum(l.amount);
+          const feeHead = safeTrim(l.feehead).toUpperCase();
+          if (!feeHead) continue;
+
+          if (!headKeys.has(feeHead)) {
+            // safety, should never happen since feeHeads built from same lines
+            continue;
+          }
+
+          const amountBase = toNum(l.amount);
           const gstPercent = toNum(l.strate);
-          const gstAmount = Number(((amount * gstPercent) / 100).toFixed(2));
-          const totalAmount = Number((amount + gstAmount).toFixed(2));
-          instMap.set(label, Number(((instMap.get(label) || 0) + totalAmount).toFixed(2)));
+          const gstAmount = Number(((amountBase * gstPercent) / 100).toFixed(2));
+          const totalAmount = Number((amountBase + gstAmount).toFixed(2));
+
+          const instalmentDate = toEpochMs(l.insdate);
+          const label = safeTrim(l.feefor) || safeTrim(l.insdate) || 'On Admission';
+          const mode = l.mode ? safeTrim(l.mode) : null;
+          const chequeFavour = l.chequefavour ? safeTrim(l.chequefavour) : null;
+
+          instLines.push({
+            feeHead,
+            label,
+            instalmentDate: instalmentDate === null ? 0 : instalmentDate,
+            amount: Number(toNum(totalAmount).toFixed(2)),
+            mode,
+            chequeFavour,
+            discountApplied: feeHead === 'TF'
+          });
         }
 
-        const instalments = Array.from(instMap.entries()).map(([label, amt], idx) => ({
-          seq: idx + 1,
-          label,
-          amount: Number(toNum(amt).toFixed(2))
-        }));
+        instLines.sort((a, b) => Number(a.instalmentDate || 0) - Number(b.instalmentDate || 0));
+        const instalments = instLines.map((x, idx) => ({ seq: idx + 1, ...x }));
 
         // Upsert by tenantId + academicYear + programCode + feePlanName
         const exists = await FeePlan.findOne({
@@ -1058,12 +1151,20 @@ const bulkUpsertFeePlansFromRows = async (req, res, next) => {
               $set: {
                 programId: programDoc.programId || null,
                 programName: programDoc.programName || null,
+
+                centerCode,
+                testDate: testDate === null ? null : testDate,
+                validTill: validTill === null ? null : validTill,
+
                 feeHeads,
                 instalments,
+
                 totalBaseFee: Number(totalBase.toFixed(2)),
                 totalGST: Number(totalGst.toFixed(2)),
                 totalFee: Number(totalFee.toFixed(2)),
-                status: 'Active'
+
+                status: 'Active',
+                ...(userId ? { updatedBy: userId } : {})
               }
             }
           );
@@ -1075,14 +1176,25 @@ const bulkUpsertFeePlansFromRows = async (req, res, next) => {
             programCode,
             programId: programDoc.programId || null,
             programName: programDoc.programName || null,
+
             feePlanName,
             currency: 'INR',
+
+            centerCode,
+            testDate: testDate === null ? null : testDate,
+            validTill: validTill === null ? null : validTill,
+
             feeHeads,
             instalments,
+
             totalBaseFee: Number(totalBase.toFixed(2)),
             totalGST: Number(totalGst.toFixed(2)),
             totalFee: Number(totalFee.toFixed(2)),
+
             status: 'Active',
+            createdBy: userId || null,
+            updatedBy: userId || null,
+
             isdeleted: false
           });
           processed.push({ feePlanName, programCode, action: 'created' });
@@ -1095,13 +1207,30 @@ const bulkUpsertFeePlansFromRows = async (req, res, next) => {
     return res.status(constants.HTTPS_SUCCESS || 200).json({
       status: true,
       message: 'Bulk fee plan import processed',
-      data: {
-        totalGroups: groups.size,
-        processed,
-        skipped,
-        errors
-      }
+      data: { totalGroups: groups.size, processed, skipped, errors }
     });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const setFeePlanStatus = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const recId = req.body?.recId;
+    const status = req.body?.status;
+
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    if (!recId) return res.status(400).json({ status: false, message: 'recId is required' });
+    if (!['Active', 'Inactive'].includes(status)) {
+      return res.status(400).json({ status: false, message: 'status must be Active or Inactive' });
+    }
+
+    const updated = await FeePlan.findOneAndUpdate({ _id: recId, tenantId, isdeleted: false }, { $set: { status } }, { new: true });
+
+    if (!updated) return res.status(404).json({ status: false, message: 'Fee plan not found' });
+
+    return res.status(200).json({ status: true, message: 'Status updated', data: updated });
   } catch (err) {
     return next(err);
   }
@@ -1118,16 +1247,18 @@ const createStaff = async (req, res, next) => {
     const phone = normalizePhone(payload.phone);
     const email = normalizeEmail(payload.email);
     const centerId = safeTrim(payload.centerId);
-    const joiningDate = safeTrim(payload.joiningDate);
-    const relievingDate = safeTrim(payload.relievingDate) || null;
+    const joiningDate = toNum(payload.joiningDate);
+    const relievingDate = payload.relievingDate ? toNum(payload.relievingDate) : null;
     const facultyType = safeTrim(payload.facultyType) || null;
     const payroll = safeTrim(payload.payroll);
     const department = safeTrim(payload.department);
     const subject = safeTrim(payload.subject) || null;
     const weekoff = Array.isArray(payload.weekoff) ? payload.weekoff.map((x) => safeTrim(x)).filter(Boolean) : [];
     const status = safeTrim(payload.status) || 'Active';
+    const employeeId = safeTrim(payload.employeeId);
     if (!staffName) return res.status(400).json({ status: false, message: 'staffName is required' });
     if (!staffCode) return res.status(400).json({ status: false, message: 'staffCode is required' });
+    if (!employeeId) return res.status(400).json({ status: false, message: 'employeeId is required' });
     if (!role) return res.status(400).json({ status: false, message: 'role is required' });
     if (!phone) return res.status(400).json({ status: false, message: 'phone is required' });
     if (!centerId) return res.status(400).json({ status: false, message: 'centerId is required' });
@@ -1151,10 +1282,13 @@ const createStaff = async (req, res, next) => {
       const subDoc = await Subject.findOne({ _id: subject, tenantId, isdeleted: false }).lean();
       if (!subDoc) return res.status(400).json({ status: false, message: 'Invalid subject (not found)' });
     }
+    const exists = await Staff.exists({ tenantId, employeeId: employeeId, isdeleted: false });
+    if (exists) throw new Error('Employee ID already exists');
     const doc = await Staff.create({
       tenantId,
       staffCode,
       staffName,
+      employeeId,
       role,
       phone,
       email,
@@ -1171,7 +1305,6 @@ const createStaff = async (req, res, next) => {
       createdBy: payload.createdBy || null,
       updatedBy: payload.updatedBy || null
     });
-
     return res.status(constants.HTTPS_SUCCESS).json({
       status: true,
       message: 'Staff created',
@@ -1182,6 +1315,7 @@ const createStaff = async (req, res, next) => {
       const key = Object.keys(err?.keyPattern || {})[0] || 'duplicate';
       const map = {
         staffCode: 'Staff code already exists',
+        employeeId: 'Employee ID already exists',
         phone: 'Phone already exists',
         email: 'Email already exists'
       };
@@ -1202,7 +1336,7 @@ const listStaff = async (req, res, next) => {
     const query = { tenantId, isdeleted: false };
     if (search) {
       const rx = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-      query.$or = [{ staffName: rx }, { staffCode: rx }, { phone: rx }, { email: rx }, { role: rx }, { centerId: rx }];
+      query.$or = [{ staffName: rx }, { employeeId: rx }, { staffCode: rx }, { phone: rx }, { email: rx }, { role: rx }, { centerId: rx }];
     }
     const skip = (page - 1) * limit;
     const [rows, count] = await Promise.all([
@@ -1252,12 +1386,13 @@ const updateStaff = async (req, res, next) => {
     const patch = {};
     if (payload.staffName !== undefined) patch.staffName = safeTrim(payload.staffName);
     if (payload.staffCode !== undefined) patch.staffCode = safeUpper(payload.staffCode);
+    if (payload.employeeId !== undefined) patch.employeeId = safeTrim(payload.employeeId);
     if (payload.role !== undefined) patch.role = safeTrim(payload.role);
     if (payload.phone !== undefined) patch.phone = normalizePhone(payload.phone);
     if (payload.email !== undefined) patch.email = normalizeEmail(payload.email);
     if (payload.centerId !== undefined) patch.centerId = safeTrim(payload.centerId);
-    if (payload.joiningDate !== undefined) patch.joiningDate = safeTrim(payload.joiningDate);
-    if (payload.relievingDate !== undefined) patch.relievingDate = safeTrim(payload.relievingDate) || null;
+    if (payload.joiningDate !== undefined) patch.joiningDate = toNum(payload.joiningDate);
+    if (payload.relievingDate !== undefined) patch.relievingDate = payload.relievingDate ? toNum(payload.relievingDate) : null;
     if (payload.facultyType !== undefined) patch.facultyType = safeTrim(payload.facultyType) || null;
     if (payload.subject !== undefined) patch.subject = safeTrim(payload.subject) || null;
     if (payload.payroll !== undefined) patch.payroll = safeTrim(payload.payroll);
@@ -1267,6 +1402,9 @@ const updateStaff = async (req, res, next) => {
     }
     if (payload.status !== undefined) patch.status = safeTrim(payload.status) === 'Inactive' ? 'Inactive' : 'Active';
     if (payload.updatedBy !== undefined) patch.updatedBy = payload.updatedBy || null;
+    if (patch.employeeId !== undefined && !patch.employeeId) {
+      return res.status(400).json({ status: false, message: 'employeeId cannot be empty' });
+    }
     const existing = await Staff.findOne({ _id: recId, tenantId, isdeleted: false }).lean();
     if (!existing) return res.status(404).json({ status: false, message: 'Staff not found' });
     const nextRole = patch.role !== undefined ? patch.role : existing.role;
@@ -1299,7 +1437,9 @@ const updateStaff = async (req, res, next) => {
     if (patch.staffCode !== undefined && !patch.staffCode) return res.status(400).json({ status: false, message: 'staffCode cannot be empty' });
     if (patch.phone !== undefined && !patch.phone) return res.status(400).json({ status: false, message: 'phone cannot be empty' });
     if (patch.centerId !== undefined && !patch.centerId) return res.status(400).json({ status: false, message: 'centerId cannot be empty' });
-    if (patch.joiningDate !== undefined && !patch.joiningDate) return res.status(400).json({ status: false, message: 'joiningDate cannot be empty' });
+    if (patch.joiningDate !== undefined && !patch.joiningDate) {
+      return res.status(400).json({ status: false, message: 'joiningDate cannot be empty' });
+    }
     if (patch.payroll !== undefined && !patch.payroll) return res.status(400).json({ status: false, message: 'payroll cannot be empty' });
     if (patch.department !== undefined && !patch.department) return res.status(400).json({ status: false, message: 'department cannot be empty' });
     const doc = await Staff.findOneAndUpdate({ _id: recId, tenantId, isdeleted: false }, { $set: patch }, { new: true }).lean();
@@ -1415,12 +1555,13 @@ const bulkImportStaff = async (req, res, next) => {
       return {
         staffName: safeTrim(x.staffName),
         staffCode: safeUpper(x.staffCode),
+        employeeId: safeTrim(x.employeeId),
         role,
         phone: normalizePhone(x.phone),
         email: normalizeEmail(x.email),
         centerId: cHit?.centerId || null,
-        joiningDate: safeTrim(x.joiningDate),
-        relievingDate: safeTrim(x.relievingDate) || null,
+        joiningDate: toNum(x.joiningDate),
+        relievingDate: x.relievingDate ? toNum(x.relievingDate) : null,
         payroll: safeTrim(x.payroll),
         department: dHit?._id ? String(dHit._id) : null,
         facultyType: role === 'Faculty' ? facultyType : null,
@@ -1442,6 +1583,7 @@ const bulkImportStaff = async (req, res, next) => {
       const errs = [];
       if (!r.staffName) errs.push('Staff Name required');
       if (!r.staffCode) errs.push('Staff Code required');
+      if (!r.employeeId) errs.push('Employee ID required');
       if (!r.role) errs.push('Role required');
       if (r.role && !STAFF_ROLES.includes(r.role)) errs.push('Invalid role');
       if (!r.phone) errs.push('Phone required');
@@ -1465,7 +1607,7 @@ const bulkImportStaff = async (req, res, next) => {
         const bad = wk.filter((d) => !WEEKOFF_DAYS.includes(d));
         if (bad.length) errs.push(`Invalid weekoff: ${bad.join(', ')}`);
       }
-      if (errs.length) invalidRows.push({ index: idx, staffCode: r.staffCode, errors: errs });
+      if (errs.length) invalidRows.push({ index: idx, staffCode: r.staffCode, employeeId: r.employeeId, errors: errs });
     });
     if (invalidRows.length) {
       return res.status(400).json({
@@ -1478,6 +1620,7 @@ const bulkImportStaff = async (req, res, next) => {
       tenantId,
       staffCode: r.staffCode,
       staffName: r.staffName,
+      employeeId: r.employeeId,
       role: r.role,
       phone: r.phone,
       email: r.email,
@@ -1496,25 +1639,27 @@ const bulkImportStaff = async (req, res, next) => {
     }));
     if (mode === 'insert') {
       const staffCodes = Array.from(new Set(docs.map((d) => d.staffCode).filter(Boolean)));
+      const employeeIds = Array.from(new Set(docs.map((d) => d.employeeId).filter(Boolean)));
       const phones = Array.from(new Set(docs.map((d) => d.phone).filter(Boolean)));
       const emails = Array.from(new Set(docs.map((d) => d.email).filter(Boolean)));
       const existing = await Staff.find(
         {
           tenantId,
           isdeleted: false,
-          $or: [{ staffCode: { $in: staffCodes } }, { phone: { $in: phones } }, ...(emails.length ? [{ email: { $in: emails } }] : [])]
+          $or: [{ staffCode: { $in: staffCodes } }, { employeeId: { $in: employeeIds } }, { phone: { $in: phones } }, ...(emails.length ? [{ email: { $in: emails } }] : [])]
         },
-        { _id: 0, staffCode: 1, phone: 1, email: 1 }
+        { _id: 0, staffCode: 1, employeeId: 1, phone: 1, email: 1 }
       ).lean();
       const existCode = new Set((existing || []).map((e) => String(e.staffCode || '')));
+      const existEmp = new Set((existing || []).map((e) => String(e.employeeId || '')));
       const existPhone = new Set((existing || []).map((e) => String(e.phone || '')));
       const existEmail = new Set((existing || []).map((e) => String(e.email || '')));
       const toInsert = [];
       const skipped = [];
       for (const d of docs) {
-        const dup = existCode.has(d.staffCode) || existPhone.has(d.phone) || (d.email && existEmail.has(d.email));
+        const dup = existCode.has(d.staffCode) || existEmp.has(d.employeeId) || existPhone.has(d.phone) || (d.email && existEmail.has(d.email));
         if (dup) {
-          skipped.push({ staffCode: d.staffCode, reason: 'duplicate' });
+          skipped.push({ staffCode: d.staffCode, employeeId: d.employeeId, reason: 'duplicate' });
           continue;
         }
         toInsert.push(d);
