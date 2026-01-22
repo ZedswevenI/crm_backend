@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import constants from '../helpers/constants.js';
 import Batch from '../models/batch.model.js';
 import StudentProfile from '../models/studentProfile.model.js';
+import Program from '../models/program.model.js';
 
 const pickTenantId = (req) => String(req?.body?.tenantId || req?.body?.entiId || '').trim();
 const safeTrim = (v) => (v === undefined || v === null ? '' : String(v).trim());
@@ -9,6 +10,11 @@ const escapeRegex = (s) => String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&'
 const toInt = (v, def = 0) => {
   const n = Number(v);
   return Number.isFinite(n) ? Math.trunc(n) : def;
+};
+const toEpoch = (v) => {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? Math.trunc(n) : null;
 };
 const toBool = (v) => v === true || v === 'true' || v === 1 || v === '1';
 const normalizeIdList = (arr) => Array.from(new Set((Array.isArray(arr) ? arr : []).map((x) => safeTrim(x)).filter(Boolean)));
@@ -78,23 +84,20 @@ const createBatch = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-
     const payload = req.body || {};
     const batchName = safeTrim(payload.batchName);
     const batchCode = safeTrim(payload.batchCode);
     const academicYear = safeTrim(payload.academicYear);
     const programId = safeTrim(payload.programId);
     const centerId = safeTrim(payload.centerId);
-    const startDate = toInt(payload.startDate, 0);
-    const endDate = toInt(payload.endDate, 0);
-
+    const startDate = toEpoch(payload.startDate);
+    const endDate = toEpoch(payload.endDate);
     if (!batchName || !batchCode || !academicYear || !programId || !centerId || !startDate || !endDate) {
       return res.status(400).json({
         status: false,
         message: 'batchName, batchCode, academicYear, programId, centerId, startDate, endDate are required'
       });
     }
-
     const doc = await Batch.create({
       tenantId,
       batchName,
@@ -116,7 +119,6 @@ const createBatch = async (req, res, next) => {
       createdBy: payload.userId || null,
       updatedBy: payload.userId || null
     });
-
     return res.status(constants.HTTPS_SUCCESS).json({ status: true, message: 'Batch created', data: doc });
   } catch (err) {
     if (err?.code === 11000) {
@@ -130,36 +132,29 @@ const listBatches = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-
     const page = Math.max(parseInt(req.query.page || '1', 10), 1);
     const limit = Math.min(Math.max(parseInt(req.query.limit || '20', 10), 1), 200);
     const list = safeTrim(req.query.list);
     const search = safeTrim(req.query.search);
-
     const status = safeTrim(req.query.status);
     const academicYear = safeTrim(req.query.academicYear);
     const programId = safeTrim(req.query.programId);
     const centerId = safeTrim(req.query.centerId);
-
     const query = { tenantId, isdeleted: false };
     if (status && status !== 'ALL') query.status = status;
     if (academicYear) query.academicYear = academicYear;
     if (programId) query.programId = programId;
     if (centerId) query.centerId = centerId;
-
     if (search) {
       const rx = new RegExp(escapeRegex(search), 'i');
       query.$or = [{ batchName: rx }, { batchCode: rx }, { programName: rx }, { centerName: rx }];
     }
-
     if (list === 'full') {
       const rows = await Batch.find(query).sort({ createdAt: -1 }).lean();
       return res.status(constants.HTTPS_SUCCESS).json({ status: true, message: 'Request success', data: rows, count: rows.length });
     }
-
     const skip = (page - 1) * limit;
     const [rows, count] = await Promise.all([Batch.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(), Batch.countDocuments(query)]);
-
     return res.status(constants.HTTPS_SUCCESS).json({ status: true, message: 'Request success', data: rows, count });
   } catch (err) {
     return next(err);
@@ -170,18 +165,14 @@ const viewBatch = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-
     const batchId = safeTrim(req.body.batchId);
     if (!batchId) return res.status(400).json({ status: false, message: 'batchId is required' });
-
     const doc = await Batch.findOne({ tenantId, batchId, isdeleted: false }).lean();
     if (!doc) return res.status(404).json({ status: false, message: 'Batch not found' });
-
     const includeStudents = toBool(req.body?.includeStudents);
     if (!includeStudents) {
       return res.status(constants.HTTPS_SUCCESS).json({ status: true, message: 'Request success', data: doc });
     }
-
     const students = await StudentProfile.find(
       { tenantId, isdeleted: false, status: 'ACTIVE', batchId },
       {
@@ -198,7 +189,6 @@ const viewBatch = async (req, res, next) => {
     )
       .sort({ createdAt: -1 })
       .lean();
-
     return res.status(constants.HTTPS_SUCCESS).json({
       status: true,
       message: 'Request success',
@@ -234,22 +224,24 @@ const updateBatch = async (req, res, next) => {
     if (payload.centerId !== undefined) patch.centerId = safeTrim(payload.centerId);
     if (payload.centerCode !== undefined) patch.centerCode = safeTrim(payload.centerCode) || null;
     if (payload.centerName !== undefined) patch.centerName = safeTrim(payload.centerName) || null;
-    if (payload.startDate !== undefined) patch.startDate = toInt(payload.startDate, cur.startDate);
-    if (payload.endDate !== undefined) patch.endDate = toInt(payload.endDate, cur.endDate);
     if (payload.status !== undefined) patch.status = safeTrim(payload.status) || cur.status;
     if (payload.remarks !== undefined) patch.remarks = safeTrim(payload.remarks) || null;
     if (payload.userId !== undefined) patch.updatedBy = payload.userId || null;
 
+    if (payload.startDate !== undefined) patch.startDate = toEpoch(payload.startDate);
+    if (payload.endDate !== undefined) patch.endDate = toEpoch(payload.endDate);
+    const effStart = patch.startDate !== undefined ? patch.startDate : cur.startDate;
+    const effEnd = patch.endDate !== undefined ? patch.endDate : cur.endDate;
+    if (effStart && effEnd && effStart >= effEnd) {
+      return res.status(400).json({ status: false, message: 'startDate must be before endDate' });
+    }
     if (patch.batchName !== undefined && !patch.batchName) {
       return res.status(400).json({ status: false, message: 'batchName cannot be empty' });
     }
     if (patch.batchCode !== undefined && !patch.batchCode) {
       return res.status(400).json({ status: false, message: 'batchCode cannot be empty' });
     }
-
-    // Core change guard: cannot change program/year/center if students are assigned
     const changingCore = (patch.programId !== undefined && String(patch.programId) !== String(cur.programId)) || (patch.academicYear !== undefined && String(patch.academicYear) !== String(cur.academicYear)) || (patch.centerId !== undefined && String(patch.centerId) !== String(cur.centerId));
-
     if (changingCore) {
       const hasStudents = await StudentProfile.countDocuments({ tenantId, isdeleted: false, status: 'ACTIVE', batchId });
       if (hasStudents > 0) {
@@ -259,10 +251,8 @@ const updateBatch = async (req, res, next) => {
         });
       }
     }
-
     const doc = await Batch.findOneAndUpdate({ tenantId, batchId, isdeleted: false }, { $set: patch }, { new: true }).lean();
     if (!doc) return res.status(404).json({ status: false, message: 'Batch not found' });
-
     return res.status(constants.HTTPS_SUCCESS).json({ status: true, message: 'Batch updated', data: doc });
   } catch (err) {
     if (err?.code === 11000) {
@@ -665,6 +655,26 @@ const recalcBatchStudentCount = async (req, res, next) => {
   }
 };
 
+const getBatchSubjects = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const batchId = safeTrim(req.body.batchId);
+    if (!tenantId || !batchId) return res.status(400).json({ status: false, message: 'tenantId and batchId required' });
+    const batch = await Batch.findOne({ tenantId, batchId, isdeleted: false }).lean();
+    if (!batch) return res.status(404).json({ status: false, message: 'Batch not found' });
+    if (!batch.programId) return res.status(200).json({ status: true, data: [] });
+    const program = await Program.findOne({ tenantId, programId: batch.programId, isdeleted: false }).populate('subjects', 'subjectName subjectCode').lean();
+    const subjects = (program?.subjects || []).map((s) => ({
+      subjectId: s._id,
+      subjectName: s.subjectName,
+      subjectCode: s.subjectCode
+    }));
+    return res.status(constants.HTTPS_SUCCESS).json({ status: true, data: subjects });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   createBatch,
   listBatches,
@@ -678,5 +688,6 @@ export default {
   moveStudentsToBatch,
   removeStudentsFromBatch,
   shuffleStudentsBetweenBatches,
-  recalcBatchStudentCount
+  recalcBatchStudentCount,
+  getBatchSubjects
 };

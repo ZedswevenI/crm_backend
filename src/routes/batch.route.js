@@ -19,6 +19,7 @@ routes.post('/students/move', validatetoken, batchCtrl.moveStudentsToBatch);
 routes.post('/students/remove', validatetoken, batchCtrl.removeStudentsFromBatch);
 routes.post('/students/shuffle', validatetoken, batchCtrl.shuffleStudentsBetweenBatches);
 routes.post('/recalc', validatetoken, batchCtrl.recalcBatchStudentCount);
+routes.post('/subjects', validatetoken, batchCtrl.getBatchSubjects);
 
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Batch routes' }));
 

@@ -32,10 +32,85 @@ const buildRegex = (s) => ({ $regex: s, $options: 'i' });
 
 const isValidYMD = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || '').trim());
 
+const toEpochDate = (v, endOfDay = false) => {
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  const raw = safeTrim(v);
+  if (!raw) return null;
+  const asNum = Number(raw);
+  if (Number.isFinite(asNum) && asNum > 0) return asNum;
+  if (!isValidYMD(raw)) return null;
+  const [year, month, day] = raw.split('-').map((p) => parseInt(p, 10) || 0);
+  if (!year || !month || !day) return null;
+  const d = endOfDay ? new Date(year, month - 1, day, 23, 59, 59, 999) : new Date(year, month - 1, day, 0, 0, 0, 0);
+  const t = d.getTime();
+  return Number.isFinite(t) ? t : null;
+};
+
+// const listCheques = async (req, res, next) => {
+//   try {
+//     const tenantId = pickTenantId(req);
+//     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+//     const q = req.query || {};
+//     const pageNum = Math.max(parseInt(q.page, 10) || 1, 1);
+//     const limitNum = Math.min(Math.max(parseInt(q.limit, 10) || 20, 1), 200);
+//     const skip = (pageNum - 1) * limitNum;
+//     const search = safeTrim(q.search);
+//     const status = safeTrim(q.status).toUpperCase();
+//     const mode = safeTrim(q.mode).toUpperCase();
+//     const centerId = safeTrim(q.centerId);
+//     const programCode = safeTrim(q.programCode);
+//     const fromDue = safeTrim(q.fromDue);
+//     const toDue = safeTrim(q.toDue);
+//     const fromDeposit = safeTrim(q.fromDeposit);
+//     const toDeposit = safeTrim(q.toDeposit);
+//     const fromPlanned = safeTrim(q.fromPlanned);
+//     const toPlanned = safeTrim(q.toPlanned);
+//     const includeInactive = safeTrim(q.includeInactive).toLowerCase() === 'yes';
+//     const query = { tenantId, isdeleted: false, paymentType: 'CHEQUE' };
+//     if (!includeInactive) query.statusFlag = 'Active';
+//     if (status && status !== 'ALL') query.status = status;
+//     if (mode) query['cheque.mode'] = mode;
+//     if (centerId) query.centerId = centerId;
+//     if (programCode) query.programCode = buildRegex(programCode);
+//     if (isValidYMD(fromDue) || isValidYMD(toDue)) {
+//       query['cheque.dueDate'] = {};
+//       if (isValidYMD(fromDue)) query['cheque.dueDate'].$gte = fromDue;
+//       if (isValidYMD(toDue)) query['cheque.dueDate'].$lte = toDue;
+//     }
+//     if (isValidYMD(fromDeposit) || isValidYMD(toDeposit)) {
+//       query.depositedOn = {};
+//       if (isValidYMD(fromDeposit)) query.depositedOn.$gte = fromDeposit;
+//       if (isValidYMD(toDeposit)) query.depositedOn.$lte = toDeposit;
+//     }
+//     if (isValidYMD(fromPlanned) || isValidYMD(toPlanned)) {
+//       query['cheque.plannedDepositDate'] = {};
+//       if (isValidYMD(fromPlanned)) query['cheque.plannedDepositDate'].$gte = fromPlanned;
+//       if (isValidYMD(toPlanned)) query['cheque.plannedDepositDate'].$lte = toPlanned;
+//     }
+//     if (search) {
+//       query.$or = [{ admissionNo: buildRegex(search) }, { studentName: buildRegex(search) }, { registrationNumber: buildRegex(search) }, { centerName: buildRegex(search) }, { programName: buildRegex(search) }, { 'cheque.chequeNo': buildRegex(search) }, { 'cheque.bankName': buildRegex(search) }];
+//     }
+//     const sort = parseSort(q.sort);
+//     const [rows, total] = await Promise.all([
+//       Payment.find(query).sort(sort).skip(skip).limit(limitNum).populate({ path: 'admissionId', localField: 'admissionId', foreignField: 'admissionId', model: 'admission', justOne: true, select: 'admissionNo registrationNumber admissionId' }).lean(),
+//       Payment.countDocuments(query)
+//     ]);
+//     return res.status(200).json({
+//       status: true,
+//       message: 'Cheques list fetched',
+//       data: { rows, page: pageNum, limit: limitNum, total, pages: Math.ceil(total / limitNum) || 0 }
+//     });
+//   } catch (err) {
+//     return next(err);
+//   }
+// };
+
 const listCheques = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
-    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    if (!tenantId) {
+      return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    }
     const q = req.query || {};
     const pageNum = Math.max(parseInt(q.page, 10) || 1, 1);
     const limitNum = Math.min(Math.max(parseInt(q.limit, 10) || 20, 1), 200);
@@ -45,12 +120,12 @@ const listCheques = async (req, res, next) => {
     const mode = safeTrim(q.mode).toUpperCase();
     const centerId = safeTrim(q.centerId);
     const programCode = safeTrim(q.programCode);
-    const fromDue = safeTrim(q.fromDue);
-    const toDue = safeTrim(q.toDue);
-    const fromDeposit = safeTrim(q.fromDeposit);
-    const toDeposit = safeTrim(q.toDeposit);
-    const fromPlanned = safeTrim(q.fromPlanned);
-    const toPlanned = safeTrim(q.toPlanned);
+    const fromDueRaw = q.fromDue;
+    const toDueRaw = q.toDue;
+    const fromDepositRaw = q.fromDeposit;
+    const toDepositRaw = q.toDeposit;
+    const fromPlannedRaw = q.fromPlanned;
+    const toPlannedRaw = q.toPlanned;
     const includeInactive = safeTrim(q.includeInactive).toLowerCase() === 'yes';
     const query = { tenantId, isdeleted: false, paymentType: 'CHEQUE' };
     if (!includeInactive) query.statusFlag = 'Active';
@@ -58,33 +133,42 @@ const listCheques = async (req, res, next) => {
     if (mode) query['cheque.mode'] = mode;
     if (centerId) query.centerId = centerId;
     if (programCode) query.programCode = buildRegex(programCode);
-    if (isValidYMD(fromDue) || isValidYMD(toDue)) {
+    const fromDue = toEpochDate(fromDueRaw, false);
+    const toDue = toEpochDate(toDueRaw, true);
+    if (fromDue !== null || toDue !== null) {
       query['cheque.dueDate'] = {};
-      if (isValidYMD(fromDue)) query['cheque.dueDate'].$gte = fromDue;
-      if (isValidYMD(toDue)) query['cheque.dueDate'].$lte = toDue;
+      if (fromDue !== null) query['cheque.dueDate'].$gte = fromDue;
+      if (toDue !== null) query['cheque.dueDate'].$lte = toDue;
     }
-    if (isValidYMD(fromDeposit) || isValidYMD(toDeposit)) {
+    const fromDeposit = toEpochDate(fromDepositRaw, false);
+    const toDeposit = toEpochDate(toDepositRaw, true);
+    if (fromDeposit !== null || toDeposit !== null) {
       query.depositedOn = {};
-      if (isValidYMD(fromDeposit)) query.depositedOn.$gte = fromDeposit;
-      if (isValidYMD(toDeposit)) query.depositedOn.$lte = toDeposit;
+      if (fromDeposit !== null) query.depositedOn.$gte = fromDeposit;
+      if (toDeposit !== null) query.depositedOn.$lte = toDeposit;
     }
-    if (isValidYMD(fromPlanned) || isValidYMD(toPlanned)) {
+    const fromPlanned = toEpochDate(fromPlannedRaw, false);
+    const toPlanned = toEpochDate(toPlannedRaw, true);
+    if (fromPlanned !== null || toPlanned !== null) {
       query['cheque.plannedDepositDate'] = {};
-      if (isValidYMD(fromPlanned)) query['cheque.plannedDepositDate'].$gte = fromPlanned;
-      if (isValidYMD(toPlanned)) query['cheque.plannedDepositDate'].$lte = toPlanned;
+      if (fromPlanned !== null) query['cheque.plannedDepositDate'].$gte = fromPlanned;
+      if (toPlanned !== null) query['cheque.plannedDepositDate'].$lte = toPlanned;
     }
     if (search) {
-      query.$or = [{ admissionNo: buildRegex(search) }, { studentName: buildRegex(search) }, { registrationNumber: buildRegex(search) }, { centerName: buildRegex(search) }, { programName: buildRegex(search) }, { 'cheque.chequeNo': buildRegex(search) }, { 'cheque.bankName': buildRegex(search) }];
+      query.$or = [{ admissionNo: buildRegex(search) }, { studentName: buildRegex(search) }, { registrationNumber: buildRegex(search) }, { 'cheque.chequeNo': buildRegex(search) }, { 'cheque.bankName': buildRegex(search) }];
     }
     const sort = parseSort(q.sort);
-    const [rows, total] = await Promise.all([
-      Payment.find(query).sort(sort).skip(skip).limit(limitNum).populate({ path: 'admissionId', localField: 'admissionId', foreignField: 'admissionId', model: 'admission', justOne: true, select: 'admissionNo registrationNumber admissionId' }).lean(),
-      Payment.countDocuments(query)
-    ]);
+    const [rows, total] = await Promise.all([Payment.find(query).sort(sort).skip(skip).limit(limitNum).lean(), Payment.countDocuments(query)]);
     return res.status(200).json({
       status: true,
       message: 'Cheques list fetched',
-      data: { rows, page: pageNum, limit: limitNum, total, pages: Math.ceil(total / limitNum) || 0 }
+      data: {
+        rows,
+        page: pageNum,
+        limit: limitNum,
+        total,
+        pages: Math.ceil(total / limitNum) || 0
+      }
     });
   } catch (err) {
     return next(err);
@@ -150,34 +234,37 @@ const createDepositBatch = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     const userId = pickUserId(req);
-
-    const depositDate = safeTrim(req.body?.depositDate);
+    const rawDepositDate = req.body?.depositDate;
+    const depositDate = toEpochDate(rawDepositDate, false);
     const bankName = safeTrim(req.body?.bankName) || null;
     const paymentIds = Array.isArray(req.body?.paymentIds) ? req.body.paymentIds.map(safeTrim).filter(Boolean) : [];
-
-    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-    if (!depositDate || !isValidYMD(depositDate)) return res.status(400).json({ status: false, message: 'depositDate (yyyy-mm-dd) is required' });
+    if (!tenantId) {
+      return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    }
+    if (depositDate === null) {
+      return res.status(400).json({
+        status: false,
+        message: 'depositDate is required (epoch ms or yyyy-mm-dd)'
+      });
+    }
+    if (!paymentIds.length) {
+      return res.status(400).json({ status: false, message: 'paymentIds is required' });
+    }
     if (!paymentIds.length) return res.status(400).json({ status: false, message: 'paymentIds is required' });
-
     session.startTransaction();
-
     const cheques = await Payment.find({ tenantId, paymentId: { $in: paymentIds }, isdeleted: false, paymentType: 'CHEQUE' }, { _id: 1, paymentId: 1, amount: 1, status: 1 })
       .session(session)
       .lean();
-
     if (cheques.length !== paymentIds.length) {
       await session.abortTransaction();
       return res.status(400).json({ status: false, message: 'Some paymentIds are invalid' });
     }
-
     const invalid = cheques.filter((c) => !['PENDING', 'SUBMITTED'].includes(String(c.status || '')));
     if (invalid.length) {
       await session.abortTransaction();
       return res.status(400).json({ status: false, message: `Some cheques are not depositable (${invalid.map((x) => x.paymentId).join(', ')})` });
     }
-
     const totalAmount = Number(cheques.reduce((s, x) => s + toNum(x.amount), 0).toFixed(2));
-
     const batchArr = await DepositBatch.create(
       [
         {
@@ -194,9 +281,7 @@ const createDepositBatch = async (req, res, next) => {
       ],
       { session }
     );
-
     const batchDoc = batchArr?.[0];
-
     await Payment.updateMany(
       { tenantId, paymentId: { $in: paymentIds }, isdeleted: false, paymentType: 'CHEQUE' },
       {
@@ -209,9 +294,7 @@ const createDepositBatch = async (req, res, next) => {
       },
       { session }
     );
-
     await session.commitTransaction();
-
     return res.status(200).json({
       status: true,
       message: 'Deposit batch created',
@@ -238,15 +321,17 @@ const listDepositBatches = async (req, res, next) => {
     const skip = (pageNum - 1) * limitNum;
 
     const search = safeTrim(q.search);
-    const from = safeTrim(q.fromDate);
-    const to = safeTrim(q.toDate);
+    const fromRaw = q.fromDate;
+    const toRaw = q.toDate;
 
     const query = { tenantId, isdeleted: false };
 
-    if (isValidYMD(from) || isValidYMD(to)) {
+    const from = toEpochDate(fromRaw, false);
+    const to = toEpochDate(toRaw, true);
+    if (from !== null || to !== null) {
       query.depositDate = {};
-      if (isValidYMD(from)) query.depositDate.$gte = from;
-      if (isValidYMD(to)) query.depositDate.$lte = to;
+      if (from !== null) query.depositDate.$gte = from;
+      if (to !== null) query.depositDate.$lte = to;
     }
 
     if (search) {
@@ -463,15 +548,33 @@ const requestChequeExtension = async (req, res, next) => {
     const tenantId = pickTenantId(req);
     const userId = pickUserId(req);
     const paymentId = safeTrim(req.body?.paymentId);
-    const newPlannedDepositDate = safeTrim(req.body?.newPlannedDepositDate);
+    const rawNewPlannedDepositDate = req.body?.newPlannedDepositDate;
+    const newPlannedDepositDate = toEpochDate(rawNewPlannedDepositDate, false);
     const remarks = safeTrim(req.body?.remarks);
-    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-    if (!paymentId) return res.status(400).json({ status: false, message: 'paymentId is required' });
-    if (!newPlannedDepositDate || !isValidYMD(newPlannedDepositDate)) return res.status(400).json({ status: false, message: 'newPlannedDepositDate (yyyy-mm-dd) is required' });
+
+    if (!tenantId) {
+      return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    }
+    if (!paymentId) {
+      return res.status(400).json({ status: false, message: 'paymentId is required' });
+    }
+    if (newPlannedDepositDate === null) {
+      return res.status(400).json({
+        status: false,
+        message: 'newPlannedDepositDate is required (epoch ms or yyyy-mm-dd)'
+      });
+    }
+    if (!remarks) {
+      return res.status(400).json({ status: false, message: 'remarks is required' });
+    }
     if (!remarks) return res.status(400).json({ status: false, message: 'remarks is required' });
     const p = await Payment.findOne({ tenantId, paymentId, isdeleted: false, paymentType: 'CHEQUE' });
-    if (!p) return res.status(404).json({ status: false, message: 'Cheque payment not found' });
-    const currentPlanned = safeTrim(p?.cheque?.plannedDepositDate) || safeTrim(p?.cheque?.dueDate) || null;
+    if (!p) {
+      return res.status(404).json({ status: false, message: 'Cheque payment not found' });
+    }
+    const planned = typeof p?.cheque?.plannedDepositDate === 'number' ? p.cheque.plannedDepositDate : toEpochDate(p?.cheque?.plannedDepositDate, false);
+    const due = typeof p?.cheque?.dueDate === 'number' ? p.cheque.dueDate : toEpochDate(p?.cheque?.dueDate, false);
+    const currentPlanned = planned || due || null;
     const doc = await ChequeExtensionRequest.create({
       tenantId,
       paymentId,
@@ -480,7 +583,7 @@ const requestChequeExtension = async (req, res, next) => {
       remarks,
       status: 'PENDING',
       requestedBy: userId || null,
-      requestedAt: new Date(),
+      requestedAt: Date.now(),
       approvedBy: null,
       approvedAt: null,
       approvalRemarks: null,
@@ -552,7 +655,7 @@ const approveChequeExtension = async (req, res, next) => {
     await p.save({ session });
     r.status = 'APPROVED';
     r.approvedBy = userId || null;
-    r.approvedAt = new Date();
+    r.approvedAt = Date.now();
     r.approvalRemarks = approvalRemarks || null;
     r.updatedBy = userId || null;
     await r.save({ session });
@@ -582,7 +685,7 @@ const rejectChequeExtension = async (req, res, next) => {
     if (r.status !== 'PENDING') return res.status(400).json({ status: false, message: 'Only PENDING requests can be rejected' });
     r.status = 'REJECTED';
     r.approvedBy = userId || null;
-    r.approvedAt = new Date();
+    r.approvedAt = Date.now();
     r.approvalRemarks = approvalRemarks;
     r.updatedBy = userId || null;
     const p = await Payment.findOne({ tenantId, paymentId: r.paymentId, isdeleted: false, paymentType: 'CHEQUE' });

@@ -8,6 +8,7 @@ import admissionRoute from './admission.routes.js';
 import accountsRoute from './accounts.routes.js';
 import batchRoute from './batch.route.js';
 import timetableRoute from './timetable.routes.js';
+import studentRoute from './student.routes.js';
 
 routes.post('/healthcheck', (req, res) => {
   try {
@@ -22,5 +23,6 @@ routes.use('/admi', admissionRoute);
 routes.use('/accounts', accountsRoute);
 routes.use('/batch', batchRoute);
 routes.use('/timetable', timetableRoute);
+routes.use('/student', studentRoute);
 
 export default routes;

@@ -6,7 +6,7 @@ const depositBatchSchema = new mongoose.Schema(
   {
     tenantId: { type: String, ref: 'tenant', required: true, trim: true, index: true },
     batchId: { type: String, required: true, default: uuid, trim: true, index: true },
-    depositDate: { type: String, required: true, trim: true },
+    depositDate: { type: Number, required: true },
     bankName: { type: String, required: false, trim: true, default: null },
     paymentIds: [{ type: String, required: true, trim: true }],
     chequeCount: { type: Number, required: true, default: 0 },
