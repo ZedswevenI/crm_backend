@@ -7,6 +7,7 @@ import validatetoken from '../middlewares/auth.js';
 import tenantCtrl from '../controller/institute.controller.js';
 import manageCtrl from '../controller/insorg.controller.js';
 import programCtrl from '../controller/program.controller.js';
+import academicYearCtrl from '../controller/academicyear.controller.js';
 
 routes.post('/register', tenantCtrl.createInstitute);
 routes.post('/view', validatetoken, tenantCtrl.viewInstitute);
@@ -79,6 +80,13 @@ routes.post('/staff/view', validatetoken, tenantCtrl.viewStaff);
 routes.post('/staff/update', validatetoken, tenantCtrl.updateStaff);
 routes.post('/staff/delete', validatetoken, tenantCtrl.deleteStaff);
 routes.post('/staff/import', validatetoken, tenantCtrl.bulkImportStaff);
+
+// Academic Year Config
+routes.post('/acyear/create', validatetoken, academicYearCtrl.createAcademicYear);
+routes.post('/acyear/list', validatetoken, academicYearCtrl.listAcademicYears);
+routes.post('/acyear/view', validatetoken, academicYearCtrl.viewAcademicYear);
+routes.post('/acyear/update', validatetoken, academicYearCtrl.updateAcademicYear);
+routes.post('/acyear/delete', validatetoken, academicYearCtrl.deleteAcademicYear);
 
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Tenant routes' }));
 
