@@ -9,6 +9,8 @@ routes.post('/view', validatetoken, studentCtrl.viewProfile);
 routes.post('/finance/summary', validatetoken, studentCtrl.viewFinancials);
 routes.post('/academic/summary', validatetoken, studentCtrl.viewAcademicSummary);
 
+routes.post('/login', studentCtrl.studentLogin);
+
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Student routes' }));
 
 export default routes;

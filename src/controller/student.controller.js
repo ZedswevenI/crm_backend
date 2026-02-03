@@ -120,47 +120,6 @@ const viewProfile = async (req, res, next) => {
   }
 };
 
-// const viewFinancials = async (req, res, next) => {
-//   try {
-//     const tenantId = pickTenantId(req);
-//     const studentId = safeTrim(req.body?.studentId);
-//     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-//     if (!studentId) return res.status(400).json({ status: false, message: 'studentId is required' });
-//     const profile = await StudentProfile.findOne({ tenantId, studentId, isdeleted: false }).lean();
-//     if (!profile) return res.status(404).json({ status: false, message: 'Student profile not found' });
-//     const admission = await Admission.findOne({ tenantId, admissionId: profile.admissionId, isdeleted: false }).lean();
-//     const totalAmount = toNum(admission?.fee?.finalFee);
-//     const payments = await Payment.find({ tenantId, admissionId: profile.admissionId, isdeleted: false, status: { $ne: 'CANCELLED' } })
-//       .sort({ createdAt: -1 })
-//       .lean();
-//     let paidAmount = 0;
-//     const receipts = payments.map((p) => {
-//       const isCleared = p.status === 'CLEARED';
-//       if (isCleared) paidAmount += toNum(p.amount);
-//       return {
-//         receiptNo: p.paymentId,
-//         date: p.clearedOn || p.depositedOn || p.submittedOn || p.createdAt,
-//         mode: p.paymentType,
-//         amount: p.amount,
-//         status: p.status,
-//         remarks: p.remarks
-//       };
-//     });
-//     const outstandingAmount = Math.max(0, totalAmount - paidAmount);
-//     return res.status(constants.HTTPS_SUCCESS).json({
-//       status: true,
-//       data: {
-//         totalAmount,
-//         paidAmount,
-//         outstandingAmount,
-//         receipts
-//       }
-//     });
-//   } catch (err) {
-//     return next(err);
-//   }
-// };
-
 const viewFinancials = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
@@ -227,9 +186,78 @@ const viewAcademicSummary = async (req, res, next) => {
   }
 };
 
+// 9051642680002
+
+const studentLogin = async (req, res, next) => {
+  try {
+    const regNo = safeTrim(req.body?.regNo);
+    if (!regNo) {
+      return res.status(constants.HTTPS_BAD_REQUEST).json({ status: false, message: 'regNo (admissionNo or registrationNumber) is required' });
+    }
+    const student = await StudentProfile.findOne({
+      $or: [{ admissionNo: regNo }, { registrationNumber: regNo }, { portalStudentId: regNo }],
+      isdeleted: false,
+      status: 'ACTIVE'
+    }).lean();
+
+    if (!student) {
+      return res.status(constants.HTTPS_NOT_FOUND).json({ status: false, message: 'Student not found' });
+    }
+
+    const ayHistoryList = Array.isArray(student.ayHistory) ? student.ayHistory.sort((a, b) => Number(b.changedOn) - Number(a.changedOn)) : [];
+
+    const response = {
+      studentId: student.studentId,
+      admissionId: student.admissionId,
+      admissionNo: student.admissionNo,
+      registrationNumber: student.registrationNumber,
+      portalStudentId: student.portalStudentId,
+
+      // --- Student Personal ---
+      name: student.student?.name,
+      phone: student.student?.phone,
+      email: student.student?.email,
+      parentName: student.student?.parentName,
+      parentPhone: student.student?.parentPhone,
+
+      // --- Program / Batch ---
+      programId: student.programId,
+      programName: student.programName,
+      programCode: student.programCode,
+
+      centerId: student.centerId,
+      centerName: student.centerName,
+      centerCode: student.centerCode,
+
+      batchId: student.batchId,
+      batchCode: student.batchCode,
+
+      // --- Academic ---
+      academicYear: student.academicYear,
+      currentAcademicYear: student.currentAcademicYear,
+      yearNo: student.yearNo,
+      classNo: student.classNo,
+
+      ayHistory: ayHistoryList,
+
+      // --- Status ---
+      status: student.status
+    };
+
+    return res.status(constants.HTTPS_SUCCESS).json({
+      status: true,
+      message: 'Student login successful',
+      data: response
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   listStudents,
   viewProfile,
   viewFinancials,
-  viewAcademicSummary
+  viewAcademicSummary,
+  studentLogin
 };

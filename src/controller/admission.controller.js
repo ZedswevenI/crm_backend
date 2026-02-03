@@ -1012,10 +1012,17 @@ const upsertStudentProfileFromAdmission = async ({ tenantId, admission, userId }
     isdeleted: false,
     updatedBy: userId || null
   };
+  const firstHist = {
+    academicYear: currentAy || null,
+    yearNo: 1,
+    classNo: startingClass,
+    changedOn: Date.now(),
+    changedBy: userId || null
+  };
   const existing = await StudentProfile.findOne({ tenantId, admissionNo, isdeleted: false }, { _id: 0, batchId: 1, batchCode: 1 }).lean();
   if (existing?.batchId) up.batchId = existing.batchId;
   if (existing?.batchCode) up.batchCode = existing.batchCode;
-  const doc = await StudentProfile.findOneAndUpdate({ tenantId, admissionNo }, { $set: up, $setOnInsert: { createdBy: userId || null } }, { new: true, upsert: true }).lean();
+  const doc = await StudentProfile.findOneAndUpdate({ tenantId, admissionNo }, { $set: up, $setOnInsert: { createdBy: userId || null, ayHistory: [firstHist] } }, { new: true, upsert: true }).lean();
   return doc;
 };
 
@@ -1073,7 +1080,13 @@ const approveAdmission = async (req, res, next) => {
     const calc = program ? buildCohortAndRunningYears({ startYear: courseStartYear, duration: program.duration }) : null;
     const cohortAy = safeTrim(admission.academicYear);
     const currentAy = safeTrim(admission.currentAcademicYear) || calc?.currentAy || null;
-
+    const firstHist = {
+      academicYear: currentAy || null,
+      yearNo: 1,
+      classNo: program?.startingClass ?? null,
+      changedOn: Date.now(),
+      changedBy: userId || null
+    };
     const profile = await StudentProfile.findOneAndUpdate(
       { tenantId, admissionNo: studentRegNo },
       {
@@ -1109,7 +1122,7 @@ const approveAdmission = async (req, res, next) => {
           isdeleted: false,
           updatedBy: userId || null
         },
-        $setOnInsert: { createdBy: userId || null }
+        $setOnInsert: { createdBy: userId || null, ayHistory: [firstHist] }
       },
       { new: true, upsert: true, session }
     );
@@ -1288,6 +1301,14 @@ const createStudentProfileFromAdmission = async (req, res, next) => {
       createdBy: userId || null,
       updatedBy: userId || null
     };
+    const firstHist = {
+      academicYear: currentAy || null,
+      yearNo: 1,
+      classNo: program?.startingClass ?? null,
+      changedOn: Date.now(),
+      changedBy: userId || null
+    };
+    up.ayHistory = [firstHist];
     const doc = await StudentProfile.create(up);
     return res.status(constants.HTTPS_CREATED || 201).json({
       status: true,

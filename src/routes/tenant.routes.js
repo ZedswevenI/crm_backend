@@ -39,6 +39,7 @@ routes.post('/program/delete', validatetoken, programCtrl.deleteProgram);
 routes.post('/program/view', validatetoken, programCtrl.viewProgram);
 routes.post('/program/addsubjects', validatetoken, programCtrl.addProgramSubjects);
 routes.post('/program/import', validatetoken, programCtrl.importPrograms);
+routes.post('/program/updateExamMappings', validatetoken, programCtrl.updateProgramExamMappings);
 
 // Center Routes
 routes.post('/feeplan/create', validatetoken, tenantCtrl.createFeePlan);
@@ -87,6 +88,32 @@ routes.post('/acyear/list', validatetoken, academicYearCtrl.listAcademicYears);
 routes.post('/acyear/view', validatetoken, academicYearCtrl.viewAcademicYear);
 routes.post('/acyear/update', validatetoken, academicYearCtrl.updateAcademicYear);
 routes.post('/acyear/delete', validatetoken, academicYearCtrl.deleteAcademicYear);
+
+// Topics
+routes.post('/topic/create', validatetoken, manageCtrl.createTopic);
+routes.post('/topic/list', validatetoken, manageCtrl.listTopics);
+routes.post('/topic/delete', validatetoken, manageCtrl.deleteTopic);
+routes.post('/topic/import', validatetoken, manageCtrl.bulkUpsertTopics);
+
+// Sub Topics
+routes.post('/subtopic/create', validatetoken, manageCtrl.createSubTopic);
+routes.post('/subtopic/list', validatetoken, manageCtrl.listSubTopics);
+routes.post('/subtopic/delete', validatetoken, manageCtrl.deleteSubTopic);
+routes.post('/subtopic/import', validatetoken, manageCtrl.bulkUpsertSubTopics);
+
+// Exam Category
+routes.post('/exam/category/create', validatetoken, manageCtrl.createExamCategory);
+routes.post('/exam/category/list', validatetoken, manageCtrl.listExamCategories);
+routes.post('/exam/category/delete', validatetoken, manageCtrl.deleteExamCategory);
+routes.post('/exam/category/update', validatetoken, manageCtrl.editExamCategory);
+routes.post('/exam/category/import', validatetoken, manageCtrl.bulkUpsertExamCategories);
+
+// Sub Topics
+routes.post('/exam/subcategory/create', validatetoken, manageCtrl.createExamSubCategory);
+routes.post('/exam/subcategory/list', validatetoken, manageCtrl.listExamSubCategories);
+routes.post('/exam/subcategory/delete', validatetoken, manageCtrl.deleteExamSubCategory);
+routes.post('/exam/subcategory/update', validatetoken, manageCtrl.editExamSubCategory);
+routes.post('/exam/subcategory/import', validatetoken, manageCtrl.bulkUpsertExamSubCategories);
 
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Tenant routes' }));
 
