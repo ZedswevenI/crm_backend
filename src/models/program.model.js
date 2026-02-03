@@ -16,6 +16,17 @@ const programSchema = new mongoose.Schema(
     programType: { type: String, required: false, trim: true, default: null },
     subjects: { type: [mongoose.Schema.Types.ObjectId], ref: 'subject', required: false, default: [] },
     excelId: { type: Number, required: false, default: null },
+    examMappings: {
+      type: [
+        {
+          categoryId: { type: String, required: true, trim: true },
+          subCategoryId: { type: String, required: true, trim: true },
+          sortOrder: { type: Number, required: false, default: 0 }
+        }
+      ],
+      required: false,
+      default: []
+    },
     status: { type: String, enum: ['Active', 'Inactive'], default: 'Active' },
     isdeleted: { type: Boolean, required: true, default: false }
   },
@@ -81,6 +92,24 @@ programSchema.pre('validate', function (next) {
     this.endingClass = end;
     const subs = Array.isArray(this.subjects) ? this.subjects : [];
     this.subjects = Array.from(new Set(subs.map((x) => String(x)))).map((x) => new mongoose.Types.ObjectId(x));
+
+    const ex = Array.isArray(this.examMappings) ? this.examMappings : [];
+    const map = new Map();
+    for (const r of ex) {
+      const categoryId = String(r?.categoryId || '').trim();
+      const subCategoryId = String(r?.subCategoryId || '').trim();
+      if (!categoryId || !subCategoryId) continue;
+      const key = `${categoryId}__${subCategoryId}`;
+      if (!map.has(key)) {
+        map.set(key, {
+          categoryId,
+          subCategoryId,
+          sortOrder: Number.isFinite(Number(r?.sortOrder)) ? Number(r.sortOrder) : 0
+        });
+      }
+    }
+    this.examMappings = Array.from(map.values());
+
     next();
   } catch (err) {
     return next(err);

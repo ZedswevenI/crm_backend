@@ -26,6 +26,9 @@ const BatchSchema = new mongoose.Schema(
     centerName: { type: String, trim: true },
     startDate: { type: Number, required: true, index: true },
     endDate: { type: Number, required: true, index: true },
+    programStartAy: { type: String, required: true, trim: true, index: true },
+    yearNo: { type: Number, default: 0, index: true },
+    classNo: { type: Number, default: 0, index: true },
     status: {
       type: String,
       enum: ['DRAFT', 'ACTIVE', 'CLOSED', 'INACTIVE'],
