@@ -54,6 +54,8 @@ const admissionSchema = new mongoose.Schema(
     batchName: { type: String, required: false, trim: true, default: null },
     classLabel: { type: String, required: false, trim: true, default: null },
     academicYear: { type: String, required: true, trim: true },
+    courseStartYear: { type: Number, required: false, default: null },
+    currentAcademicYear: { type: String, required: false, trim: true, default: null },
     test: {
       testDate: { type: Number, required: false, default: null },
       testCity: { type: String, required: false, trim: true, default: null },
@@ -142,6 +144,8 @@ admissionSchema.index({ tenantId: 1, programCode: 1, isdeleted: 1 });
 admissionSchema.index({ tenantId: 1, centerId: 1, isdeleted: 1 });
 admissionSchema.index({ tenantId: 1, academicYear: 1, isdeleted: 1 });
 admissionSchema.index({ tenantId: 1, 'workflow.stage': 1, createdAt: -1, isdeleted: 1 });
+admissionSchema.index({ tenantId: 1, programId: 1, courseStartYear: 1, isdeleted: 1 });
+admissionSchema.index({ tenantId: 1, programId: 1, currentAcademicYear: 1, isdeleted: 1 });
 
 const Admission = mongoose.model('admission', admissionSchema);
 export default Admission;
