@@ -14,7 +14,11 @@ const StudentProfileSchema = new mongoose.Schema(
       phone: { type: String, required: true, trim: true },
       email: { type: String, trim: true },
       parentName: { type: String, required: true, trim: true },
-      parentPhone: { type: String, required: true, trim: true }
+      parentPhone: { type: String, required: true, trim: true },
+      address: { type: String, trim: true, default: null },
+      city: { type: String, trim: true, default: null },
+      state: { type: String, trim: true, default: null },
+      pincode: { type: String, trim: true, default: null }
     },
     academicYear: { type: String, required: true, trim: true, index: true },
     programId: { type: String, required: true, ref: 'program', trim: true, index: true },
