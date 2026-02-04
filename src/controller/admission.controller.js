@@ -678,7 +678,10 @@ const viewAdmission = async (req, res, next) => {
     const admissionId = safeTrim(req.body?.admissionId);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
     if (!admissionId) return res.status(400).json({ status: false, message: 'admissionId is required' });
-    const admission = await Admission.findOne({ tenantId, admissionId, isdeleted: false }).populate({ path: 'programId', model: 'program', localField: 'programId', foreignField: 'programId' }).lean();
+    const admission = await Admission.findOne({ tenantId, admissionId, isdeleted: false })
+      .populate({ path: 'programId', model: 'program', localField: 'programId', foreignField: 'programId' })
+      .populate({ path: 'createdBy', model: 'user', localField: 'createdBy', foreignField: 'userId', select: 'userId name email phone' })
+      .lean();
     if (!admission) return res.status(404).json({ status: false, message: 'Admission not found' });
     const feePlan = await FeePlan.findOne({ tenantId, feePlanId: admission?.feePlanId, isdeleted: false }, { _id: 0, feePlanName: 1, feePlanCode: 1 }).lean();
     admission.feePlanName = feePlan?.feePlanName || null;
