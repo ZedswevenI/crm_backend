@@ -436,20 +436,37 @@ const createTopic = async (req, res, next) => {
 const listTopics = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
-    if (!tenantId) {
-      return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+
+    const classNo = toNum(req.query.classNo);
+    const subjectIdRaw = req.query.subjectId;
+
+    if (!ensureClassNo(classNo) || !subjectIdRaw) {
+      return res.status(400).json({ status: false, message: 'classNo (6..13) and subjectId are required in query' });
     }
+    if (!mongoose.Types.ObjectId.isValid(String(subjectIdRaw))) {
+      return res.status(400).json({ status: false, message: 'Invalid subjectId' });
+    }
+    const subjectId = new mongoose.Types.ObjectId(String(subjectIdRaw));
+
     const page = Math.max(parseInt(req.query.page || '1', 10), 1);
     const limit = Math.min(Math.max(parseInt(req.query.limit || '20', 10), 1), 200);
     const search = safeTrim(req.query.search);
     const list = safeTrim(req.query.list);
-    const query = { tenantId, isdeleted: false };
+    const sort = safeTrim(req.query.sort) || 'sortOrder';
+
+    const query = { tenantId, isdeleted: false, classNo, subjectId };
+
     if (search) {
       const rx = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-      query.$or = [{ topicName: rx }, { topicCode: rx }];
+      query.$or = [{ topicName: rx }, { topicCode: rx }, { topicId: rx }];
     }
+
+    // safe sort handling (your listPrograms style accepts string sort)
+    const sortBy = sort;
+
     if (list === 'full') {
-      const rows = await Topic.find(query).sort({ topicName: 1 }).lean();
+      const rows = await Topic.find(query).sort(sortBy).lean();
       return res.status(constants.HTTPS_SUCCESS).json({
         status: true,
         message: 'Request success',
@@ -457,8 +474,10 @@ const listTopics = async (req, res, next) => {
         count: rows.length
       });
     }
+
     const skip = (page - 1) * limit;
-    const [rows, count] = await Promise.all([Topic.find(query).sort({ topicName: 1 }).skip(skip).limit(limit).lean(), Topic.countDocuments(query)]);
+    const [rows, count] = await Promise.all([Topic.find(query).sort(sortBy).skip(skip).limit(limit).lean(), Topic.countDocuments(query)]);
+
     return res.status(constants.HTTPS_SUCCESS).json({
       status: true,
       message: 'Request success',
@@ -574,6 +593,77 @@ const bulkUpsertTopics = async (req, res, next) => {
   }
 };
 
+const viewTopic = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+
+    const topicId = safeTrim(req.body?.topicId);
+    if (!topicId) return res.status(400).json({ status: false, message: 'topicId is required' });
+
+    const doc = await Topic.findOne({ tenantId, topicId, isdeleted: false }).lean();
+    if (!doc) return res.status(404).json({ status: false, message: 'Topic not found' });
+
+    return res.status(constants.HTTPS_SUCCESS).json({ status: true, message: 'Request success', data: doc });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const updateTopic = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = safeTrim(req.body?.userId || req.user?.userId);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+
+    const topicId = safeTrim(req.body?.topicId);
+    if (!topicId) return res.status(400).json({ status: false, message: 'topicId is required' });
+
+    const doc = await Topic.findOne({ tenantId, topicId, isdeleted: false });
+    if (!doc) return res.status(404).json({ status: false, message: 'Topic not found' });
+
+    const set = {};
+
+    if (req.body?.topicName !== undefined) {
+      const topicName = normName(req.body?.topicName);
+      if (!topicName) return res.status(400).json({ status: false, message: 'topicName cannot be empty' });
+
+      const dup = await Topic.findOne(
+        {
+          tenantId,
+          classNo: doc.classNo,
+          subjectId: doc.subjectId,
+          topicName,
+          isdeleted: false,
+          topicId: { $ne: topicId }
+        },
+        { _id: 0, topicId: 1 }
+      ).lean();
+
+      if (dup) return res.status(409).json({ status: false, message: 'Topic already exists for this subject' });
+      set.topicName = topicName;
+    }
+
+    if (req.body?.topicCode !== undefined) set.topicCode = safeTrim(req.body?.topicCode) || null;
+    if (req.body?.sortOrder !== undefined) set.sortOrder = toNum(req.body?.sortOrder);
+
+    if (req.body?.status !== undefined) {
+      const st = safeTrim(req.body?.status);
+      if (st && !['Active', 'Inactive'].includes(st)) {
+        return res.status(400).json({ status: false, message: 'status must be Active or Inactive' });
+      }
+      if (st) set.status = st;
+    }
+
+    set.updatedBy = userId || null;
+
+    await Topic.updateOne({ tenantId, topicId, isdeleted: false }, { $set: set });
+    return res.status(200).json({ status: true, message: 'Topic updated', data: { topicId } });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 const createSubTopic = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
@@ -619,24 +709,38 @@ const createSubTopic = async (req, res, next) => {
 const listSubTopics = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
-    if (!tenantId) {
-      return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-    }
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+
+    const classNo = toNum(req.query.classNo);
+    const subjectIdRaw = req.query.subjectId;
     const topicId = safeTrim(req.query.topicId || '');
+
+    if (!ensureClassNo(classNo) || !subjectIdRaw) {
+      return res.status(400).json({ status: false, message: 'classNo (6..13) and subjectId are required in query' });
+    }
+    if (!mongoose.Types.ObjectId.isValid(String(subjectIdRaw))) {
+      return res.status(400).json({ status: false, message: 'Invalid subjectId' });
+    }
+    const subjectId = new mongoose.Types.ObjectId(String(subjectIdRaw));
+
     const page = Math.max(parseInt(req.query.page || '1', 10), 1);
     const limit = Math.min(Math.max(parseInt(req.query.limit || '20', 10), 1), 200);
     const search = safeTrim(req.query.search);
     const list = safeTrim(req.query.list);
-    const query = { tenantId, isdeleted: false };
-    if (topicId) {
-      query.topicId = topicId;
-    }
+    const sort = safeTrim(req.query.sort) || 'sortOrder';
+
+    const query = { tenantId, isdeleted: false, classNo, subjectId };
+    if (topicId) query.topicId = topicId;
+
     if (search) {
       const rx = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-      query.$or = [{ subtopicName: rx }];
+      query.$or = [{ subTopicName: rx }, { subTopicCode: rx }, { subTopicId: rx }];
     }
+
+    const sortBy = sort;
+
     if (list === 'full') {
-      const rows = await SubTopic.find(query).sort({ subtopicName: 1 }).lean();
+      const rows = await SubTopic.find(query).sort(sortBy).lean();
       return res.status(constants.HTTPS_SUCCESS).json({
         status: true,
         message: 'Request success',
@@ -644,8 +748,10 @@ const listSubTopics = async (req, res, next) => {
         count: rows.length
       });
     }
+
     const skip = (page - 1) * limit;
-    const [rows, count] = await Promise.all([SubTopic.find(query).sort({ subtopicName: 1 }).skip(skip).limit(limit).lean(), SubTopic.countDocuments(query)]);
+    const [rows, count] = await Promise.all([SubTopic.find(query).sort(sortBy).skip(skip).limit(limit).lean(), SubTopic.countDocuments(query)]);
+
     return res.status(constants.HTTPS_SUCCESS).json({
       status: true,
       message: 'Request success',
@@ -763,6 +869,78 @@ const bulkUpsertSubTopics = async (req, res, next) => {
   }
 };
 
+const viewSubTopic = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+
+    const subTopicId = safeTrim(req.body?.subTopicId);
+    if (!subTopicId) return res.status(400).json({ status: false, message: 'subTopicId is required' });
+
+    const doc = await SubTopic.findOne({ tenantId, subTopicId, isdeleted: false }).lean();
+    if (!doc) return res.status(404).json({ status: false, message: 'Sub-topic not found' });
+
+    return res.status(constants.HTTPS_SUCCESS).json({ status: true, message: 'Request success', data: doc });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const updateSubTopic = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = safeTrim(req.body?.userId || req.user?.userId);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+
+    const subTopicId = safeTrim(req.body?.subTopicId);
+    if (!subTopicId) return res.status(400).json({ status: false, message: 'subTopicId is required' });
+
+    const doc = await SubTopic.findOne({ tenantId, subTopicId, isdeleted: false });
+    if (!doc) return res.status(404).json({ status: false, message: 'Sub-topic not found' });
+
+    const set = {};
+
+    if (req.body?.subTopicName !== undefined) {
+      const subTopicName = normName(req.body?.subTopicName);
+      if (!subTopicName) return res.status(400).json({ status: false, message: 'subTopicName cannot be empty' });
+
+      const dup = await SubTopic.findOne(
+        {
+          tenantId,
+          classNo: doc.classNo,
+          subjectId: doc.subjectId,
+          topicId: doc.topicId,
+          subTopicName,
+          isdeleted: false,
+          subTopicId: { $ne: subTopicId }
+        },
+        { _id: 0, subTopicId: 1 }
+      ).lean();
+
+      if (dup) return res.status(409).json({ status: false, message: 'Sub-topic already exists for this topic' });
+      set.subTopicName = subTopicName;
+    }
+
+    if (req.body?.subTopicCode !== undefined) set.subTopicCode = safeTrim(req.body?.subTopicCode) || null;
+    if (req.body?.sortOrder !== undefined) set.sortOrder = toNum(req.body?.sortOrder);
+
+    if (req.body?.status !== undefined) {
+      const st = safeTrim(req.body?.status);
+      if (st && !['Active', 'Inactive'].includes(st)) {
+        return res.status(400).json({ status: false, message: 'status must be Active or Inactive' });
+      }
+      if (st) set.status = st;
+    }
+
+    set.updatedBy = userId || null;
+
+    await SubTopic.updateOne({ tenantId, subTopicId, isdeleted: false }, { $set: set });
+    return res.status(200).json({ status: true, message: 'Sub-topic updated', data: { subTopicId } });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 const bulkUpsertExamCategories = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
@@ -824,147 +1002,61 @@ const bulkUpsertExamCategories = async (req, res, next) => {
   }
 };
 
-const bulkUpsertExamSubCategories = async (req, res, next) => {
-  try {
-    const tenantId = pickTenantId(req);
-    const userId = safeTrim(req.body?.userId || req.user?.userId);
-    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-    const categoryId = safeTrim(req.body?.categoryId);
-    const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
-    if (!categoryId) {
-      return res.status(400).json({ status: false, message: 'categoryId is required' });
-    }
-    if (!rows.length) return res.status(400).json({ status: false, message: 'rows is required (non-empty array)' });
-    const cat = await ExamCategory.findOne({ tenantId, categoryId, isdeleted: false }, { _id: 0, categoryId: 1 }).lean();
-    if (!cat) return res.status(400).json({ status: false, message: 'Exam category not found' });
-    const map = new Map();
-    for (const r of rows) {
-      const subCategoryName = normName(r?.subCategoryName);
-      if (!subCategoryName) continue;
-      const key = subCategoryName.toLowerCase();
-      if (!map.has(key)) {
-        map.set(key, {
-          subCategoryName,
-          subCategoryCode: safeTrim(r?.subCategoryCode) || null,
-          sortOrder: toNum(r?.sortOrder)
-        });
-      }
-    }
-    const cleanRows = Array.from(map.values());
-    if (!cleanRows.length) return res.status(400).json({ status: false, message: 'No valid subcategory rows (subCategoryName missing)' });
-    const ops = cleanRows.map((r) => ({
-      updateOne: {
-        filter: { tenantId, categoryId, subCategoryName: r.subCategoryName, isdeleted: false },
-        update: {
-          $set: {
-            subCategoryCode: r.subCategoryCode,
-            sortOrder: r.sortOrder,
-            status: 'Active',
-            updatedBy: userId || null
-          },
-          $setOnInsert: {
-            tenantId,
-            categoryId,
-            subCategoryName: r.subCategoryName,
-            subCategoryCode: r.subCategoryCode,
-            sortOrder: r.sortOrder,
-            status: 'Active',
-            isdeleted: false,
-            createdBy: userId || null
-          }
-        },
-        upsert: true
-      }
-    }));
-    const wr = await ExamSubCategory.bulkWrite(ops, { ordered: false });
-    const saved = await ExamSubCategory.find({ tenantId, categoryId, isdeleted: false }, { _id: 0 }).sort({ sortOrder: 1, subCategoryName: 1, createdAt: 1 }).lean();
-    return res.status(200).json({
-      status: true,
-      message: 'Bulk exam sub-categories upserted',
-      data: {
-        categoryId,
-        input: rows.length,
-        accepted: cleanRows.length,
-        matched: wr.matchedCount || 0,
-        modified: wr.modifiedCount || 0,
-        upserted: wr.upsertedCount || 0,
-        rows: saved
-      }
-    });
-  } catch (err) {
-    return next(err);
-  }
-};
-
 const listExamCategories = async (req, res, next) => {
   try {
-    const tenantId = pickTenantId(req);
-    if (!tenantId) {
-      return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-    }
-    const page = Math.max(parseInt(req.query.page || '1', 10), 1);
-    const limit = Math.min(Math.max(parseInt(req.query.limit || '20', 10), 1), 200);
-    const search = safeTrim(req.query.search);
-    const list = safeTrim(req.query.list);
-    const query = { tenantId, isdeleted: false };
+    const page = parseInt(req.query.page, 10) || 1;
+    const limit = parseInt(req.query.limit, 10) || 10;
+    const skip = (page - 1) * limit;
+    const sort = req.query.sort || '-createdAt';
+    const search = req.query.search || '';
+    const list = req.query.list || '';
+    const tenantId = req.body.entiId;
+
+    const searchFields = ['categoryName', 'categoryCode'];
+
+    const query = {
+      tenantId: tenantId,
+      isdeleted: false
+    };
+
     if (search) {
-      const rx = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      const rx = { $regex: search.trim(), $options: 'i' };
       query.$or = [{ categoryName: rx }, { categoryCode: rx }];
     }
-    if (list === 'full') {
-      const rows = await ExamCategory.find(query).sort({ categoryName: 1 }).lean();
-      return res.status(constants.HTTPS_SUCCESS).json({
-        status: true,
-        message: 'Request success',
-        data: rows,
-        count: rows.length
-      });
+
+    // list full
+    if (String(list).toLowerCase() === 'full') {
+      const rows = await ExamCategory.find(query).sort(sort).lean();
+      return res.status(constants.HTTPS_SUCCESS).send({ status: true, data: rows, count: rows.length, message: 'Exam Category details retrieved Successfully' });
     }
-    const skip = (page - 1) * limit;
-    const [rows, count] = await Promise.all([ExamCategory.find(query).sort({ categoryName: 1 }).skip(skip).limit(limit).lean(), ExamCategory.countDocuments(query)]);
-    return res.status(constants.HTTPS_SUCCESS).json({
+
+    const count = await ExamCategory.countDocuments(query);
+    const rows = await ExamCategory.find(query).sort(sort).skip(skip).limit(limit).lean();
+
+    return res.status(constants.HTTPS_SUCCESS).send({
       status: true,
-      message: 'Request success',
       data: rows,
-      count
+      page: page,
+      count: count,
+      message: 'Exam Category details retrieved Successfully'
     });
   } catch (err) {
-    return next(err);
+    next(err);
   }
 };
 
-const listExamSubCategories = async (req, res, next) => {
+const viewExamCategory = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
-    if (!tenantId) {
-      return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-    }
-    const page = Math.max(parseInt(req.query.page || '1', 10), 1);
-    const limit = Math.min(Math.max(parseInt(req.query.limit || '20', 10), 1), 200);
-    const search = safeTrim(req.query.search);
-    const list = safeTrim(req.query.list);
-    const query = { tenantId, isdeleted: false };
-    if (search) {
-      const rx = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-      query.$or = [{ subcategoryName: rx }];
-    }
-    if (list === 'full') {
-      const rows = await ExamSubCategory.find(query).sort({ subcategoryName: 1 }).lean();
-      return res.status(constants.HTTPS_SUCCESS).json({
-        status: true,
-        message: 'Request success',
-        data: rows,
-        count: rows.length
-      });
-    }
-    const skip = (page - 1) * limit;
-    const [rows, count] = await Promise.all([ExamSubCategory.find(query).sort({ subcategoryName: 1 }).skip(skip).limit(limit).lean(), ExamSubCategory.countDocuments(query)]);
-    return res.status(constants.HTTPS_SUCCESS).json({
-      status: true,
-      message: 'Request success',
-      data: rows,
-      count
-    });
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+
+    const categoryId = safeTrim(req.body?.categoryId);
+    if (!categoryId) return res.status(400).json({ status: false, message: 'categoryId is required' });
+
+    const doc = await ExamCategory.findOne({ tenantId, categoryId, isdeleted: false }).lean();
+    if (!doc) return res.status(404).json({ status: false, message: 'Category not found' });
+
+    return res.status(constants.HTTPS_SUCCESS).json({ status: true, message: 'Request success', data: doc });
   } catch (err) {
     return next(err);
   }
@@ -1150,6 +1242,150 @@ const deleteExamSubCategory = async (req, res, next) => {
   }
 };
 
+const viewExamSubCategory = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+
+    const categoryId = safeTrim(req.body?.categoryId);
+    const subCategoryId = safeTrim(req.body?.subCategoryId);
+    if (!categoryId || !subCategoryId) {
+      return res.status(400).json({ status: false, message: 'categoryId and subCategoryId are required' });
+    }
+
+    const doc = await ExamSubCategory.findOne({ tenantId, categoryId, subCategoryId, isdeleted: false }).lean();
+    if (!doc) return res.status(404).json({ status: false, message: 'Sub-category not found' });
+
+    return res.status(constants.HTTPS_SUCCESS).json({ status: true, message: 'Request success', data: doc });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const listExamSubCategories = async (req, res, next) => {
+  try {
+    const page = parseInt(req.query.page, 10) || 1;
+    const limit = parseInt(req.query.limit, 10) || 10;
+    const skip = (page - 1) * limit;
+    const sort = req.query.sort || '-createdAt';
+    const search = req.query.search || '';
+    const list = req.query.list || '';
+    const tenantId = req.body.entiId;
+
+    const searchFields = ['subCategoryName', 'subCategoryCode'];
+
+    const query = {
+      tenantId: tenantId,
+      isdeleted: false
+    };
+
+    if (req.query.categoryId) {
+      query.categoryId = String(req.query.categoryId).trim();
+    }
+
+    if (search) {
+      const rx = { $regex: search.trim(), $options: 'i' };
+      query.$or = [{ subCategoryName: rx }, { subCategoryCode: rx }];
+    }
+
+    // list full
+    if (String(list).toLowerCase() === 'full') {
+      const rows = await ExamSubCategory.find(query).sort(sort).lean();
+      return res.status(constants.HTTPS_SUCCESS).send({
+        status: true,
+        data: rows,
+        count: rows.length,
+        message: 'Exam SubCategory details retrieved Successfully'
+      });
+    }
+
+    const count = await ExamSubCategory.countDocuments(query);
+    const rows = await ExamSubCategory.find(query).sort(sort).skip(skip).limit(limit).lean();
+
+    return res.status(constants.HTTPS_SUCCESS).send({
+      status: true,
+      data: rows,
+      page: page,
+      count: count,
+      message: 'Exam SubCategory details retrieved Successfully'
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const bulkUpsertExamSubCategories = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = safeTrim(req.body?.userId || req.user?.userId);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    const categoryId = safeTrim(req.body?.categoryId);
+    const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+    if (!categoryId) {
+      return res.status(400).json({ status: false, message: 'categoryId is required' });
+    }
+    if (!rows.length) return res.status(400).json({ status: false, message: 'rows is required (non-empty array)' });
+    const cat = await ExamCategory.findOne({ tenantId, categoryId, isdeleted: false }, { _id: 0, categoryId: 1 }).lean();
+    if (!cat) return res.status(400).json({ status: false, message: 'Exam category not found' });
+    const map = new Map();
+    for (const r of rows) {
+      const subCategoryName = normName(r?.subCategoryName);
+      if (!subCategoryName) continue;
+      const key = subCategoryName.toLowerCase();
+      if (!map.has(key)) {
+        map.set(key, {
+          subCategoryName,
+          subCategoryCode: safeTrim(r?.subCategoryCode) || null,
+          sortOrder: toNum(r?.sortOrder)
+        });
+      }
+    }
+    const cleanRows = Array.from(map.values());
+    if (!cleanRows.length) return res.status(400).json({ status: false, message: 'No valid subcategory rows (subCategoryName missing)' });
+    const ops = cleanRows.map((r) => ({
+      updateOne: {
+        filter: { tenantId, categoryId, subCategoryName: r.subCategoryName, isdeleted: false },
+        update: {
+          $set: {
+            subCategoryCode: r.subCategoryCode,
+            sortOrder: r.sortOrder,
+            status: 'Active',
+            updatedBy: userId || null
+          },
+          $setOnInsert: {
+            tenantId,
+            categoryId,
+            subCategoryName: r.subCategoryName,
+            subCategoryCode: r.subCategoryCode,
+            sortOrder: r.sortOrder,
+            status: 'Active',
+            isdeleted: false,
+            createdBy: userId || null
+          }
+        },
+        upsert: true
+      }
+    }));
+    const wr = await ExamSubCategory.bulkWrite(ops, { ordered: false });
+    const saved = await ExamSubCategory.find({ tenantId, categoryId, isdeleted: false }, { _id: 0 }).sort({ sortOrder: 1, subCategoryName: 1, createdAt: 1 }).lean();
+    return res.status(200).json({
+      status: true,
+      message: 'Bulk exam sub-categories upserted',
+      data: {
+        categoryId,
+        input: rows.length,
+        accepted: cleanRows.length,
+        matched: wr.matchedCount || 0,
+        modified: wr.modifiedCount || 0,
+        upserted: wr.upsertedCount || 0,
+        rows: saved
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   createDepartment,
   listDepartments,
@@ -1180,5 +1416,11 @@ export default {
   deleteExamCategory,
   createExamSubCategory,
   editExamSubCategory,
-  deleteExamSubCategory
+  deleteExamSubCategory,
+  viewTopic,
+  updateTopic,
+  viewSubTopic,
+  updateSubTopic,
+  viewExamCategory,
+  viewExamSubCategory
 };
