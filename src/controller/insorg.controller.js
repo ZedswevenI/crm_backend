@@ -1,14 +1,37 @@
 import constants from '../helpers/constants.js';
+import mongoose from 'mongoose';
 import Department from '../models/department.model.js';
 import Subject from '../models/subject.model.js';
+import Topic from '../models/topic.model.js';
+import SubTopic from '../models/subtopic.model.js';
+import ExamCategory from '../models/examcategory.model.js';
+import ExamSubCategory from '../models/examsubcategory.model.js';
 
 const pickTenantId = (req) => String(req?.body?.tenantId || req?.body?.entiId || '').trim();
+
 const safeTrim = (v) => (v === undefined || v === null ? '' : String(v).trim());
+
 const toUpperName = (v) => {
   const s = safeTrim(v);
   return s ? s.toUpperCase() : '';
 };
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const toNum = (v) => {
+  const n =
+    typeof v === 'number'
+      ? v
+      : Number(
+          String(v || '')
+            .replace(/,/g, '')
+            .trim()
+        );
+  return Number.isFinite(n) ? n : 0;
+};
+
+const normName = (s) => safeTrim(s).replace(/\s+/g, ' ').trim();
+
+const ensureClassNo = (classNo) => Number.isFinite(classNo) && classNo >= 6 && classNo <= 13;
 
 const createDepartment = async (req, res, next) => {
   try {
@@ -370,6 +393,1013 @@ const bulkImportSubject = async (req, res, next) => {
   }
 };
 
+const createTopic = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = safeTrim(req.body?.userId || req.user?.userId);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    const classNo = toNum(req.body?.classNo);
+    const subjectIdRaw = req.body?.subjectId;
+    const topicName = safeTrim(req.body?.topicName);
+    const topicCode = safeTrim(req.body?.topicCode) || null;
+    const sortOrder = toNum(req.body?.sortOrder);
+    if (!ensureClassNo(classNo) || !subjectIdRaw || !topicName) {
+      return res.status(400).json({ status: false, message: 'classNo (6..13), subjectId, topicName are required' });
+    }
+    if (!mongoose.Types.ObjectId.isValid(String(subjectIdRaw))) {
+      return res.status(400).json({ status: false, message: 'Invalid subjectId' });
+    }
+    const subjectId = new mongoose.Types.ObjectId(String(subjectIdRaw));
+    const subj = await Subject.findOne({ tenantId, _id: subjectId, isdeleted: false }, { _id: 1 }).lean();
+    if (!subj) return res.status(400).json({ status: false, message: 'Subject not found' });
+    const doc = await Topic.create({
+      tenantId,
+      classNo,
+      subjectId,
+      topicName,
+      topicCode,
+      sortOrder,
+      status: 'Active',
+      isdeleted: false,
+      createdBy: userId || null,
+      updatedBy: userId || null
+    });
+    return res.status(constants.HTTPS_CREATED || 201).json({ status: true, message: 'Topic created', data: doc });
+  } catch (err) {
+    if (String(err?.code) === '11000') {
+      return res.status(409).json({ status: false, message: 'Topic already exists for this class + subject' });
+    }
+    return next(err);
+  }
+};
+
+const listTopics = async (req, res, next) => {
+  try {
+    const page = parseInt(req.query.page, 10) || 1;
+    const limit = parseInt(req.query.limit, 10) || 10;
+    const skip = (page - 1) * limit;
+    const sort = req.query.sort || '-createdAt';
+    const search = req.query.search || '';
+    const list = req.query.list || '';
+    const tenantId = req.body.entiId;
+    const query = {
+      tenantId: tenantId,
+      isdeleted: false
+    };
+    if (req.query.classNo !== undefined && String(req.query.classNo).trim() !== '') {
+      const cn = Number(req.query.classNo);
+      if (Number.isFinite(cn)) {
+        query.classNo = cn;
+      }
+    }
+    if (req.query.subjectId !== undefined && String(req.query.subjectId).trim() !== '') {
+      const sid = String(req.query.subjectId).trim();
+      if (mongoose.Types.ObjectId.isValid(sid)) {
+        query.subjectId = new mongoose.Types.ObjectId(sid);
+      }
+    }
+    if (search) {
+      const rx = { $regex: search.trim(), $options: 'i' };
+      query.$or = [{ topicName: rx }, { topicCode: rx }, { topicId: rx }];
+    }
+    if (String(list).toLowerCase() === 'full') {
+      const rows = await Topic.find(query)
+        .sort(sort)
+        .populate({
+          path: 'subjectId',
+          model: 'subject',
+          select: 'subjectName subjectCode'
+        })
+        .lean();
+      return res.status(constants.HTTPS_SUCCESS).send({
+        status: true,
+        data: rows,
+        count: rows.length,
+        message: 'Topic details retrieved Successfully'
+      });
+    }
+    const count = await Topic.countDocuments(query);
+    const rows = await Topic.find(query)
+      .sort(sort)
+      .skip(skip)
+      .limit(limit)
+      .populate({
+        path: 'subjectId',
+        model: 'subject',
+        select: 'subjectName subjectCode'
+      })
+      .lean();
+    return res.status(constants.HTTPS_SUCCESS).send({
+      status: true,
+      data: rows,
+      page: page,
+      count: count,
+      message: 'Topic details retrieved Successfully'
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const deleteTopic = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = safeTrim(req.body?.userId || req.user?.userId);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    const classNo = toNum(req.body?.classNo);
+    const subjectIdRaw = req.body?.subjectId;
+    const topicId = safeTrim(req.body?.topicId);
+    if (!ensureClassNo(classNo) || !subjectIdRaw || !topicId) {
+      return res.status(400).json({ status: false, message: 'classNo (6..13), subjectId, topicId are required' });
+    }
+    if (!mongoose.Types.ObjectId.isValid(String(subjectIdRaw))) {
+      return res.status(400).json({ status: false, message: 'Invalid subjectId' });
+    }
+    const subjectId = new mongoose.Types.ObjectId(String(subjectIdRaw));
+    const tp = await Topic.findOne({ tenantId, classNo, subjectId, topicId, isdeleted: false });
+    if (!tp) return res.status(404).json({ status: false, message: 'Topic not found' });
+    tp.isdeleted = true;
+    tp.updatedBy = userId || null;
+    await tp.save();
+    await SubTopic.updateMany({ tenantId, classNo, subjectId, topicId, isdeleted: false }, { $set: { isdeleted: true, updatedBy: userId || null } });
+    return res.status(200).json({ status: true, message: 'Topic deleted', data: { topicId } });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const bulkUpsertTopics = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = safeTrim(req.body?.userId || req.user?.userId);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    const classNo = toNum(req.body?.classNo);
+    const subjectIdRaw = req.body?.subjectId;
+    const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+    if (!ensureClassNo(classNo) || !subjectIdRaw) {
+      return res.status(400).json({ status: false, message: 'classNo (6..13) and subjectId are required' });
+    }
+    if (!mongoose.Types.ObjectId.isValid(String(subjectIdRaw))) {
+      return res.status(400).json({ status: false, message: 'Invalid subjectId' });
+    }
+    const subjectId = new mongoose.Types.ObjectId(String(subjectIdRaw));
+    const subj = await Subject.findOne({ tenantId, _id: subjectId, isdeleted: false }, { _id: 1 }).lean();
+    if (!subj) return res.status(400).json({ status: false, message: 'Subject not found' });
+    if (!rows.length) return res.status(400).json({ status: false, message: 'rows is required (non-empty array)' });
+    const map = new Map();
+    for (const r of rows) {
+      const topicName = normName(r?.topicName);
+      if (!topicName) continue;
+      const key = topicName.toLowerCase();
+      if (!map.has(key)) {
+        map.set(key, {
+          topicName,
+          topicCode: safeTrim(r?.topicCode) || null,
+          sortOrder: toNum(r?.sortOrder)
+        });
+      }
+    }
+    const cleanRows = Array.from(map.values());
+    if (!cleanRows.length) return res.status(400).json({ status: false, message: 'No valid topic rows (topicName missing)' });
+    const ops = cleanRows.map((r) => ({
+      updateOne: {
+        filter: { tenantId, classNo, subjectId, topicName: r.topicName, isdeleted: false },
+        update: {
+          $set: {
+            topicCode: r.topicCode,
+            sortOrder: r.sortOrder,
+            status: 'Active',
+            updatedBy: userId || null
+          },
+          $setOnInsert: {
+            tenantId,
+            classNo,
+            subjectId,
+            topicName: r.topicName,
+            topicCode: r.topicCode,
+            sortOrder: r.sortOrder,
+            status: 'Active',
+            isdeleted: false,
+            createdBy: userId || null
+          }
+        },
+        upsert: true
+      }
+    }));
+    const wr = await Topic.bulkWrite(ops, { ordered: false });
+    const saved = await Topic.find({ tenantId, classNo, subjectId, isdeleted: false }, { _id: 0 }).sort({ sortOrder: 1, createdAt: 1 }).lean();
+    return res.status(200).json({
+      status: true,
+      message: 'Bulk topics upserted',
+      data: {
+        input: rows.length,
+        accepted: cleanRows.length,
+        matched: wr.matchedCount || 0,
+        modified: wr.modifiedCount || 0,
+        upserted: wr.upsertedCount || 0,
+        rows: saved
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const viewTopic = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+
+    const topicId = safeTrim(req.body?.topicId);
+    if (!topicId) return res.status(400).json({ status: false, message: 'topicId is required' });
+
+    const doc = await Topic.findOne({ tenantId, topicId, isdeleted: false }).lean();
+    if (!doc) return res.status(404).json({ status: false, message: 'Topic not found' });
+
+    return res.status(constants.HTTPS_SUCCESS).json({ status: true, message: 'Request success', data: doc });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const updateTopic = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = safeTrim(req.body?.userId || req.user?.userId);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+
+    const topicId = safeTrim(req.body?.topicId);
+    if (!topicId) return res.status(400).json({ status: false, message: 'topicId is required' });
+
+    const doc = await Topic.findOne({ tenantId, topicId, isdeleted: false });
+    if (!doc) return res.status(404).json({ status: false, message: 'Topic not found' });
+
+    const set = {};
+
+    if (req.body?.topicName !== undefined) {
+      const topicName = normName(req.body?.topicName);
+      if (!topicName) return res.status(400).json({ status: false, message: 'topicName cannot be empty' });
+
+      const dup = await Topic.findOne(
+        {
+          tenantId,
+          classNo: doc.classNo,
+          subjectId: doc.subjectId,
+          topicName,
+          isdeleted: false,
+          topicId: { $ne: topicId }
+        },
+        { _id: 0, topicId: 1 }
+      ).lean();
+
+      if (dup) return res.status(409).json({ status: false, message: 'Topic already exists for this subject' });
+      set.topicName = topicName;
+    }
+
+    if (req.body?.topicCode !== undefined) set.topicCode = safeTrim(req.body?.topicCode) || null;
+    if (req.body?.sortOrder !== undefined) set.sortOrder = toNum(req.body?.sortOrder);
+
+    if (req.body?.status !== undefined) {
+      const st = safeTrim(req.body?.status);
+      if (st && !['Active', 'Inactive'].includes(st)) {
+        return res.status(400).json({ status: false, message: 'status must be Active or Inactive' });
+      }
+      if (st) set.status = st;
+    }
+
+    set.updatedBy = userId || null;
+
+    await Topic.updateOne({ tenantId, topicId, isdeleted: false }, { $set: set });
+    return res.status(200).json({ status: true, message: 'Topic updated', data: { topicId } });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const createSubTopic = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = safeTrim(req.body?.userId || req.user?.userId);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    const classNo = toNum(req.body?.classNo);
+    const subjectIdRaw = req.body?.subjectId;
+    const topicId = safeTrim(req.body?.topicId);
+    const subTopicName = safeTrim(req.body?.subTopicName);
+    const subTopicCode = safeTrim(req.body?.subTopicCode) || null;
+    const sortOrder = toNum(req.body?.sortOrder);
+    if (!ensureClassNo(classNo) || !subjectIdRaw || !topicId || !subTopicName) {
+      return res.status(400).json({ status: false, message: 'classNo (6..13), subjectId, topicId, subTopicName are required' });
+    }
+    if (!mongoose.Types.ObjectId.isValid(String(subjectIdRaw))) {
+      return res.status(400).json({ status: false, message: 'Invalid subjectId' });
+    }
+    const subjectId = new mongoose.Types.ObjectId(String(subjectIdRaw));
+    const tp = await Topic.findOne({ tenantId, classNo, subjectId, topicId, isdeleted: false }, { _id: 0, topicId: 1 }).lean();
+    if (!tp) return res.status(400).json({ status: false, message: 'Topic not found for given class + subject' });
+    const doc = await SubTopic.create({
+      tenantId,
+      classNo,
+      subjectId,
+      topicId,
+      subTopicName,
+      subTopicCode,
+      sortOrder,
+      status: 'Active',
+      isdeleted: false,
+      createdBy: userId || null,
+      updatedBy: userId || null
+    });
+    return res.status(constants.HTTPS_CREATED || 201).json({ status: true, message: 'Sub-topic created', data: doc });
+  } catch (err) {
+    if (String(err?.code) === '11000') {
+      return res.status(409).json({ status: false, message: 'Sub-topic already exists for this topic' });
+    }
+    return next(err);
+  }
+};
+
+const listSubTopics = async (req, res, next) => {
+  try {
+    const page = parseInt(req.query.page, 10) || 1;
+    const limit = parseInt(req.query.limit, 10) || 10;
+    const skip = (page - 1) * limit;
+    const sort = req.query.sort || '-createdAt';
+    const search = req.query.search || '';
+    const list = req.query.list || '';
+    const tenantId = req.body.entiId;
+    const query = {
+      tenantId: tenantId,
+      isdeleted: false
+    };
+    if (req.query.classNo !== undefined && String(req.query.classNo).trim() !== '') {
+      const cn = Number(req.query.classNo);
+      if (Number.isFinite(cn)) {
+        query.classNo = cn;
+      }
+    }
+    if (req.query.subjectId !== undefined && String(req.query.subjectId).trim() !== '') {
+      const sid = String(req.query.subjectId).trim();
+      if (mongoose.Types.ObjectId.isValid(sid)) {
+        query.subjectId = new mongoose.Types.ObjectId(sid);
+      }
+    }
+    if (req.query.topicId !== undefined && String(req.query.topicId).trim() !== '') {
+      query.topicId = String(req.query.topicId).trim();
+    }
+    if (search) {
+      const rx = { $regex: search.trim(), $options: 'i' };
+      query.$or = [{ subTopicName: rx }, { subTopicCode: rx }, { subTopicId: rx }];
+    }
+    if (String(list).toLowerCase() === 'full') {
+      const rows = await SubTopic.find(query)
+        .sort(sort)
+        .populate({
+          path: 'subjectId',
+          model: 'subject',
+          select: 'subjectName subjectCode'
+        })
+        .lean();
+      return res.status(constants.HTTPS_SUCCESS).send({
+        status: true,
+        data: rows,
+        count: rows.length,
+        message: 'SubTopic details retrieved Successfully'
+      });
+    }
+    const count = await SubTopic.countDocuments(query);
+    const rows = await SubTopic.find(query)
+      .sort(sort)
+      .skip(skip)
+      .limit(limit)
+      .populate({
+        path: 'subjectId',
+        model: 'subject',
+        select: 'subjectName subjectCode'
+      })
+      .lean();
+    return res.status(constants.HTTPS_SUCCESS).send({
+      status: true,
+      data: rows,
+      page: page,
+      count: count,
+      message: 'SubTopic details retrieved Successfully'
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const deleteSubTopic = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = safeTrim(req.body?.userId || req.user?.userId);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    const classNo = toNum(req.body?.classNo);
+    const subjectIdRaw = req.body?.subjectId;
+    const topicId = safeTrim(req.body?.topicId);
+    const subTopicId = safeTrim(req.body?.subTopicId);
+    if (!ensureClassNo(classNo) || !subjectIdRaw || !topicId || !subTopicId) {
+      return res.status(400).json({ status: false, message: 'classNo (6..13), subjectId, topicId, subTopicId are required' });
+    }
+    if (!mongoose.Types.ObjectId.isValid(String(subjectIdRaw))) {
+      return res.status(400).json({ status: false, message: 'Invalid subjectId' });
+    }
+    const subjectId = new mongoose.Types.ObjectId(String(subjectIdRaw));
+    const st = await SubTopic.findOne({ tenantId, classNo, subjectId, topicId, subTopicId, isdeleted: false });
+    if (!st) return res.status(404).json({ status: false, message: 'Sub-topic not found' });
+    st.isdeleted = true;
+    st.updatedBy = userId || null;
+    await st.save();
+    return res.status(200).json({ status: true, message: 'Sub-topic deleted', data: { subTopicId } });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const bulkUpsertSubTopics = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = safeTrim(req.body?.userId || req.user?.userId);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    const classNo = toNum(req.body?.classNo);
+    const subjectIdRaw = req.body?.subjectId;
+    const topicId = safeTrim(req.body?.topicId);
+    const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+    if (!ensureClassNo(classNo) || !subjectIdRaw || !topicId) {
+      return res.status(400).json({ status: false, message: 'classNo (6..13), subjectId, topicId are required' });
+    }
+    if (!mongoose.Types.ObjectId.isValid(String(subjectIdRaw))) {
+      return res.status(400).json({ status: false, message: 'Invalid subjectId' });
+    }
+    const subjectId = new mongoose.Types.ObjectId(String(subjectIdRaw));
+    const tp = await Topic.findOne({ tenantId, classNo, subjectId, topicId, isdeleted: false }, { _id: 0, topicId: 1 }).lean();
+    if (!tp) return res.status(400).json({ status: false, message: 'Topic not found for given class + subject' });
+    if (!rows.length) return res.status(400).json({ status: false, message: 'rows is required (non-empty array)' });
+    const map = new Map();
+    for (const r of rows) {
+      const subTopicName = normName(r?.subTopicName);
+      if (!subTopicName) continue;
+      const key = subTopicName.toLowerCase();
+      if (!map.has(key)) {
+        map.set(key, {
+          subTopicName,
+          subTopicCode: safeTrim(r?.subTopicCode) || null,
+          sortOrder: toNum(r?.sortOrder)
+        });
+      }
+    }
+    const cleanRows = Array.from(map.values());
+    if (!cleanRows.length) return res.status(400).json({ status: false, message: 'No valid subtopic rows (subTopicName missing)' });
+    const ops = cleanRows.map((r) => ({
+      updateOne: {
+        filter: { tenantId, classNo, subjectId, topicId, subTopicName: r.subTopicName, isdeleted: false },
+        update: {
+          $set: {
+            subTopicCode: r.subTopicCode,
+            sortOrder: r.sortOrder,
+            status: 'Active',
+            updatedBy: userId || null
+          },
+          $setOnInsert: {
+            tenantId,
+            classNo,
+            subjectId,
+            topicId,
+            subTopicName: r.subTopicName,
+            subTopicCode: r.subTopicCode,
+            sortOrder: r.sortOrder,
+            status: 'Active',
+            isdeleted: false,
+            createdBy: userId || null
+          }
+        },
+        upsert: true
+      }
+    }));
+    const wr = await SubTopic.bulkWrite(ops, { ordered: false });
+    const saved = await SubTopic.find({ tenantId, classNo, subjectId, topicId, isdeleted: false }, { _id: 0 }).sort({ sortOrder: 1, createdAt: 1 }).lean();
+    return res.status(200).json({
+      status: true,
+      message: 'Bulk sub-topics upserted',
+      data: {
+        input: rows.length,
+        accepted: cleanRows.length,
+        matched: wr.matchedCount || 0,
+        modified: wr.modifiedCount || 0,
+        upserted: wr.upsertedCount || 0,
+        rows: saved
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const viewSubTopic = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+
+    const subTopicId = safeTrim(req.body?.subTopicId);
+    if (!subTopicId) return res.status(400).json({ status: false, message: 'subTopicId is required' });
+
+    const doc = await SubTopic.findOne({ tenantId, subTopicId, isdeleted: false }).lean();
+    if (!doc) return res.status(404).json({ status: false, message: 'Sub-topic not found' });
+
+    return res.status(constants.HTTPS_SUCCESS).json({ status: true, message: 'Request success', data: doc });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const updateSubTopic = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = safeTrim(req.body?.userId || req.user?.userId);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+
+    const subTopicId = safeTrim(req.body?.subTopicId);
+    if (!subTopicId) return res.status(400).json({ status: false, message: 'subTopicId is required' });
+
+    const doc = await SubTopic.findOne({ tenantId, subTopicId, isdeleted: false });
+    if (!doc) return res.status(404).json({ status: false, message: 'Sub-topic not found' });
+
+    const set = {};
+
+    if (req.body?.subTopicName !== undefined) {
+      const subTopicName = normName(req.body?.subTopicName);
+      if (!subTopicName) return res.status(400).json({ status: false, message: 'subTopicName cannot be empty' });
+
+      const dup = await SubTopic.findOne(
+        {
+          tenantId,
+          classNo: doc.classNo,
+          subjectId: doc.subjectId,
+          topicId: doc.topicId,
+          subTopicName,
+          isdeleted: false,
+          subTopicId: { $ne: subTopicId }
+        },
+        { _id: 0, subTopicId: 1 }
+      ).lean();
+
+      if (dup) return res.status(409).json({ status: false, message: 'Sub-topic already exists for this topic' });
+      set.subTopicName = subTopicName;
+    }
+
+    if (req.body?.subTopicCode !== undefined) set.subTopicCode = safeTrim(req.body?.subTopicCode) || null;
+    if (req.body?.sortOrder !== undefined) set.sortOrder = toNum(req.body?.sortOrder);
+
+    if (req.body?.status !== undefined) {
+      const st = safeTrim(req.body?.status);
+      if (st && !['Active', 'Inactive'].includes(st)) {
+        return res.status(400).json({ status: false, message: 'status must be Active or Inactive' });
+      }
+      if (st) set.status = st;
+    }
+
+    set.updatedBy = userId || null;
+
+    await SubTopic.updateOne({ tenantId, subTopicId, isdeleted: false }, { $set: set });
+    return res.status(200).json({ status: true, message: 'Sub-topic updated', data: { subTopicId } });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const bulkUpsertExamCategories = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = safeTrim(req.body?.userId || req.user?.userId);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+    if (!rows.length) return res.status(400).json({ status: false, message: 'rows is required (non-empty array)' });
+    const map = new Map();
+    for (const r of rows) {
+      const categoryName = normName(r?.categoryName);
+      if (!categoryName) continue;
+      const key = categoryName.toLowerCase();
+      if (!map.has(key)) {
+        map.set(key, {
+          categoryName,
+          categoryCode: safeTrim(r?.categoryCode) || null
+        });
+      }
+    }
+    const cleanRows = Array.from(map.values());
+    if (!cleanRows.length) return res.status(400).json({ status: false, message: 'No valid category rows (categoryName missing)' });
+    const ops = cleanRows.map((r) => ({
+      updateOne: {
+        filter: { tenantId, categoryName: r.categoryName, isdeleted: false },
+        update: {
+          $set: {
+            categoryCode: r.categoryCode,
+            status: 'Active',
+            updatedBy: userId || null
+          },
+          $setOnInsert: {
+            tenantId,
+            categoryName: r.categoryName,
+            categoryCode: r.categoryCode,
+            status: 'Active',
+            isdeleted: false,
+            createdBy: userId || null
+          }
+        },
+        upsert: true
+      }
+    }));
+    const wr = await ExamCategory.bulkWrite(ops, { ordered: false });
+    const saved = await ExamCategory.find({ tenantId, isdeleted: false }, { _id: 0 }).sort({ categoryName: 1, createdAt: 1 }).lean();
+    return res.status(200).json({
+      status: true,
+      message: 'Bulk exam categories upserted',
+      data: {
+        input: rows.length,
+        accepted: cleanRows.length,
+        matched: wr.matchedCount || 0,
+        modified: wr.modifiedCount || 0,
+        upserted: wr.upsertedCount || 0,
+        rows: saved
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const listExamCategories = async (req, res, next) => {
+  try {
+    const page = parseInt(req.query.page, 10) || 1;
+    const limit = parseInt(req.query.limit, 10) || 10;
+    const skip = (page - 1) * limit;
+    const sort = req.query.sort || '-createdAt';
+    const search = req.query.search || '';
+    const list = req.query.list || '';
+    const tenantId = req.body.entiId;
+    const query = {
+      tenantId: tenantId,
+      isdeleted: false
+    };
+    if (search) {
+      const rx = { $regex: search.trim(), $options: 'i' };
+      query.$or = [{ categoryName: rx }, { categoryCode: rx }, { categoryId: rx }];
+    }
+    if (String(list).toLowerCase() === 'full') {
+      const rows = await ExamCategory.find(query).sort(sort).lean();
+      return res.status(constants.HTTPS_SUCCESS).send({
+        status: true,
+        data: rows,
+        count: rows.length,
+        message: 'Exam Category details retrieved Successfully'
+      });
+    }
+    const count = await ExamCategory.countDocuments(query);
+    const rows = await ExamCategory.find(query).sort(sort).skip(skip).limit(limit).lean();
+    return res.status(constants.HTTPS_SUCCESS).send({
+      status: true,
+      data: rows,
+      page: page,
+      count: count,
+      message: 'Exam Category details retrieved Successfully'
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const viewExamCategory = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+
+    const categoryId = safeTrim(req.body?.categoryId);
+    if (!categoryId) return res.status(400).json({ status: false, message: 'categoryId is required' });
+
+    const doc = await ExamCategory.findOne({ tenantId, categoryId, isdeleted: false }).lean();
+    if (!doc) return res.status(404).json({ status: false, message: 'Category not found' });
+
+    return res.status(constants.HTTPS_SUCCESS).json({ status: true, message: 'Request success', data: doc });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const createExamCategory = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = safeTrim(req.body?.userId || req.user?.userId);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    const categoryName = normName(req.body?.categoryName);
+    const categoryCode = safeTrim(req.body?.categoryCode) || null;
+    if (!categoryName) return res.status(400).json({ status: false, message: 'categoryName is required' });
+    const exists = await ExamCategory.findOne({ tenantId, categoryName, isdeleted: false }, { _id: 0, categoryId: 1 }).lean();
+    if (exists) return res.status(409).json({ status: false, message: 'Category already exists' });
+    const doc = await ExamCategory.create({
+      tenantId,
+      categoryName,
+      categoryCode,
+      status: 'Active',
+      isdeleted: false,
+      createdBy: userId || null,
+      updatedBy: userId || null
+    });
+    return res.status(constants.HTTPS_CREATED || 201).json({
+      status: true,
+      message: 'Exam category created',
+      data: { categoryId: doc.categoryId }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const editExamCategory = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = safeTrim(req.body?.userId || req.user?.userId);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    const categoryId = safeTrim(req.body?.categoryId);
+    if (!categoryId) return res.status(400).json({ status: false, message: 'categoryId is required' });
+    const doc = await ExamCategory.findOne({ tenantId, categoryId, isdeleted: false });
+    if (!doc) return res.status(404).json({ status: false, message: 'Category not found' });
+    const set = {};
+    if (req.body?.categoryName !== undefined) {
+      const categoryName = normName(req.body?.categoryName);
+      if (!categoryName) return res.status(400).json({ status: false, message: 'categoryName cannot be empty' });
+      const dup = await ExamCategory.findOne({ tenantId, categoryName, isdeleted: false, categoryId: { $ne: categoryId } }, { _id: 0, categoryId: 1 }).lean();
+      if (dup) return res.status(409).json({ status: false, message: 'Category name already exists' });
+      set.categoryName = categoryName;
+    }
+    if (req.body?.categoryCode !== undefined) {
+      set.categoryCode = safeTrim(req.body?.categoryCode) || null;
+    }
+    if (req.body?.status !== undefined) {
+      const st = safeTrim(req.body?.status);
+      if (st && !['Active', 'Inactive'].includes(st)) {
+        return res.status(400).json({ status: false, message: 'status must be Active or Inactive' });
+      }
+      if (st) set.status = st;
+    }
+    set.updatedBy = userId || null;
+    await ExamCategory.updateOne({ tenantId, categoryId, isdeleted: false }, { $set: set });
+    return res.status(200).json({ status: true, message: 'Exam category updated', data: { categoryId } });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const deleteExamCategory = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = safeTrim(req.body?.userId || req.user?.userId);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    const categoryId = safeTrim(req.body?.categoryId);
+    if (!categoryId) return res.status(400).json({ status: false, message: 'categoryId is required' });
+    const doc = await ExamCategory.findOne({ tenantId, categoryId, isdeleted: false }, { _id: 0, categoryId: 1 }).lean();
+    if (!doc) return res.status(404).json({ status: false, message: 'Category not found' });
+    const hasSubs = await ExamSubCategory.exists({ tenantId, categoryId, isdeleted: false });
+    if (hasSubs) {
+      return res.status(400).json({ status: false, message: 'Cannot delete category. Sub-categories exist.' });
+    }
+    await ExamCategory.updateOne({ tenantId, categoryId, isdeleted: false }, { $set: { isdeleted: true, updatedBy: userId || null } });
+    return res.status(200).json({ status: true, message: 'Exam category deleted', data: { categoryId } });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const createExamSubCategory = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = safeTrim(req.body?.userId || req.user?.userId);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    const categoryId = safeTrim(req.body?.categoryId);
+    const subCategoryName = normName(req.body?.subCategoryName);
+    const subCategoryCode = safeTrim(req.body?.subCategoryCode) || null;
+    const sortOrder = toNum(req.body?.sortOrder);
+    if (!categoryId) return res.status(400).json({ status: false, message: 'categoryId is required' });
+    if (!subCategoryName) return res.status(400).json({ status: false, message: 'subCategoryName is required' });
+    const cat = await ExamCategory.findOne({ tenantId, categoryId, isdeleted: false }, { _id: 0, categoryId: 1 }).lean();
+    if (!cat) return res.status(400).json({ status: false, message: 'Exam category not found' });
+    const exists = await ExamSubCategory.findOne({ tenantId, categoryId, subCategoryName, isdeleted: false }, { _id: 0, subCategoryId: 1 }).lean();
+    if (exists) return res.status(409).json({ status: false, message: 'Sub-category already exists for this category' });
+    const doc = await ExamSubCategory.create({
+      tenantId,
+      categoryId,
+      subCategoryName,
+      subCategoryCode,
+      sortOrder,
+      status: 'Active',
+      isdeleted: false,
+      createdBy: userId || null,
+      updatedBy: userId || null
+    });
+    return res.status(constants.HTTPS_CREATED || 201).json({
+      status: true,
+      message: 'Exam sub-category created',
+      data: { subCategoryId: doc.subCategoryId }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const editExamSubCategory = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = safeTrim(req.body?.userId || req.user?.userId);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    const subCategoryId = safeTrim(req.body?.subCategoryId);
+    const categoryId = safeTrim(req.body?.categoryId);
+    if (!subCategoryId) return res.status(400).json({ status: false, message: 'subCategoryId is required' });
+    if (!categoryId) return res.status(400).json({ status: false, message: 'categoryId is required' });
+    const doc = await ExamSubCategory.findOne({ tenantId, subCategoryId, categoryId, isdeleted: false });
+    if (!doc) return res.status(404).json({ status: false, message: 'Sub-category not found' });
+    const set = {};
+    if (req.body?.subCategoryName !== undefined) {
+      const subCategoryName = normName(req.body?.subCategoryName);
+      if (!subCategoryName) return res.status(400).json({ status: false, message: 'subCategoryName cannot be empty' });
+      const dup = await ExamSubCategory.findOne({ tenantId, categoryId, subCategoryName, isdeleted: false, subCategoryId: { $ne: subCategoryId } }, { _id: 0, subCategoryId: 1 }).lean();
+      if (dup) return res.status(409).json({ status: false, message: 'Sub-category name already exists for this category' });
+
+      set.subCategoryName = subCategoryName;
+    }
+    if (req.body?.subCategoryCode !== undefined) {
+      set.subCategoryCode = safeTrim(req.body?.subCategoryCode) || null;
+    }
+    if (req.body?.sortOrder !== undefined) {
+      set.sortOrder = toNum(req.body?.sortOrder);
+    }
+    if (req.body?.status !== undefined) {
+      const st = safeTrim(req.body?.status);
+      if (st && !['Active', 'Inactive'].includes(st)) {
+        return res.status(400).json({ status: false, message: 'status must be Active or Inactive' });
+      }
+      if (st) set.status = st;
+    }
+    set.updatedBy = userId || null;
+    await ExamSubCategory.updateOne({ tenantId, subCategoryId, categoryId, isdeleted: false }, { $set: set });
+    return res.status(200).json({ status: true, message: 'Exam sub-category updated', data: { subCategoryId } });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const deleteExamSubCategory = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = safeTrim(req.body?.userId || req.user?.userId);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    const categoryId = safeTrim(req.body?.categoryId);
+    const subCategoryId = safeTrim(req.body?.subCategoryId);
+    if (!categoryId || !subCategoryId) {
+      return res.status(400).json({ status: false, message: 'categoryId and subCategoryId are required' });
+    }
+    const doc = await ExamSubCategory.findOne({ tenantId, categoryId, subCategoryId, isdeleted: false }, { _id: 0, subCategoryId: 1 }).lean();
+    if (!doc) return res.status(404).json({ status: false, message: 'Sub-category not found' });
+    await ExamSubCategory.updateOne({ tenantId, categoryId, subCategoryId, isdeleted: false }, { $set: { isdeleted: true, updatedBy: userId || null } });
+    return res.status(200).json({ status: true, message: 'Exam sub-category deleted', data: { subCategoryId } });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const viewExamSubCategory = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+
+    const categoryId = safeTrim(req.body?.categoryId);
+    const subCategoryId = safeTrim(req.body?.subCategoryId);
+    if (!categoryId || !subCategoryId) {
+      return res.status(400).json({ status: false, message: 'categoryId and subCategoryId are required' });
+    }
+
+    const doc = await ExamSubCategory.findOne({ tenantId, categoryId, subCategoryId, isdeleted: false }).lean();
+    if (!doc) return res.status(404).json({ status: false, message: 'Sub-category not found' });
+
+    return res.status(constants.HTTPS_SUCCESS).json({ status: true, message: 'Request success', data: doc });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const listExamSubCategories = async (req, res, next) => {
+  try {
+    const page = parseInt(req.query.page, 10) || 1;
+    const limit = parseInt(req.query.limit, 10) || 10;
+    const skip = (page - 1) * limit;
+    const sort = req.query.sort || '-createdAt';
+    const search = req.query.search || '';
+    const list = req.query.list || '';
+    const tenantId = req.body.entiId;
+    const query = {
+      tenantId: tenantId,
+      isdeleted: false
+    };
+    if (req.query.categoryId !== undefined && String(req.query.categoryId).trim() !== '') {
+      query.categoryId = String(req.query.categoryId).trim();
+    }
+    if (search) {
+      const rx = { $regex: search.trim(), $options: 'i' };
+      query.$or = [{ subCategoryName: rx }, { subCategoryCode: rx }, { subCategoryId: rx }];
+    }
+    if (String(list).toLowerCase() === 'full') {
+      const rows = await ExamSubCategory.find(query).sort(sort).lean();
+      return res.status(constants.HTTPS_SUCCESS).send({
+        status: true,
+        data: rows,
+        count: rows.length,
+        message: 'Exam SubCategory details retrieved Successfully'
+      });
+    }
+    const count = await ExamSubCategory.countDocuments(query);
+    const rows = await ExamSubCategory.find(query).sort(sort).skip(skip).limit(limit).lean();
+    return res.status(constants.HTTPS_SUCCESS).send({
+      status: true,
+      data: rows,
+      page: page,
+      count: count,
+      message: 'Exam SubCategory details retrieved Successfully'
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const bulkUpsertExamSubCategories = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = safeTrim(req.body?.userId || req.user?.userId);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    const categoryId = safeTrim(req.body?.categoryId);
+    const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+    if (!categoryId) {
+      return res.status(400).json({ status: false, message: 'categoryId is required' });
+    }
+    if (!rows.length) return res.status(400).json({ status: false, message: 'rows is required (non-empty array)' });
+    const cat = await ExamCategory.findOne({ tenantId, categoryId, isdeleted: false }, { _id: 0, categoryId: 1 }).lean();
+    if (!cat) return res.status(400).json({ status: false, message: 'Exam category not found' });
+    const map = new Map();
+    for (const r of rows) {
+      const subCategoryName = normName(r?.subCategoryName);
+      if (!subCategoryName) continue;
+      const key = subCategoryName.toLowerCase();
+      if (!map.has(key)) {
+        map.set(key, {
+          subCategoryName,
+          subCategoryCode: safeTrim(r?.subCategoryCode) || null,
+          sortOrder: toNum(r?.sortOrder)
+        });
+      }
+    }
+    const cleanRows = Array.from(map.values());
+    if (!cleanRows.length) return res.status(400).json({ status: false, message: 'No valid subcategory rows (subCategoryName missing)' });
+    const ops = cleanRows.map((r) => ({
+      updateOne: {
+        filter: { tenantId, categoryId, subCategoryName: r.subCategoryName, isdeleted: false },
+        update: {
+          $set: {
+            subCategoryCode: r.subCategoryCode,
+            sortOrder: r.sortOrder,
+            status: 'Active',
+            updatedBy: userId || null
+          },
+          $setOnInsert: {
+            tenantId,
+            categoryId,
+            subCategoryName: r.subCategoryName,
+            subCategoryCode: r.subCategoryCode,
+            sortOrder: r.sortOrder,
+            status: 'Active',
+            isdeleted: false,
+            createdBy: userId || null
+          }
+        },
+        upsert: true
+      }
+    }));
+    const wr = await ExamSubCategory.bulkWrite(ops, { ordered: false });
+    const saved = await ExamSubCategory.find({ tenantId, categoryId, isdeleted: false }, { _id: 0 }).sort({ sortOrder: 1, subCategoryName: 1, createdAt: 1 }).lean();
+    return res.status(200).json({
+      status: true,
+      message: 'Bulk exam sub-categories upserted',
+      data: {
+        categoryId,
+        input: rows.length,
+        accepted: cleanRows.length,
+        matched: wr.matchedCount || 0,
+        modified: wr.modifiedCount || 0,
+        upserted: wr.upsertedCount || 0,
+        rows: saved
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   createDepartment,
   listDepartments,
@@ -382,5 +1412,29 @@ export default {
   updateSubject,
   deleteSubject,
   bulkImportSubject,
-  viewSubject
+  viewSubject,
+  createTopic,
+  listTopics,
+  createSubTopic,
+  listSubTopics,
+  deleteTopic,
+  deleteSubTopic,
+  bulkUpsertTopics,
+  bulkUpsertSubTopics,
+  bulkUpsertExamCategories,
+  bulkUpsertExamSubCategories,
+  listExamCategories,
+  listExamSubCategories,
+  createExamCategory,
+  editExamCategory,
+  deleteExamCategory,
+  createExamSubCategory,
+  editExamSubCategory,
+  deleteExamSubCategory,
+  viewTopic,
+  updateTopic,
+  viewSubTopic,
+  updateSubTopic,
+  viewExamCategory,
+  viewExamSubCategory
 };

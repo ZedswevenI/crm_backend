@@ -13,33 +13,23 @@ const scholarshipTestSchema = new mongoose.Schema(
     firstName: { type: String, required: false, trim: true, default: null },
     lastName: { type: String, required: false, trim: true, default: null },
     name: { type: String, required: false, trim: true, default: null },
-
     email: { type: String, required: false, trim: true, lowercase: true, default: null },
     mobileNo: { type: String, required: false, trim: true, default: null },
-
-    // ✅ epoch ms (or null)
     dateOfBirth: { type: Number, required: false, default: null },
-
     gender: { type: String, required: false, trim: true, default: null },
     fatherName: { type: String, required: false, trim: true, default: null },
     motherName: { type: String, required: false, trim: true, default: null },
-
     address: { type: String, required: false, trim: true, default: null },
     city: { type: String, required: false, trim: true, default: null },
     schoolName: { type: String, required: false, trim: true, default: null },
     className: { type: String, required: false, trim: true, default: null },
-
-    // ✅ epoch ms (or null)
     testDate: { type: Number, required: false, default: null },
-
     testCity: { type: String, required: false, trim: true, default: null },
     testCentre: { type: String, required: false, trim: true, default: null },
     testName: { type: String, required: false, trim: true, default: null },
-
     centerCode: { type: String, required: false, trim: true, default: null },
     programName: { type: String, required: false, trim: true, default: null },
     programCode: { type: String, required: false, trim: true, default: null },
-
     paper1Total: { type: String, required: false, trim: true, default: null },
     paper2Total: { type: String, required: false, trim: true, default: null },
     gtotal: { type: String, required: false, trim: true, default: null },

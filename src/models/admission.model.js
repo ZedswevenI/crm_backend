@@ -6,14 +6,10 @@ const neftRefSchema = new mongoose.Schema(
   {
     utr: { type: String, required: true, trim: true },
     amount: { type: Number, required: true },
-
-    // ✅ epoch ms (or null)
     paidOn: { type: Number, required: false, default: null },
-
-    // ✅ added to match frontend payload
     bankName: { type: String, required: false, trim: true, default: null },
+    branchName: { type: String, required: false, trim: true, default: null },
     referenceNote: { type: String, required: false, trim: true, default: null },
-
     remarks: { type: String, required: false, trim: true, default: null }
   },
   { _id: false }
@@ -28,17 +24,13 @@ const admissionSchema = new mongoose.Schema(
     registrationNumber: { type: String, required: false, trim: true, default: null },
     portalStudentId: { type: String, required: false, trim: true, default: null },
     scholarshipTestId: { type: String, required: false, trim: true, default: null },
-
     student: {
       name: { type: String, required: true, trim: true },
       firstName: { type: String, required: false, trim: true, default: null },
       lastName: { type: String, required: false, trim: true, default: null },
       email: { type: String, required: false, trim: true, lowercase: true, default: null },
       phone: { type: String, required: true, trim: true },
-
-      // ✅ epoch ms (or null)
       dateOfBirth: { type: Number, required: false, default: null },
-
       gender: { type: String, required: false, trim: true, default: null },
       fatherName: { type: String, required: false, trim: true, default: null },
       motherName: { type: String, required: false, trim: true, default: null },
@@ -46,16 +38,14 @@ const admissionSchema = new mongoose.Schema(
       parentPhone: { type: String, required: false, trim: true, default: null },
       address: { type: String, required: false, trim: true, default: null },
       city: { type: String, required: false, trim: true, default: null },
+      state: { type: String, required: false, trim: true, default: null },
+      pincode: { type: String, required: false, trim: true, default: null },
       schoolName: { type: String, required: false, trim: true, default: null },
       className: { type: String, required: false, trim: true, default: null },
       studentRegNo: { type: String, required: false, trim: true, default: null }
     },
-
     centerId: { type: String, required: false, trim: true, default: null },
-
-    // ✅ added (your other code expects it)
     centerCode: { type: String, required: false, trim: true, default: null },
-
     centerName: { type: String, required: true, trim: true },
     programId: { type: String, required: false, trim: true, default: null },
     programName: { type: String, required: true, trim: true },
@@ -64,11 +54,10 @@ const admissionSchema = new mongoose.Schema(
     batchName: { type: String, required: false, trim: true, default: null },
     classLabel: { type: String, required: false, trim: true, default: null },
     academicYear: { type: String, required: true, trim: true },
-
+    courseStartYear: { type: Number, required: false, default: null },
+    currentAcademicYear: { type: String, required: false, trim: true, default: null },
     test: {
-      // ✅ epoch ms (or null)
       testDate: { type: Number, required: false, default: null },
-
       testCity: { type: String, required: false, trim: true, default: null },
       testCentre: { type: String, required: false, trim: true, default: null },
       testName: { type: String, required: false, trim: true, default: null },
@@ -85,10 +74,8 @@ const admissionSchema = new mongoose.Schema(
       waiverPerInTf: { type: Number, required: false, default: null },
       studyCentre: { type: String, required: false, trim: true, default: null }
     },
-
     feePlanId: { type: String, required: true, trim: true },
     feePlanCode: { type: String, required: false, trim: true, default: null },
-
     fee: {
       baseFee: { type: Number, required: true },
       finalFee: { type: Number, required: true },
@@ -98,7 +85,6 @@ const admissionSchema = new mongoose.Schema(
       totalDiscountPct: { type: Number, required: true, default: 0 },
       breakup: { type: Array, required: false, default: [] }
     },
-
     payments: {
       neft: {
         splitAmount: { type: Number, required: false, default: 0 },
@@ -111,45 +97,39 @@ const admissionSchema = new mongoose.Schema(
         pendingCount: { type: Number, required: false, default: 0 },
         clearedCount: { type: Number, required: false, default: 0 },
         bouncedCount: { type: Number, required: false, default: 0 }
+      },
+      otherSummary: {
+        totalCount: { type: Number, required: false, default: 0 },
+        totalAmount: { type: Number, required: false, default: 0 }
       }
     },
-
     workflow: {
       stage: {
         type: String,
         enum: ['DRAFT', 'PAYMENTS_SUBMITTED', 'FEE_CALC_GENERATED', 'APPROVAL_SENT', 'CONFIRMED', 'REJECTED'],
         default: 'DRAFT'
       },
-
-      // ✅ epoch ms
       paymentsSubmittedAt: { type: Number, required: false, default: null },
       feeCalcGeneratedAt: { type: Number, required: false, default: null },
       approvalSentAt: { type: Number, required: false, default: null },
       confirmedAt: { type: Number, required: false, default: null },
-
       approvedBy: { type: String, required: false, trim: true, default: null },
       approvedAt: { type: Number, required: false, default: null },
-
       rejectedAt: { type: Number, required: false, default: null },
       rejectedBy: { type: String, required: false, trim: true, default: null },
       rejectionReason: { type: String, required: false, trim: true, default: null }
     },
-
     print: {
-      // ✅ epoch ms
       feeAcknowledgementPrintedAt: { type: Number, required: false, default: null },
       contractPrintedAt: { type: Number, required: false, default: null },
       feeCalculationPrintedAt: { type: Number, required: false, default: null }
     },
-
     status: { type: String, enum: ['Active', 'Inactive'], default: 'Active' },
-
     schoolMarks: {
       overallPct: { type: Number, required: false, default: null },
       coreSubjectPct: { type: Number, required: false, default: null },
       remarks: { type: String, required: false, trim: true, default: null }
     },
-
     isdeleted: { type: Boolean, required: true, default: false },
     approvedBy: { type: String, required: false, default: null, ref: 'user' },
     createdBy: { type: String, required: false, default: null, ref: 'user' },
@@ -164,6 +144,8 @@ admissionSchema.index({ tenantId: 1, programCode: 1, isdeleted: 1 });
 admissionSchema.index({ tenantId: 1, centerId: 1, isdeleted: 1 });
 admissionSchema.index({ tenantId: 1, academicYear: 1, isdeleted: 1 });
 admissionSchema.index({ tenantId: 1, 'workflow.stage': 1, createdAt: -1, isdeleted: 1 });
+admissionSchema.index({ tenantId: 1, programId: 1, courseStartYear: 1, isdeleted: 1 });
+admissionSchema.index({ tenantId: 1, programId: 1, currentAcademicYear: 1, isdeleted: 1 });
 
 const Admission = mongoose.model('admission', admissionSchema);
 export default Admission;

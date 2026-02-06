@@ -3,6 +3,7 @@ import constants from '../helpers/constants.js';
 import Batch from '../models/batch.model.js';
 import StudentProfile from '../models/studentProfile.model.js';
 import Program from '../models/program.model.js';
+import AcademicYear from '../models/academicYear.model.js';
 
 const pickTenantId = (req) => String(req?.body?.tenantId || req?.body?.entiId || '').trim();
 const safeTrim = (v) => (v === undefined || v === null ? '' : String(v).trim());
@@ -79,6 +80,35 @@ const validateStudentsForBatch = async (tenantId, batch, studentIds, mode) => {
   return { ok: true, msg: 'OK', students };
 };
 
+const getAcademicYearOrderMap = async (tenantId) => {
+  const years = await AcademicYear.find({ tenantId, isdeleted: false, status: 'Active' }, { academicYear: 1, startOn: 1 }).sort({ startOn: 1 }).lean();
+
+  const map = new Map();
+  for (let i = 0; i < (years || []).length; i++) {
+    map.set(String(years[i].academicYear), i);
+  }
+  return map;
+};
+
+const resolveBatchYearAndClass = async (tenantId, programId, academicYear, programStartAy) => {
+  const prog = await Program.findOne({ tenantId, programId: safeTrim(programId), isdeleted: false }, { startingClass: 1, duration: 1 }).lean();
+  if (!prog) return { ok: false, msg: 'Program not found' };
+
+  const ayMap = await getAcademicYearOrderMap(tenantId);
+  const idxStart = ayMap.get(String(programStartAy));
+  const idxCur = ayMap.get(String(academicYear));
+  if (idxStart === undefined) return { ok: false, msg: `programStartAy not found in AcademicYear config: ${programStartAy}` };
+  if (idxCur === undefined) return { ok: false, msg: `academicYear not found in AcademicYear config: ${academicYear}` };
+
+  const diff = idxCur - idxStart; // 0 for first year
+  const yearNo = diff + 1;
+  if (yearNo <= 0) return { ok: false, msg: 'academicYear is before programStartAy' };
+  if (yearNo > Number(prog.duration || 0)) return { ok: false, msg: 'academicYear exceeds program duration' };
+
+  const classNo = Number(prog.startingClass || 0) + diff;
+  return { ok: true, yearNo, classNo, startingClass: prog.startingClass, duration: prog.duration };
+};
+
 // ---------- controllers ----------
 const createBatch = async (req, res, next) => {
   try {
@@ -92,6 +122,9 @@ const createBatch = async (req, res, next) => {
     const centerId = safeTrim(payload.centerId);
     const startDate = toEpoch(payload.startDate);
     const endDate = toEpoch(payload.endDate);
+    const programStartAy = safeTrim(payload.programStartAy) || academicYear;
+    const yr = await resolveBatchYearAndClass(tenantId, programId, academicYear, programStartAy);
+    if (!yr.ok) return res.status(400).json({ status: false, message: yr.msg });
     if (!batchName || !batchCode || !academicYear || !programId || !centerId || !startDate || !endDate) {
       return res.status(400).json({
         status: false,
@@ -111,6 +144,9 @@ const createBatch = async (req, res, next) => {
       centerName: safeTrim(payload.centerName) || null,
       startDate,
       endDate,
+      programStartAy,
+      yearNo: yr.yearNo,
+      classNo: yr.classNo,
       status: safeTrim(payload.status) || 'ACTIVE',
       staffMap: Array.isArray(payload.staffMap) ? payload.staffMap : [],
       studentCount: 0,
@@ -203,17 +239,13 @@ const updateBatch = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-
     const payload = req.body || {};
     const batchId = safeTrim(payload.batchId);
     if (!batchId) return res.status(400).json({ status: false, message: 'batchId is required' });
-
     const cur = await Batch.findOne({ tenantId, batchId, isdeleted: false });
     if (!cur) return res.status(404).json({ status: false, message: 'Batch not found' });
-
     const guard = ensureBatchEditable(cur);
     if (!guard.ok) return res.status(400).json({ status: false, message: guard.msg });
-
     const patch = {};
     if (payload.batchName !== undefined) patch.batchName = safeTrim(payload.batchName);
     if (payload.batchCode !== undefined) patch.batchCode = safeTrim(payload.batchCode);
@@ -227,9 +259,9 @@ const updateBatch = async (req, res, next) => {
     if (payload.status !== undefined) patch.status = safeTrim(payload.status) || cur.status;
     if (payload.remarks !== undefined) patch.remarks = safeTrim(payload.remarks) || null;
     if (payload.userId !== undefined) patch.updatedBy = payload.userId || null;
-
     if (payload.startDate !== undefined) patch.startDate = toEpoch(payload.startDate);
     if (payload.endDate !== undefined) patch.endDate = toEpoch(payload.endDate);
+    if (payload.programStartAy !== undefined) patch.programStartAy = safeTrim(payload.programStartAy);
     const effStart = patch.startDate !== undefined ? patch.startDate : cur.startDate;
     const effEnd = patch.endDate !== undefined ? patch.endDate : cur.endDate;
     if (effStart && effEnd && effStart >= effEnd) {
@@ -250,7 +282,16 @@ const updateBatch = async (req, res, next) => {
           message: 'Cannot change program/center/academicYear while students are assigned. Remove/shift students first.'
         });
       }
+      const effAcademicYear = patch.academicYear !== undefined ? patch.academicYear : cur.academicYear;
+      const effProgramId = patch.programId !== undefined ? patch.programId : cur.programId;
+      const effStartAy = patch.programStartAy !== undefined ? patch.programStartAy : cur.programStartAy || cur.academicYear;
+      const yr = await resolveBatchYearAndClass(tenantId, effProgramId, effAcademicYear, effStartAy);
+      if (!yr.ok) return res.status(400).json({ status: false, message: yr.msg });
+      patch.programStartAy = effStartAy;
+      patch.yearNo = yr.yearNo;
+      patch.classNo = yr.classNo;
     }
+
     const doc = await Batch.findOneAndUpdate({ tenantId, batchId, isdeleted: false }, { $set: patch }, { new: true }).lean();
     if (!doc) return res.status(404).json({ status: false, message: 'Batch not found' });
     return res.status(constants.HTTPS_SUCCESS).json({ status: true, message: 'Batch updated', data: doc });

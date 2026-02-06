@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 import { v4 as uuid } from 'uuid';
 uuid();
 
-const PAYMENT_TYPES = ['NEFT', 'CHEQUE'];
+const PAYMENT_TYPES = ['NEFT', 'CHEQUE', 'OTHER'];
 const PAYMENT_STATUS = ['PENDING', 'SUBMITTED', 'DEPOSITED', 'EXTENTION_REQUESTED', 'CLEARED', 'FAILED', 'CANCELLED'];
 const CHEQUE_MODES = ['PDC', 'CDC'];
 
@@ -10,9 +10,7 @@ const AUDIT_ACTIONS = ['CREATE', 'UPDATE', 'STATUS_CHANGE', 'DEPOSIT_BATCH_ADD',
 
 const AuditSchema = new mongoose.Schema(
   {
-    // ✅ epoch ms
     at: { type: Number, required: true, default: () => Date.now() },
-
     by: { type: String, required: false, default: null, ref: 'user' },
     action: { type: String, enum: AUDIT_ACTIONS, required: true },
     fromStatus: { type: String, enum: PAYMENT_STATUS, required: false, default: null },
@@ -38,55 +36,44 @@ const paymentSchema = new mongoose.Schema(
     studentName: { type: String, required: true, trim: true },
     studentPhone: { type: String, required: false, trim: true, default: null },
     registrationNumber: { type: String, required: false, trim: true, default: null },
-
     paymentType: { type: String, enum: PAYMENT_TYPES, required: true },
     amount: { type: Number, required: true },
     remarks: { type: String, required: false, trim: true, default: null },
-
     status: { type: String, enum: PAYMENT_STATUS, default: 'PENDING' },
-
-    // ✅ epoch ms
     submittedOn: { type: Number, required: false, default: null },
     depositedOn: { type: Number, required: false, default: null },
     clearedOn: { type: Number, required: false, default: null },
     failedOn: { type: Number, required: false, default: null },
-
     failureReason: { type: String, required: false, trim: true, default: null },
-
     neft: {
       utr: { type: String, required: false, trim: true, default: null },
-
-      // ✅ epoch ms
       paidOn: { type: Number, required: false, default: null },
-
       bankName: { type: String, required: false, trim: true, default: null },
+      branchName: { type: String, required: false, trim: true, default: null },
       referenceNote: { type: String, required: false, trim: true, default: null }
     },
 
     cheque: {
       sno: { type: Number, required: false, default: null },
       chequeNo: { type: String, required: false, trim: true, default: null },
-
-      // ✅ chequeDate is the date written on the cheque
       chequeDate: { type: Number, required: false, default: null },
-
-      // ✅ dueDate is the instalment due date (correct mapping)
       dueDate: { type: Number, required: false, default: null },
-
       favourOf: { type: String, required: false, trim: true, default: null },
       mode: { type: String, enum: CHEQUE_MODES, required: false, default: null },
       bankName: { type: String, required: false, trim: true, default: null },
-
-      // ✅ keep plannedDepositDate separate (often = dueDate)
+      branchName: { type: String, required: false, trim: true, default: null },
       plannedDepositDate: { type: Number, required: false, default: null },
-
-      // ✅ added: for UI “Description”
       instalmentLabel: { type: String, required: false, trim: true, default: null },
-
-      // ✅ added: explicit instalment due date (same as dueDate, but clearer)
       instalmentDate: { type: Number, required: false, default: null }
     },
-
+    other: {
+      mode: { type: String, required: false, trim: true, default: null },
+      refNo: { type: String, required: false, trim: true, default: null },
+      paidOn: { type: Number, required: false, default: null },
+      bankName: { type: String, required: false, trim: true, default: null },
+      branchName: { type: String, required: false, trim: true, default: null },
+      referenceNote: { type: String, required: false, trim: true, default: null }
+    },
     depositBatchId: { type: String, required: false, trim: true, default: null, index: true },
     mergeGroupId: { type: String, required: false, trim: true, default: null, index: true },
 
@@ -94,15 +81,10 @@ const paymentSchema = new mongoose.Schema(
       replacesPaymentId: { type: String, required: false, trim: true, default: null, index: true },
       replacedByPaymentId: { type: String, required: false, trim: true, default: null, index: true },
       reason: { type: String, required: false, trim: true, default: null },
-
-      // ✅ epoch ms
       replacedAt: { type: Number, required: false, default: null },
-
       replacedBy: { type: String, required: false, default: null, ref: 'user' }
     },
-
     audit: { type: [AuditSchema], required: false, default: [] },
-
     batchId: { type: String, required: false, trim: true, default: null },
     statusFlag: { type: String, enum: ['Active', 'Inactive'], default: 'Active' },
     isdeleted: { type: Boolean, required: true, default: false },

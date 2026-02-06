@@ -1,6 +1,17 @@
 import mongoose from 'mongoose';
 import { v4 as uuid } from 'uuid';
 
+const ayHistorySchema = new mongoose.Schema(
+  {
+    academicYear: { type: String, trim: true, default: null },
+    yearNo: { type: Number, default: null },
+    classNo: { type: Number, default: null },
+    changedOn: { type: Number, default: () => Date.now() },
+    changedBy: { type: String, trim: true, default: null }
+  },
+  { _id: false }
+);
+
 const StudentProfileSchema = new mongoose.Schema(
   {
     tenantId: { type: String, required: true, index: true },
@@ -14,7 +25,11 @@ const StudentProfileSchema = new mongoose.Schema(
       phone: { type: String, required: true, trim: true },
       email: { type: String, trim: true },
       parentName: { type: String, required: true, trim: true },
-      parentPhone: { type: String, required: true, trim: true }
+      parentPhone: { type: String, required: true, trim: true },
+      address: { type: String, trim: true, default: null },
+      city: { type: String, trim: true, default: null },
+      state: { type: String, trim: true, default: null },
+      pincode: { type: String, trim: true, default: null }
     },
     academicYear: { type: String, required: true, trim: true, index: true },
     programId: { type: String, required: true, ref: 'program', trim: true, index: true },
@@ -25,6 +40,11 @@ const StudentProfileSchema = new mongoose.Schema(
     centerName: { type: String, trim: true },
     batchId: { type: String, trim: true, index: true, ref: 'batch', default: null },
     batchCode: { type: String, trim: true, default: null },
+    courseStartYear: { type: Number, required: false, default: null, index: true },
+    currentAcademicYear: { type: String, required: false, trim: true, default: null, index: true },
+    yearNo: { type: Number, required: false, default: 1 },
+    classNo: { type: Number, required: false, default: null },
+    ayHistory: { type: [ayHistorySchema], required: false, default: [] },
     status: {
       type: String,
       enum: ['ACTIVE', 'INACTIVE'],
