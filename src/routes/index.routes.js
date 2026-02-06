@@ -9,6 +9,7 @@ import accountsRoute from './accounts.routes.js';
 import batchRoute from './batch.route.js';
 import timetableRoute from './timetable.routes.js';
 import studentRoute from './student.routes.js';
+import assignmentRoute from './assignment.routes.js';
 
 routes.post('/healthcheck', (req, res) => {
   try {
@@ -24,5 +25,6 @@ routes.use('/accounts', accountsRoute);
 routes.use('/batch', batchRoute);
 routes.use('/timetable', timetableRoute);
 routes.use('/student', studentRoute);
+routes.use('/assignment', assignmentRoute);
 
 export default routes;

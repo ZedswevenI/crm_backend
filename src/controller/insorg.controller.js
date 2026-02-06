@@ -435,57 +435,69 @@ const createTopic = async (req, res, next) => {
 
 const listTopics = async (req, res, next) => {
   try {
-    const tenantId = pickTenantId(req);
-    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-
-    const classNo = toNum(req.query.classNo);
-    const subjectIdRaw = req.query.subjectId;
-
-    if (!ensureClassNo(classNo) || !subjectIdRaw) {
-      return res.status(400).json({ status: false, message: 'classNo (6..13) and subjectId are required in query' });
+    const page = parseInt(req.query.page, 10) || 1;
+    const limit = parseInt(req.query.limit, 10) || 10;
+    const skip = (page - 1) * limit;
+    const sort = req.query.sort || '-createdAt';
+    const search = req.query.search || '';
+    const list = req.query.list || '';
+    const tenantId = req.body.entiId;
+    const query = {
+      tenantId: tenantId,
+      isdeleted: false
+    };
+    if (req.query.classNo !== undefined && String(req.query.classNo).trim() !== '') {
+      const cn = Number(req.query.classNo);
+      if (Number.isFinite(cn)) {
+        query.classNo = cn;
+      }
     }
-    if (!mongoose.Types.ObjectId.isValid(String(subjectIdRaw))) {
-      return res.status(400).json({ status: false, message: 'Invalid subjectId' });
+    if (req.query.subjectId !== undefined && String(req.query.subjectId).trim() !== '') {
+      const sid = String(req.query.subjectId).trim();
+      if (mongoose.Types.ObjectId.isValid(sid)) {
+        query.subjectId = new mongoose.Types.ObjectId(sid);
+      }
     }
-    const subjectId = new mongoose.Types.ObjectId(String(subjectIdRaw));
-
-    const page = Math.max(parseInt(req.query.page || '1', 10), 1);
-    const limit = Math.min(Math.max(parseInt(req.query.limit || '20', 10), 1), 200);
-    const search = safeTrim(req.query.search);
-    const list = safeTrim(req.query.list);
-    const sort = safeTrim(req.query.sort) || 'sortOrder';
-
-    const query = { tenantId, isdeleted: false, classNo, subjectId };
-
     if (search) {
-      const rx = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      const rx = { $regex: search.trim(), $options: 'i' };
       query.$or = [{ topicName: rx }, { topicCode: rx }, { topicId: rx }];
     }
-
-    // safe sort handling (your listPrograms style accepts string sort)
-    const sortBy = sort;
-
-    if (list === 'full') {
-      const rows = await Topic.find(query).sort(sortBy).lean();
-      return res.status(constants.HTTPS_SUCCESS).json({
+    if (String(list).toLowerCase() === 'full') {
+      const rows = await Topic.find(query)
+        .sort(sort)
+        .populate({
+          path: 'subjectId',
+          model: 'subject',
+          select: 'subjectName subjectCode'
+        })
+        .lean();
+      return res.status(constants.HTTPS_SUCCESS).send({
         status: true,
-        message: 'Request success',
         data: rows,
-        count: rows.length
+        count: rows.length,
+        message: 'Topic details retrieved Successfully'
       });
     }
-
-    const skip = (page - 1) * limit;
-    const [rows, count] = await Promise.all([Topic.find(query).sort(sortBy).skip(skip).limit(limit).lean(), Topic.countDocuments(query)]);
-
-    return res.status(constants.HTTPS_SUCCESS).json({
+    const count = await Topic.countDocuments(query);
+    const rows = await Topic.find(query)
+      .sort(sort)
+      .skip(skip)
+      .limit(limit)
+      .populate({
+        path: 'subjectId',
+        model: 'subject',
+        select: 'subjectName subjectCode'
+      })
+      .lean();
+    return res.status(constants.HTTPS_SUCCESS).send({
       status: true,
-      message: 'Request success',
       data: rows,
-      count
+      page: page,
+      count: count,
+      message: 'Topic details retrieved Successfully'
     });
   } catch (err) {
-    return next(err);
+    next(err);
   }
 };
 
@@ -708,58 +720,72 @@ const createSubTopic = async (req, res, next) => {
 
 const listSubTopics = async (req, res, next) => {
   try {
-    const tenantId = pickTenantId(req);
-    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-
-    const classNo = toNum(req.query.classNo);
-    const subjectIdRaw = req.query.subjectId;
-    const topicId = safeTrim(req.query.topicId || '');
-
-    if (!ensureClassNo(classNo) || !subjectIdRaw) {
-      return res.status(400).json({ status: false, message: 'classNo (6..13) and subjectId are required in query' });
+    const page = parseInt(req.query.page, 10) || 1;
+    const limit = parseInt(req.query.limit, 10) || 10;
+    const skip = (page - 1) * limit;
+    const sort = req.query.sort || '-createdAt';
+    const search = req.query.search || '';
+    const list = req.query.list || '';
+    const tenantId = req.body.entiId;
+    const query = {
+      tenantId: tenantId,
+      isdeleted: false
+    };
+    if (req.query.classNo !== undefined && String(req.query.classNo).trim() !== '') {
+      const cn = Number(req.query.classNo);
+      if (Number.isFinite(cn)) {
+        query.classNo = cn;
+      }
     }
-    if (!mongoose.Types.ObjectId.isValid(String(subjectIdRaw))) {
-      return res.status(400).json({ status: false, message: 'Invalid subjectId' });
+    if (req.query.subjectId !== undefined && String(req.query.subjectId).trim() !== '') {
+      const sid = String(req.query.subjectId).trim();
+      if (mongoose.Types.ObjectId.isValid(sid)) {
+        query.subjectId = new mongoose.Types.ObjectId(sid);
+      }
     }
-    const subjectId = new mongoose.Types.ObjectId(String(subjectIdRaw));
-
-    const page = Math.max(parseInt(req.query.page || '1', 10), 1);
-    const limit = Math.min(Math.max(parseInt(req.query.limit || '20', 10), 1), 200);
-    const search = safeTrim(req.query.search);
-    const list = safeTrim(req.query.list);
-    const sort = safeTrim(req.query.sort) || 'sortOrder';
-
-    const query = { tenantId, isdeleted: false, classNo, subjectId };
-    if (topicId) query.topicId = topicId;
-
+    if (req.query.topicId !== undefined && String(req.query.topicId).trim() !== '') {
+      query.topicId = String(req.query.topicId).trim();
+    }
     if (search) {
-      const rx = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      const rx = { $regex: search.trim(), $options: 'i' };
       query.$or = [{ subTopicName: rx }, { subTopicCode: rx }, { subTopicId: rx }];
     }
-
-    const sortBy = sort;
-
-    if (list === 'full') {
-      const rows = await SubTopic.find(query).sort(sortBy).lean();
-      return res.status(constants.HTTPS_SUCCESS).json({
+    if (String(list).toLowerCase() === 'full') {
+      const rows = await SubTopic.find(query)
+        .sort(sort)
+        .populate({
+          path: 'subjectId',
+          model: 'subject',
+          select: 'subjectName subjectCode'
+        })
+        .lean();
+      return res.status(constants.HTTPS_SUCCESS).send({
         status: true,
-        message: 'Request success',
         data: rows,
-        count: rows.length
+        count: rows.length,
+        message: 'SubTopic details retrieved Successfully'
       });
     }
-
-    const skip = (page - 1) * limit;
-    const [rows, count] = await Promise.all([SubTopic.find(query).sort(sortBy).skip(skip).limit(limit).lean(), SubTopic.countDocuments(query)]);
-
-    return res.status(constants.HTTPS_SUCCESS).json({
+    const count = await SubTopic.countDocuments(query);
+    const rows = await SubTopic.find(query)
+      .sort(sort)
+      .skip(skip)
+      .limit(limit)
+      .populate({
+        path: 'subjectId',
+        model: 'subject',
+        select: 'subjectName subjectCode'
+      })
+      .lean();
+    return res.status(constants.HTTPS_SUCCESS).send({
       status: true,
-      message: 'Request success',
       data: rows,
-      count
+      page: page,
+      count: count,
+      message: 'SubTopic details retrieved Successfully'
     });
   } catch (err) {
-    return next(err);
+    next(err);
   }
 };
 
@@ -1011,28 +1037,25 @@ const listExamCategories = async (req, res, next) => {
     const search = req.query.search || '';
     const list = req.query.list || '';
     const tenantId = req.body.entiId;
-
-    const searchFields = ['categoryName', 'categoryCode'];
-
     const query = {
       tenantId: tenantId,
       isdeleted: false
     };
-
     if (search) {
       const rx = { $regex: search.trim(), $options: 'i' };
-      query.$or = [{ categoryName: rx }, { categoryCode: rx }];
+      query.$or = [{ categoryName: rx }, { categoryCode: rx }, { categoryId: rx }];
     }
-
-    // list full
     if (String(list).toLowerCase() === 'full') {
       const rows = await ExamCategory.find(query).sort(sort).lean();
-      return res.status(constants.HTTPS_SUCCESS).send({ status: true, data: rows, count: rows.length, message: 'Exam Category details retrieved Successfully' });
+      return res.status(constants.HTTPS_SUCCESS).send({
+        status: true,
+        data: rows,
+        count: rows.length,
+        message: 'Exam Category details retrieved Successfully'
+      });
     }
-
     const count = await ExamCategory.countDocuments(query);
     const rows = await ExamCategory.find(query).sort(sort).skip(skip).limit(limit).lean();
-
     return res.status(constants.HTTPS_SUCCESS).send({
       status: true,
       data: rows,
@@ -1271,24 +1294,17 @@ const listExamSubCategories = async (req, res, next) => {
     const search = req.query.search || '';
     const list = req.query.list || '';
     const tenantId = req.body.entiId;
-
-    const searchFields = ['subCategoryName', 'subCategoryCode'];
-
     const query = {
       tenantId: tenantId,
       isdeleted: false
     };
-
-    if (req.query.categoryId) {
+    if (req.query.categoryId !== undefined && String(req.query.categoryId).trim() !== '') {
       query.categoryId = String(req.query.categoryId).trim();
     }
-
     if (search) {
       const rx = { $regex: search.trim(), $options: 'i' };
-      query.$or = [{ subCategoryName: rx }, { subCategoryCode: rx }];
+      query.$or = [{ subCategoryName: rx }, { subCategoryCode: rx }, { subCategoryId: rx }];
     }
-
-    // list full
     if (String(list).toLowerCase() === 'full') {
       const rows = await ExamSubCategory.find(query).sort(sort).lean();
       return res.status(constants.HTTPS_SUCCESS).send({
@@ -1298,10 +1314,8 @@ const listExamSubCategories = async (req, res, next) => {
         message: 'Exam SubCategory details retrieved Successfully'
       });
     }
-
     const count = await ExamSubCategory.countDocuments(query);
     const rows = await ExamSubCategory.find(query).sort(sort).skip(skip).limit(limit).lean();
-
     return res.status(constants.HTTPS_SUCCESS).send({
       status: true,
       data: rows,
