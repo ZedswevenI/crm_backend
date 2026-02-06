@@ -1,4 +1,4 @@
-import AssignmentQns from '../models/assignmentqns.model.js';
+import AssignmentQns from '../models/assingmentQns.model.js';
 import mongoose from 'mongoose';
 import constants from '../helpers/constants.js';
 import logger from '../helpers/logger.js';
@@ -177,7 +177,10 @@ const getQuestionImage = async (req, res) => {
 
 const createQuestionsBulk = async (req, res, next) => {
   try {
-    const payload = req.body;
+    const tenantId = req.body.entiId;
+    const userId = req.user?.userId || req.body?.userId || null;
+    const testId = req.body.testId;
+    const payload = req.body.questions;
     if (!Array.isArray(payload) || payload.length === 0) {
       return res.status(400).json({
         status: false,
@@ -186,8 +189,8 @@ const createQuestionsBulk = async (req, res, next) => {
     }
     const incomingTriplets = payload
       .map((q) => ({
-        tenantId: safeTrim(q.entiId || q.tenantId),
-        testId: safeTrim(q.testId),
+        tenantId: safeTrim(tenantId),
+        testId: safeTrim(testId),
         questionId: safeTrim(q.questionId)
       }))
       .filter((x) => x.tenantId && x.testId && x.questionId);
@@ -196,8 +199,8 @@ const createQuestionsBulk = async (req, res, next) => {
         {
           isdeleted: false,
           $or: incomingTriplets.map((x) => ({
-            tenantId: x.tenantId,
-            testId: x.testId,
+            tenantId: tenantId,
+            testId: testId,
             questionId: x.questionId
           }))
         },
@@ -211,10 +214,7 @@ const createQuestionsBulk = async (req, res, next) => {
         });
       }
     }
-    const userId = req.user?.userId || req.body?.userId || null;
     const docsToInsert = payload.map((q) => {
-      const tenantId = safeTrim(q.entiId || q.tenantId);
-      const testId = safeTrim(q.testId);
       const questionId = safeTrim(q.questionId) || uuid();
       const questionType = safeTrim(q.questionType).toLowerCase();
       const difficulty = safeTrim(q.difficulty || 'medium').toLowerCase();
@@ -708,16 +708,135 @@ const deleteQuestion = async (req, res, next) => {
   }
 };
 
+const createQuestion = async (req, res, next) => {
+  try {
+    const {
+      entiId,
+      tenantId,
+      testId,
+      questionId,
+      questionType,
+      difficulty,
+      images = [],
+      positiveMarks,
+      negativeMarks,
+      questionHtml,
+      passageHtml,
+      instructionHtml,
+      questionOptions = [],
+      solutionHtml,
+      enablePassage,
+      enableInstruction,
+      enableSolution,
+      correctAnswer,
+      tags = [],
+      status
+    } = req.body || {};
+    const finalTenantId = safeTrim(entiId || tenantId);
+    const userId = req.user?.userId || req.body?.userId || null;
+    if (!finalTenantId) {
+      return res.status(400).json({
+        status: false,
+        message: 'entiId (tenantId) is required'
+      });
+    }
+    if (!testId) {
+      return res.status(400).json({
+        status: false,
+        message: 'testId is required'
+      });
+    }
+    if (!questionType) {
+      return res.status(400).json({
+        status: false,
+        message: 'questionType is required'
+      });
+    }
+    const qt = safeTrim(questionType).toLowerCase();
+    if (!ALLOWED_TYPES.has(qt)) {
+      return res.status(400).json({
+        status: false,
+        message: `Invalid questionType. Allowed: ${Array.from(ALLOWED_TYPES).join(', ')}`
+      });
+    }
+    const diff = safeTrim(difficulty || 'medium').toLowerCase();
+    if (!ALLOWED_DIFFICULTY.has(diff)) {
+      return res.status(400).json({
+        status: false,
+        message: 'Invalid difficulty. Allowed: easy, medium, hard'
+      });
+    }
+    const normalizedOptions = normalizeOptions(questionOptions);
+    if (needsOptions(qt)) {
+      if (!normalizedOptions.length) {
+        return res.status(400).json({
+          status: false,
+          message: 'questionOptions is required for mcq_single / mcq_multi / true_false'
+        });
+      }
+      if (needsAtLeastOneCorrect(qt)) {
+        const correctCount = normalizedOptions.filter((o) => o.isCorrect === true).length;
+        if (correctCount < 1) {
+          return res.status(400).json({
+            status: false,
+            message: 'At least one correct option is required'
+          });
+        }
+      }
+    }
+    const doc = {
+      tenantId: finalTenantId,
+      testId: safeTrim(testId),
+      questionId: safeTrim(questionId) || uuid(),
+      questionType: qt,
+      difficulty: diff,
+      images: normalizeImages(images),
+      positiveMarks: toNum(positiveMarks, 0),
+      negativeMarks: toNum(negativeMarks, 0),
+      questionHtml: questionHtml ?? '',
+      passageHtml: passageHtml ?? '',
+      instructionHtml: instructionHtml ?? '',
+      questionOptions: normalizedOptions,
+      solutionHtml: solutionHtml ?? '',
+      enablePassage: enablePassage === true,
+      enableInstruction: enableInstruction === true,
+      enableSolution: enableSolution === true,
+      correctAnswer: correctAnswer !== false,
+      tags: Array.isArray(tags) ? tags.map((t) => safeTrim(t)).filter(Boolean) : [],
+      status: status || 'active',
+      isdeleted: false,
+      createdBy: userId,
+      updatedBy: userId
+    };
+    const created = await AssignmentQns.create(doc);
+    return res.status(constants.HTTPS_SUCCESS || 201).json({
+      status: true,
+      message: 'Question created successfully',
+      data: created
+    });
+  } catch (err) {
+    if (err?.code === 11000) {
+      return res.status(409).json({
+        status: false,
+        message: 'Duplicate question (tenantId + testId + questionId already exists)'
+      });
+    }
+    logger.error('createQuestion error:', err);
+    return next(err);
+  }
+};
+
 export default {
-  uploadSingleQuestionImage: uploadSingleQuestionImage,
-  getQuestionImage: getQuestionImage,
-  createQuestionsBulk: createQuestionsBulk,
-  listQuestionsByTopic: listQuestionsByTopic,
-  listQuestionsByTestId: listQuestionsByTestId,
-  bulkUpdateByTestId: bulkUpdateByTestId,
-  bulkSoftDeleteByTestId: bulkSoftDeleteByTestId,
-  listQuestionTests: listQuestionTests,
-  viewQuestion: viewQuestion,
-  updateQuestion: updateQuestion,
-  deleteQuestion: deleteQuestion
+  uploadSingleQuestionImage,
+  getQuestionImage,
+  createQuestionsBulk,
+  listQuestionsByTopic,
+  listQuestionsByTestId,
+  bulkUpdateByTestId,
+  bulkSoftDeleteByTestId,
+  listQuestionTests,
+  viewQuestion,
+  updateQuestion,
+  deleteQuestion,
+  createQuestion
 };
