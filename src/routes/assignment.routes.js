@@ -7,13 +7,15 @@ import validatetoken from '../middlewares/auth.js';
 import assignCtrl from '../controller/assignment.controller.js';
 import questionCtrl from '../controller/assignmentQns.controller.js';
 
+import { uploadQuestionImage } from '../middlewares/multer.js';
+
 routes.post('/create', validatetoken, assignCtrl.createAssignment);
 routes.post('/edit', validatetoken, assignCtrl.updateAssignment);
 routes.post('/list', validatetoken, assignCtrl.listAssignments);
 routes.post('/delete', validatetoken, assignCtrl.deleteAssignment);
 routes.post('/import', validatetoken, assignCtrl.importAssignments);
 
-routes.post('/question/image/upload', validatetoken, questionCtrl.uploadSingleQuestionImage);
+routes.post('/question/image/upload', validatetoken, uploadQuestionImage, questionCtrl.uploadSingleQuestionImage);
 routes.post('/question/image/download', validatetoken, questionCtrl.getQuestionImage);
 
 routes.post('/question/bulkcreate', validatetoken, questionCtrl.createQuestionsBulk);
