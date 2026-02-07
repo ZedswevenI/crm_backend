@@ -80,12 +80,29 @@ const validateStudentsForBatch = async (tenantId, batch, studentIds, mode) => {
   return { ok: true, msg: 'OK', students };
 };
 
-const getAcademicYearOrderMap = async (tenantId) => {
-  const years = await AcademicYear.find({ tenantId, isdeleted: false, status: 'Active' }, { academicYear: 1, startOn: 1 }).sort({ startOn: 1 }).lean();
-
+const getAcademicYearOrderMap = async (tenantId, programId) => {
+  const docs = await AcademicYear.find({ tenantId, programId, isdeleted: false, status: 'Active' }, { _id: 0, years: 1 }).sort({ startOn: 1 }).lean();
+  console.log('years ', docs);
+  const flatYears = [];
+  for (const d of docs || []) {
+    const arr = Array.isArray(d.years) ? d.years : [];
+    for (const y of arr) {
+      flatYears.push({
+        academicYear: String(y?.academicYear || '').trim(),
+        startOn: y?.startOn ?? null
+      });
+    }
+  }
+  const ordered = flatYears
+    .filter((x) => x.academicYear)
+    .sort((a, b) => {
+      const as = a.startOn === null || a.startOn === undefined ? Number.MAX_SAFE_INTEGER : Number(a.startOn);
+      const bs = b.startOn === null || b.startOn === undefined ? Number.MAX_SAFE_INTEGER : Number(b.startOn);
+      return as - bs;
+    });
   const map = new Map();
-  for (let i = 0; i < (years || []).length; i++) {
-    map.set(String(years[i].academicYear), i);
+  for (let i = 0; i < ordered.length; i++) {
+    map.set(String(ordered[i].academicYear), i);
   }
   return map;
 };
@@ -93,9 +110,10 @@ const getAcademicYearOrderMap = async (tenantId) => {
 const resolveBatchYearAndClass = async (tenantId, programId, academicYear, programStartAy) => {
   const prog = await Program.findOne({ tenantId, programId: safeTrim(programId), isdeleted: false }, { startingClass: 1, duration: 1 }).lean();
   if (!prog) return { ok: false, msg: 'Program not found' };
-
-  const ayMap = await getAcademicYearOrderMap(tenantId);
+  const ayMap = await getAcademicYearOrderMap(tenantId, programId);
+  console.log('ayMap ', ayMap);
   const idxStart = ayMap.get(String(programStartAy));
+  console.log(idxStart);
   const idxCur = ayMap.get(String(academicYear));
   if (idxStart === undefined) return { ok: false, msg: `programStartAy not found in AcademicYear config: ${programStartAy}` };
   if (idxCur === undefined) return { ok: false, msg: `academicYear not found in AcademicYear config: ${academicYear}` };
@@ -117,13 +135,14 @@ const createBatch = async (req, res, next) => {
     const payload = req.body || {};
     const batchName = safeTrim(payload.batchName);
     const batchCode = safeTrim(payload.batchCode);
-    const academicYear = safeTrim(payload.academicYear);
+    const academicYear = payload.academicYear;
     const programId = safeTrim(payload.programId);
     const centerId = safeTrim(payload.centerId);
     const startDate = toEpoch(payload.startDate);
     const endDate = toEpoch(payload.endDate);
     const programStartAy = safeTrim(payload.programStartAy) || academicYear;
     const yr = await resolveBatchYearAndClass(tenantId, programId, academicYear, programStartAy);
+    console.log(yr);
     if (!yr.ok) return res.status(400).json({ status: false, message: yr.msg });
     if (!batchName || !batchCode || !academicYear || !programId || !centerId || !startDate || !endDate) {
       return res.status(400).json({
@@ -157,6 +176,7 @@ const createBatch = async (req, res, next) => {
     });
     return res.status(constants.HTTPS_SUCCESS).json({ status: true, message: 'Batch created', data: doc });
   } catch (err) {
+    console.log('err ', err);
     if (err?.code === 11000) {
       return res.status(409).json({ status: false, message: 'Batch code already exists for this academic year' });
     }
@@ -446,14 +466,13 @@ const listEligibleStudentsForBatch = async (req, res, next) => {
     const page = Math.max(parseInt(req.query.page || '1', 10), 1);
     const limit = Math.min(Math.max(parseInt(req.query.limit || '20', 10), 1), 200);
     const skip = (page - 1) * limit;
-
+    console.log('b ', b);
     const search = safeTrim(req.query.search);
 
     const query = {
       tenantId,
       isdeleted: false,
       status: 'ACTIVE',
-      academicYear: b.academicYear,
       programId: b.programId,
       centerId: b.centerId,
       batchId: null
@@ -475,39 +494,30 @@ const listEligibleStudentsForBatch = async (req, res, next) => {
 const assignStudentsToBatch = async (req, res, next) => {
   const session = await mongoose.startSession();
   try {
+    console.log(req.body);
     const tenantId = pickTenantId(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-
     const payload = req.body || {};
     const batchId = safeTrim(payload.batchId);
     const studentIds = normalizeIdList(payload.studentIds);
-
     if (!batchId) return res.status(400).json({ status: false, message: 'batchId is required' });
     if (!studentIds.length) return res.status(400).json({ status: false, message: 'studentIds must be a non-empty array' });
-
     const b = await Batch.findOne({ tenantId, batchId, isdeleted: false });
     if (!b) return res.status(404).json({ status: false, message: 'Batch not found' });
-
     const guard = ensureBatchEditable(b);
     if (!guard.ok) return res.status(400).json({ status: false, message: guard.msg });
-
     const check = await validateStudentsForBatch(tenantId, b, studentIds, 'ASSIGN_ONLY_UNASSIGNED');
     if (!check.ok) return res.status(400).json({ status: false, message: check.msg });
-
     const updatedBy = payload.userId || null;
-
     session.startTransaction();
-
     await StudentProfile.updateMany({ tenantId, isdeleted: false, status: 'ACTIVE', studentId: { $in: studentIds }, batchId: null }, { $set: { batchId: b.batchId, batchCode: b.batchCode, updatedBy } }, { session });
-
     const cnt = await refreshStudentCount(tenantId, b.batchId, session);
     await Batch.updateOne({ tenantId, batchId: b.batchId, isdeleted: false }, { $set: { updatedBy } }, { session });
-
     await session.commitTransaction();
     session.endSession();
-
     return res.status(constants.HTTPS_SUCCESS).json({ status: true, message: 'Students assigned to batch', count: cnt });
   } catch (err) {
+    console.log('err ', err);
     try {
       await session.abortTransaction();
       session.endSession();
