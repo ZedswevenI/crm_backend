@@ -29,6 +29,15 @@ routes.post('/question/update', validatetoken, questionCtrl.updateQuestion);
 routes.post('/question/delete', validatetoken, questionCtrl.deleteQuestion);
 routes.post('/question/create', validatetoken, questionCtrl.createQuestion);
 
+routes.post('/enableto/batch', validatetoken, assignCtrl.enableTeststoBatch);
+routes.post('/disableto/batch', validatetoken, assignCtrl.disableTeststoBatch);
+routes.post('/enabledto/batch/list', validatetoken, assignCtrl.listEnabledTestsforBatch);
+
+routes.post('/result/submit', validatetoken, assignCtrl.submitAssignmentResult);
+routes.post('/result/list/student', validatetoken, assignCtrl.listResultsByStudent);
+routes.post('/result/list/test', validatetoken, assignCtrl.listResultsByTest);
+routes.post('/result/list/batch', validatetoken, assignCtrl.listResultsByBatch);
+
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Admission routes' }));
 
 export default routes;
