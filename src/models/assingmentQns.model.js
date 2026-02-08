@@ -49,7 +49,7 @@ const QuestionSchema = new mongoose.Schema(
     enablePassage: { type: Boolean, default: false },
     enableInstruction: { type: Boolean, default: false },
     enableSolution: { type: Boolean, default: false },
-    correctAnswer: { type: Boolean, default: true },
+    correctAnswer: { type: String, default: true },
     tags: { type: [String], default: [] },
     status: { type: String, default: 'active' },
     createdBy: { type: String, default: null },

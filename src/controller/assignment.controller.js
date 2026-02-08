@@ -5,6 +5,7 @@ import Assignment from '../models/assignment.model.js';
 import AssignmentQns from '../models/assingmentQns.model.js';
 import ExamCategory from '../models/examcategory.model.js';
 import ExamSubCategory from '../models/examsubcategory.model.js';
+import StudentProfile from '../models/studentProfile.model.js';
 import Topic from '../models/topic.model.js';
 import SubTopic from '../models/subtopic.model.js';
 import BatchAssignEnable from '../models/batchenabledAssignment.model.js';
@@ -39,6 +40,19 @@ const validateCombo = async ({ tenantId, classNo, subjectId, topicId, subTopicId
   const subTopic = await SubTopic.findOne({ tenantId, isdeleted: false, classNo, subjectId, topicId, subTopicId }, { subTopicId: 1 }).lean();
   if (!subTopic) return { ok: false, message: 'Invalid subTopicId for given topic/class/subject' };
   return { ok: true };
+};
+
+const round2 = (n) => {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return 0;
+  return Math.round(x * 100) / 100;
+};
+
+const calcCgpa10 = (obtainedMarks, totalPossibleMarks) => {
+  const ob = Number(obtainedMarks);
+  const tot = Number(totalPossibleMarks);
+  if (!Number.isFinite(ob) || !Number.isFinite(tot) || tot <= 0) return null;
+  return round2((ob / tot) * 10);
 };
 
 const createAssignment = async (req, res, next) => {
@@ -346,6 +360,71 @@ const importAssignments = async (req, res, next) => {
   }
 };
 
+// const enableTeststoBatch = async (req, res, next) => {
+//   try {
+//     const tenantId = safeTrim(req.body?.entiId || req.body?.tenantId);
+//     const batchId = safeTrim(req.body?.batchId);
+//     const subjectId = safeTrim(req.body?.subjectId);
+//     const classNo = toNum(req.body?.classNo);
+//     const userId = safeTrim(req.body?.userId);
+//     const tests = Array.isArray(req.body?.tests) ? req.body.tests : [];
+//     if (!tenantId || !batchId || !subjectId || !tests.length) {
+//       return res.status(constants.HTTPS_BAD_REQUEST).json({
+//         status: false,
+//         message: 'entiId, batchId, subjectId and tests[] are required'
+//       });
+//     }
+//     const now = Date.now();
+//     const ops = [];
+//     for (const t of tests) {
+//       const testId = safeTrim(t?.testId);
+//       const testNo = t?.testNo === null || t?.testNo === undefined ? null : safeTrim(t?.testNo);
+//       if (!testId) continue;
+//       ops.push({
+//         updateOne: {
+//           filter: { tenantId, batchId, subjectId, testId },
+//           update: {
+//             $set: {
+//               tenantId,
+//               batchId,
+//               subjectId,
+//               classNo,
+//               testId,
+//               testNo,
+//               status: 'enabled',
+//               enabledAt: now,
+//               enabledBy: userId || null,
+//               disabledAt: null,
+//               disabledBy: null,
+//               isdeleted: false
+//             }
+//           },
+//           upsert: true
+//         }
+//       });
+//     }
+//     if (!ops.length) {
+//       return res.status(constants.HTTPS_BAD_REQUEST).json({
+//         status: false,
+//         message: 'No valid testId found in tests[]'
+//       });
+//     }
+//     await BatchAssignEnable.bulkWrite(ops, { ordered: false });
+//     return res.status(constants.HTTPS_SUCCESS).json({
+//       status: true,
+//       message: 'Tests enabled successfully'
+//     });
+//   } catch (err) {
+//     if (String(err?.code) === '11000') {
+//       return res.status(constants.HTTPS_SUCCESS).json({
+//         status: true,
+//         message: 'Tests enabled successfully'
+//       });
+//     }
+//     return next(err);
+//   }
+// };
+
 const enableTeststoBatch = async (req, res, next) => {
   try {
     const tenantId = safeTrim(req.body?.entiId || req.body?.tenantId);
@@ -361,6 +440,19 @@ const enableTeststoBatch = async (req, res, next) => {
       });
     }
     const now = Date.now();
+    const studsRaw = await StudentProfile.find({ tenantId, isdeleted: false, status: 'ACTIVE', batchId }, { _id: 0, admissionNo: 1, studentId: 1 }).lean();
+    const students = (studsRaw || [])
+      .map((s) => ({
+        admissionNo: safeTrim(s?.admissionNo),
+        studentId: safeTrim(s?.studentId) || null,
+        status: 'ASSIGNED',
+        assignedAt: now,
+        startedAt: null,
+        completedAt: null,
+        numberOfAttempts: 0,
+        cgpa: null
+      }))
+      .filter((x) => !!x.admissionNo);
     const ops = [];
     for (const t of tests) {
       const testId = safeTrim(t?.testId);
@@ -383,6 +475,9 @@ const enableTeststoBatch = async (req, res, next) => {
               disabledAt: null,
               disabledBy: null,
               isdeleted: false
+            },
+            $setOnInsert: {
+              students
             }
           },
           upsert: true
@@ -502,6 +597,118 @@ const evalObjective = (q, answerRaw) => {
   return { isCorrect: null, correctAnswerRaw: correct, marksAwarded: 0 };
 };
 
+// const submitAssignmentResult = async (req, res, next) => {
+//   try {
+//     const tenantId = pickTenantId(req);
+//     const admissionNo = safeTrim(req.body?.admissionNo);
+//     const classNo = toNum(req.body?.classNo);
+//     const subjectId = safeTrim(req.body?.subjectId);
+//     const testId = safeTrim(req.body?.testId);
+//     const numberOfReattempts = toNum(req.body?.numberOfReattempts || 1);
+//     if (!tenantId || !admissionNo || !classNo || !subjectId || !testId) {
+//       return res.status(constants.HTTPS_BAD_REQUEST).json({
+//         status: false,
+//         message: 'entiId, admissionNo, classNo, subjectId, testId are required'
+//       });
+//     }
+//     if (numberOfReattempts < 0) {
+//       return res.status(constants.HTTPS_BAD_REQUEST).json({
+//         status: false,
+//         message: 'numberOfReattempts must be >= 0'
+//       });
+//     }
+//     const assignment = await Assignment.findOne({
+//       tenantId,
+//       isdeleted: false,
+//       classNo,
+//       subjectId: new mongoose.Types.ObjectId(subjectId),
+//       testId
+//     }).lean();
+//     if (!assignment) {
+//       return res.status(constants.HTTPS_NOT_FOUND).json({ status: false, message: 'Assignment not found for this testId' });
+//     }
+//     const incomingAnswers = Array.isArray(req.body?.answers) ? req.body.answers : [];
+//     if (!incomingAnswers.length) {
+//       return res.status(constants.HTTPS_BAD_REQUEST).json({ status: false, message: 'answers[] is required' });
+//     }
+//     const questions = await AssignmentQns.find({ tenantId, testId, isdeleted: false }, { _id: 0, questionId: 1, questionType: 1, positiveMarks: 1, negativeMarks: 1, questionOptions: 1 }).lean();
+//     const qById = new Map((questions || []).map((q) => [safeTrim(q.questionId), q]));
+//     const evaluated = [];
+//     for (const a of incomingAnswers) {
+//       const qid = safeTrim(a?.questionId);
+//       if (!qid) continue;
+//       const q = qById.get(qid) || null;
+//       const isSkipped = a?.isSkipped === true;
+//       const answerRaw = isSkipped ? null : (a?.answerRaw ?? null);
+//       const pos = q ? toNum(q.positiveMarks) : toNum(a?.positiveMarks);
+//       const neg = q ? toNum(q.negativeMarks) : toNum(a?.negativeMarks);
+//       let isCorrect = null;
+//       let correctAnswerRaw = null;
+//       let marksAwarded = 0;
+//       if (q && !isSkipped) {
+//         const ev = evalObjective(q, answerRaw);
+//         isCorrect = ev.isCorrect;
+//         correctAnswerRaw = ev.correctAnswerRaw ?? null;
+//         if (isCorrect === true) marksAwarded = pos;
+//         else if (isCorrect === false) marksAwarded = neg ? -Math.abs(neg) : 0;
+//         else marksAwarded = 0;
+//       }
+//       if (isSkipped) {
+//         isCorrect = null;
+//         marksAwarded = 0;
+//       }
+//       evaluated.push({
+//         questionId: qid,
+//         answerRaw,
+//         isCorrect,
+//         isSkipped,
+//         positiveMarks: pos,
+//         negativeMarks: neg,
+//         marksAwarded,
+//         correctAnswerRaw
+//       });
+//     }
+//     const doc = await AssignmentResult.create({
+//       tenantId,
+//       admissionNo,
+//       studentId: safeTrim(req.body?.studentId) || null,
+//       batchId: safeTrim(req.body?.batchId) || null,
+//       classNo,
+//       subjectId: new mongoose.Types.ObjectId(subjectId),
+//       topicId: safeTrim(assignment.topicId),
+//       subTopicId: safeTrim(assignment.subTopicId),
+//       categoryId: safeTrim(assignment.categoryId),
+//       subCategoryId: safeTrim(assignment.subCategoryId),
+//       testId: safeTrim(assignment.testId),
+//       testNo: safeTrim(assignment.testNo),
+//       testCode: safeTrim(assignment.testCode),
+//       assignmentId: assignment._id,
+//       numberOfReattempts,
+//       startedAt: toNum(req.body?.startedAt) || null,
+//       completedAt: toNum(req.body?.completedAt) || Date.now(),
+//       totalQuestions: toNum(req.body?.totalQuestions) || evaluated.length,
+//       totalMarks: toNum(req.body?.totalMarks) || 0,
+//       answers: evaluated,
+//       status: 'completed',
+//       createdBy: safeTrim(req.body?.userId) || safeTrim(req.body?.createdBy) || null,
+//       updatedBy: safeTrim(req.body?.userId) || safeTrim(req.body?.updatedBy) || null
+//     });
+//     return res.status(constants.HTTPS_SUCCESS).json({
+//       status: true,
+//       message: 'Test result submitted',
+//       data: doc
+//     });
+//   } catch (err) {
+//     if (err?.code === 11000) {
+//       return res.status(constants.HTTPS_BAD_REQUEST).json({
+//         status: false,
+//         message: 'Duplicate submission for this student/test/reattempt'
+//       });
+//     }
+//     return next(err);
+//   }
+// };
+
 const submitAssignmentResult = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
@@ -509,6 +716,7 @@ const submitAssignmentResult = async (req, res, next) => {
     const classNo = toNum(req.body?.classNo);
     const subjectId = safeTrim(req.body?.subjectId);
     const testId = safeTrim(req.body?.testId);
+    const batchId = safeTrim(req.body?.batchId);
     const numberOfReattempts = toNum(req.body?.numberOfReattempts || 1);
     if (!tenantId || !admissionNo || !classNo || !subjectId || !testId) {
       return res.status(constants.HTTPS_BAD_REQUEST).json({
@@ -530,15 +738,26 @@ const submitAssignmentResult = async (req, res, next) => {
       testId
     }).lean();
     if (!assignment) {
-      return res.status(constants.HTTPS_NOT_FOUND).json({ status: false, message: 'Assignment not found for this testId' });
+      return res.status(constants.HTTPS_NOT_FOUND).json({
+        status: false,
+        message: 'Assignment not found for this testId'
+      });
     }
     const incomingAnswers = Array.isArray(req.body?.answers) ? req.body.answers : [];
     if (!incomingAnswers.length) {
-      return res.status(constants.HTTPS_BAD_REQUEST).json({ status: false, message: 'answers[] is required' });
+      return res.status(constants.HTTPS_BAD_REQUEST).json({
+        status: false,
+        message: 'answers[] is required'
+      });
     }
     const questions = await AssignmentQns.find({ tenantId, testId, isdeleted: false }, { _id: 0, questionId: 1, questionType: 1, positiveMarks: 1, negativeMarks: 1, questionOptions: 1 }).lean();
     const qById = new Map((questions || []).map((q) => [safeTrim(q.questionId), q]));
     const evaluated = [];
+    let obtainedMarks = 0;
+    let totalPossibleMarks = 0;
+    for (const q of questions || []) {
+      totalPossibleMarks += toNum(q?.positiveMarks);
+    }
     for (const a of incomingAnswers) {
       const qid = safeTrim(a?.questionId);
       if (!qid) continue;
@@ -562,6 +781,7 @@ const submitAssignmentResult = async (req, res, next) => {
         isCorrect = null;
         marksAwarded = 0;
       }
+      obtainedMarks += toNum(marksAwarded);
       evaluated.push({
         questionId: qid,
         answerRaw,
@@ -573,11 +793,13 @@ const submitAssignmentResult = async (req, res, next) => {
         correctAnswerRaw
       });
     }
+    const completedAt = toNum(req.body?.completedAt) || Date.now();
+    const startedAt = toNum(req.body?.startedAt) || null;
     const doc = await AssignmentResult.create({
       tenantId,
       admissionNo,
       studentId: safeTrim(req.body?.studentId) || null,
-      batchId: safeTrim(req.body?.batchId) || null,
+      batchId: batchId || null,
       classNo,
       subjectId: new mongoose.Types.ObjectId(subjectId),
       topicId: safeTrim(assignment.topicId),
@@ -589,8 +811,8 @@ const submitAssignmentResult = async (req, res, next) => {
       testCode: safeTrim(assignment.testCode),
       assignmentId: assignment._id,
       numberOfReattempts,
-      startedAt: toNum(req.body?.startedAt) || null,
-      completedAt: toNum(req.body?.completedAt) || Date.now(),
+      startedAt,
+      completedAt,
       totalQuestions: toNum(req.body?.totalQuestions) || evaluated.length,
       totalMarks: toNum(req.body?.totalMarks) || 0,
       answers: evaluated,
@@ -598,6 +820,46 @@ const submitAssignmentResult = async (req, res, next) => {
       createdBy: safeTrim(req.body?.userId) || safeTrim(req.body?.createdBy) || null,
       updatedBy: safeTrim(req.body?.userId) || safeTrim(req.body?.updatedBy) || null
     });
+    if (batchId) {
+      const cgpa = calcCgpa10(obtainedMarks, totalPossibleMarks);
+      await BatchAssignEnable.updateOne({ tenantId, batchId, subjectId, testId, isdeleted: false, students: { $exists: false } }, { $set: { students: [] } });
+      const upd1 = await BatchAssignEnable.updateOne(
+        { tenantId, batchId, subjectId, testId, isdeleted: false },
+        {
+          $set: {
+            'students.$[st].status': 'COMPLETED',
+            'students.$[st].completedAt': completedAt,
+            'students.$[st].startedAt': startedAt,
+            'students.$[st].cgpa': cgpa,
+            'students.$[st].numberOfAttempts': numberOfReattempts
+          }
+        },
+        {
+          arrayFilters: [{ 'st.admissionNo': admissionNo }]
+        }
+      );
+      if (!upd1?.modifiedCount) {
+        const bt = await BatchAssignEnable.findOne({ tenantId, batchId, subjectId, testId, isdeleted: false }, { enabledAt: 1 }).lean();
+        const assignedAt = toNum(bt?.enabledAt) || Date.now();
+        await BatchAssignEnable.updateOne(
+          { tenantId, batchId, subjectId, testId, isdeleted: false },
+          {
+            $push: {
+              students: {
+                admissionNo,
+                studentId: safeTrim(req.body?.studentId) || null,
+                status: 'COMPLETED',
+                assignedAt,
+                startedAt,
+                completedAt,
+                numberOfAttempts: numberOfReattempts,
+                cgpa
+              }
+            }
+          }
+        );
+      }
+    }
     return res.status(constants.HTTPS_SUCCESS).json({
       status: true,
       message: 'Test result submitted',

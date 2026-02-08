@@ -235,7 +235,7 @@ const createQuestionsBulk = async (req, res, next) => {
         enablePassage: q.enablePassage === true,
         enableInstruction: q.enableInstruction === true,
         enableSolution: q.enableSolution === true,
-        correctAnswer: q.correctAnswer !== false,
+        correctAnswer: String(q.correctAnswer) || '',
         tags: Array.isArray(q.tags) ? q.tags.map((t) => safeTrim(t)).filter(Boolean) : [],
         status: q.status || 'active',
         isdeleted: false,
@@ -649,7 +649,7 @@ const updateQuestion = async (req, res, next) => {
     if (enablePassage !== undefined) update.enablePassage = enablePassage === true;
     if (enableInstruction !== undefined) update.enableInstruction = enableInstruction === true;
     if (enableSolution !== undefined) update.enableSolution = enableSolution === true;
-    if (correctAnswer !== undefined) update.correctAnswer = correctAnswer !== false;
+    if (correctAnswer !== undefined) update.correctAnswer = correctAnswer || '';
     if (tags !== undefined) {
       update.tags = Array.isArray(tags) ? tags.map((t) => safeTrim(t)).filter(Boolean) : [];
     }
@@ -801,7 +801,7 @@ const createQuestion = async (req, res, next) => {
       enablePassage: enablePassage === true,
       enableInstruction: enableInstruction === true,
       enableSolution: enableSolution === true,
-      correctAnswer: correctAnswer !== false,
+      correctAnswer: String(correctAnswer) || '',
       tags: Array.isArray(tags) ? tags.map((t) => safeTrim(t)).filter(Boolean) : [],
       status: status || 'active',
       isdeleted: false,
