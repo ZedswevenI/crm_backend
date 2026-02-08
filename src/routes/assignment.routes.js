@@ -18,7 +18,7 @@ routes.post('/import', validatetoken, assignCtrl.importAssignments);
 routes.post('/question/image/upload', validatetoken, uploadQuestionImage, questionCtrl.uploadSingleQuestionImage);
 routes.post('/question/image/download', validatetoken, questionCtrl.getQuestionImage);
 
-routes.post('/question/bulkcreate', validatetoken, questionCtrl.createQuestionsBulk);
+routes.post('/question/bulkcreate', questionCtrl.createQuestionsBulk);
 routes.post('/question/list/bytopic', validatetoken, questionCtrl.listQuestionsByTopic);
 routes.post('/question/list/bytest', validatetoken, questionCtrl.listQuestionsByTestId);
 routes.post('/question/update/bulk/bytest', validatetoken, questionCtrl.bulkUpdateByTestId);
@@ -33,10 +33,10 @@ routes.post('/enableto/batch', validatetoken, assignCtrl.enableTeststoBatch);
 routes.post('/disableto/batch', validatetoken, assignCtrl.disableTeststoBatch);
 routes.post('/enabledto/batch/list', validatetoken, assignCtrl.listEnabledTestsforBatch);
 
-routes.post('/result/submit', validatetoken, assignCtrl.submitAssignmentResult);
-routes.post('/result/list/student', validatetoken, assignCtrl.listResultsByStudent);
-routes.post('/result/list/test', validatetoken, assignCtrl.listResultsByTest);
-routes.post('/result/list/batch', validatetoken, assignCtrl.listResultsByBatch);
+routes.post('/result/submit', assignCtrl.submitAssignmentResult);
+routes.post('/result/list/student', assignCtrl.listResultsByStudent);
+routes.post('/result/list/test', assignCtrl.listResultsByTest);
+routes.post('/result/list/batch', assignCtrl.listResultsByBatch);
 
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Admission routes' }));
 

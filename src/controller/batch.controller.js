@@ -4,6 +4,7 @@ import Batch from '../models/batch.model.js';
 import StudentProfile from '../models/studentProfile.model.js';
 import Program from '../models/program.model.js';
 import AcademicYear from '../models/academicYear.model.js';
+import BatchAssignEnable from '../models/batchenabledAssignment.model.js';
 
 const pickTenantId = (req) => String(req?.body?.tenantId || req?.body?.entiId || '').trim();
 const safeTrim = (v) => (v === undefined || v === null ? '' : String(v).trim());
@@ -37,6 +38,52 @@ const refreshStudentCount = async (tenantId, batchId, session) => {
   if (session) await Batch.updateOne({ tenantId, batchId: safeTrim(batchId), isdeleted: false }, upd, { session });
   else await Batch.updateOne({ tenantId, batchId: safeTrim(batchId), isdeleted: false }, upd);
   return cnt;
+};
+
+const backfillStudentsIntoEnabledTests = async (tenantId, batchId, studentIds, session) => {
+  const studs = await StudentProfile.find({ tenantId, isdeleted: false, status: 'ACTIVE', studentId: { $in: studentIds } }, { _id: 0, studentId: 1, admissionNo: 1, cgpa: 1 })
+    .lean()
+    .session(session);
+  const normalizedStuds = (studs || [])
+    .map((s) => ({
+      studentId: safeTrim(s?.studentId),
+      admissionNo: safeTrim(s?.admissionNo),
+      cgpa: s?.cgpa === null || s?.cgpa === undefined ? null : toNum(s?.cgpa)
+    }))
+    .filter((s) => !!s.studentId && !!s.admissionNo);
+  if (!normalizedStuds.length) return;
+  const enabledTests = await BatchAssignEnable.find({ tenantId, batchId, isdeleted: false, status: 'enabled' }, { _id: 1, enabledAt: 1 }).lean().session(session);
+  if (!enabledTests.length) return;
+  const now = Date.now();
+  const ops = [];
+  for (const t of enabledTests) {
+    for (const s of normalizedStuds) {
+      ops.push({
+        updateOne: {
+          filter: {
+            _id: t._id,
+            students: { $not: { $elemMatch: { admissionNo: s.admissionNo } } }
+          },
+          update: {
+            $push: {
+              students: {
+                studentId: s.studentId,
+                admissionNo: s.admissionNo,
+                cgpa: s.cgpa,
+                status: 'ASSIGNED',
+                assignedAt: now,
+                startedAt: null,
+                completedAt: null,
+                attempts: 0
+              }
+            }
+          }
+        }
+      });
+    }
+  }
+  if (!ops.length) return;
+  await BatchAssignEnable.bulkWrite(ops, { ordered: false, session });
 };
 
 const validateStudentsForBatch = async (tenantId, batch, studentIds, mode) => {
@@ -494,7 +541,6 @@ const listEligibleStudentsForBatch = async (req, res, next) => {
 const assignStudentsToBatch = async (req, res, next) => {
   const session = await mongoose.startSession();
   try {
-    console.log(req.body);
     const tenantId = pickTenantId(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
     const payload = req.body || {};
@@ -511,13 +557,13 @@ const assignStudentsToBatch = async (req, res, next) => {
     const updatedBy = payload.userId || null;
     session.startTransaction();
     await StudentProfile.updateMany({ tenantId, isdeleted: false, status: 'ACTIVE', studentId: { $in: studentIds }, batchId: null }, { $set: { batchId: b.batchId, batchCode: b.batchCode, updatedBy } }, { session });
+    await backfillStudentsIntoEnabledTests(tenantId, b.batchId, studentIds, session);
     const cnt = await refreshStudentCount(tenantId, b.batchId, session);
     await Batch.updateOne({ tenantId, batchId: b.batchId, isdeleted: false }, { $set: { updatedBy } }, { session });
     await session.commitTransaction();
     session.endSession();
     return res.status(constants.HTTPS_SUCCESS).json({ status: true, message: 'Students assigned to batch', count: cnt });
   } catch (err) {
-    console.log('err ', err);
     try {
       await session.abortTransaction();
       session.endSession();
@@ -531,41 +577,30 @@ const moveStudentsToBatch = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-
     const payload = req.body || {};
     const toBatchId = safeTrim(payload.toBatchId || payload.batchId);
     const studentIds = normalizeIdList(payload.studentIds);
-
     if (!toBatchId) return res.status(400).json({ status: false, message: 'toBatchId (batchId) is required' });
     if (!studentIds.length) return res.status(400).json({ status: false, message: 'studentIds must be a non-empty array' });
-
     const toBatch = await Batch.findOne({ tenantId, batchId: toBatchId, isdeleted: false });
     if (!toBatch) return res.status(404).json({ status: false, message: 'Target batch not found' });
-
     const guard = ensureBatchEditable(toBatch);
     if (!guard.ok) return res.status(400).json({ status: false, message: guard.msg });
-
     const check = await validateStudentsForBatch(tenantId, toBatch, studentIds, 'MOVE_ALLOWED');
     if (!check.ok) return res.status(400).json({ status: false, message: check.msg });
-
     const updatedBy = payload.userId || null;
     const students = check.students || [];
     const fromBatchIds = Array.from(new Set(students.map((s) => safeTrim(s.batchId)).filter((x) => !!x && x !== toBatch.batchId)));
-
     session.startTransaction();
-
     await StudentProfile.updateMany({ tenantId, isdeleted: false, status: 'ACTIVE', studentId: { $in: studentIds } }, { $set: { batchId: toBatch.batchId, batchCode: toBatch.batchCode, updatedBy } }, { session });
-
-    // refresh counts (to + from)
+    await backfillStudentsIntoEnabledTests(tenantId, toBatch.batchId, studentIds, session);
     const all = [toBatch.batchId, ...fromBatchIds];
     for (const bid of all) {
       await refreshStudentCount(tenantId, bid, session);
       await Batch.updateOne({ tenantId, batchId: bid, isdeleted: false }, { $set: { updatedBy } }, { session });
     }
-
     await session.commitTransaction();
     session.endSession();
-
     return res.status(constants.HTTPS_SUCCESS).json({
       status: true,
       message: 'Students moved to batch',
