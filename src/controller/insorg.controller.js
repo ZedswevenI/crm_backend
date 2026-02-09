@@ -758,6 +758,13 @@ const listSubTopics = async (req, res, next) => {
           model: 'subject',
           select: 'subjectName subjectCode'
         })
+        .populate({
+          path: 'topicId',
+          model: 'topic',
+          localField: 'topicId',
+          foreignField: 'topicId',
+          select: 'topicName topicCode'
+        })
         .lean();
       return res.status(constants.HTTPS_SUCCESS).send({
         status: true,
@@ -775,6 +782,13 @@ const listSubTopics = async (req, res, next) => {
         path: 'subjectId',
         model: 'subject',
         select: 'subjectName subjectCode'
+      })
+      .populate({
+        path: 'topicId',
+        model: 'topic',
+        localField: 'topicId',
+        foreignField: 'topicId',
+        select: 'topicName topicCode'
       })
       .lean();
     return res.status(constants.HTTPS_SUCCESS).send({

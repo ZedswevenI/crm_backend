@@ -16,6 +16,7 @@ import Staff from '../models/staff.model.js';
 import Subject from '../models/subject.model.js';
 import Department from '../models/department.model.js';
 import BankAccount from '../models/insbankAccount.model.js';
+import CenterVenue from '../models/centerVenue.model.js';
 
 dotenv.config();
 const Rounds = 12;
@@ -741,6 +742,121 @@ const changePassword = async (req, res, next) => {
     return res.status(200).json({ status: true, message: 'Password updated successfully' });
   } catch (err) {
     logger?.error?.({ err }, 'Error in changePassword');
+    return next(err);
+  }
+};
+
+const importUsers = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    if (!tenantId) {
+      return res.status(constants.HTTPS_BAD_REQUEST || 400).json({ status: false, message: 'tenantId (entiId) is required' });
+    }
+    const modeRaw = safeTrim(req.body.mode);
+    const mode = modeRaw === 'insert' ? 'insert' : 'upsert';
+    const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
+    if (!rows.length) {
+      return res.status(constants.HTTPS_BAD_REQUEST || 400).json({ status: false, message: 'rows is required' });
+    }
+    const ops = [];
+    let inserted = 0;
+    let updated = 0;
+    let skipped = 0;
+    for (const r0 of rows) {
+      const r = r0 || {};
+      const name = safeTrim(r.name);
+      const email = safeLower(r.email);
+      const phone = safeTrim(r.phone);
+      const roleLevel = safeTrim(r.roleLevel) || 'L4';
+      const roleLabel = ROLE_MAP[roleLevel] || safeTrim(r.roleLabel) || ROLE_MAP.L4;
+      const status = safeTrim(r.status) || 'Active';
+      const empCode = r.empCode !== undefined ? (r.empCode ? safeTrim(r.empCode) : null) : null;
+      const centerId = r.centerId !== undefined ? (r.centerId ? safeTrim(r.centerId) : null) : null;
+      const centerName = r.centerName !== undefined ? (r.centerName ? safeTrim(r.centerName) : null) : null;
+      const rawPassword = safeTrim(r.password) || 'Welcome@123';
+      const hashedPassword = await bcrypt.hash(rawPassword, Rounds);
+      if (!name || !email || !phone) {
+        skipped++;
+        continue;
+      }
+      const filter = { tenantId, email, isdeleted: false };
+      if (mode === 'insert') {
+        ops.push({
+          updateOne: {
+            filter,
+            update: {
+              $setOnInsert: {
+                tenantId,
+                userId: uuid(),
+                name,
+                email,
+                phone,
+                password: hashedPassword,
+                empCode,
+                roleLevel,
+                roleLabel,
+                centerId,
+                centerName,
+                status,
+                isdeleted: false
+              }
+            },
+            upsert: true
+          }
+        });
+      } else {
+        ops.push({
+          updateOne: {
+            filter,
+            update: {
+              $set: {
+                name,
+                phone,
+                empCode,
+                roleLevel,
+                roleLabel,
+                centerId,
+                centerName,
+                status
+              },
+              $setOnInsert: {
+                tenantId,
+                userId: uuid(),
+                email,
+                password: hashedPassword,
+                isdeleted: false
+              }
+            },
+            upsert: true
+          }
+        });
+      }
+    }
+    if (!ops.length) {
+      return res.status(constants.HTTPS_SUCCESS || 200).json({
+        status: true,
+        message: 'No valid rows to import',
+        data: { mode, inserted: 0, updated: 0, skipped }
+      });
+    }
+    const bulkRes = await User.bulkWrite(ops, { ordered: false });
+    inserted = bulkRes?.upsertedCount || 0;
+    updated = bulkRes?.modifiedCount || 0;
+    return res.status(constants.HTTPS_SUCCESS || 200).json({
+      status: true,
+      message: 'User import completed',
+      data: {
+        mode,
+        inserted,
+        updated,
+        skipped
+      }
+    });
+  } catch (err) {
+    if (err && err.code === 11000) {
+      const dupField = Object.keys(err.keyPattern || {})[0] || 'unique field';
+      return res.status(409).json({ status: false, message: `Duplicate ${dupField}.` });
+    }
     return next(err);
   }
 };
@@ -1980,6 +2096,154 @@ const bulkImportBankAccounts = async (req, res, next) => {
   }
 };
 
+const createVenue = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    if (!tenantId) {
+      return res.status(constants.HTTPS_BAD_REQUEST || 400).json({ status: false, message: 'tenantId (entiId) is required' });
+    }
+    const centerRecId = safeTrim(req.body.centerRecId);
+    const venueName = safeTrim(req.body.venueName);
+    if (!centerRecId || !venueName) {
+      return res.status(constants.HTTPS_BAD_REQUEST || 400).json({
+        status: false,
+        message: 'centerRecId and venueName are required'
+      });
+    }
+    const center = await Center.findOne({ _id: centerRecId, tenantId, isdeleted: false }).lean();
+    if (!center) {
+      return res.status(constants.HTTPS_NOT_FOUND || 404).json({ status: false, message: 'Center not found' });
+    }
+    const doc = await CenterVenue.create({
+      tenantId,
+      centerRecId,
+      venueName,
+      address1: req.body.address1 ? safeTrim(req.body.address1) : null,
+      address2: req.body.address2 ? safeTrim(req.body.address2) : null,
+      area: req.body.area ? safeTrim(req.body.area).toLowerCase() : null,
+      city: req.body.city ? safeTrim(req.body.city) : null,
+      state: req.body.state ? safeTrim(req.body.state) : null,
+      pincode: req.body.pincode ? safeTrim(req.body.pincode) : null,
+      capacity: req.body.capacity !== undefined && req.body.capacity !== null && req.body.capacity !== '' ? Number(req.body.capacity) : null,
+      status: req.body.status || 'Active',
+      isdeleted: false
+    });
+    return res.status(constants.HTTPS_CREATED || 201).json({
+      status: true,
+      message: 'Venue created successfully',
+      data: doc
+    });
+  } catch (err) {
+    if (err && err.code === 11000) {
+      return res.status(409).json({ status: false, message: 'Duplicate venueName.' });
+    }
+    return next(err);
+  }
+};
+
+const listVenues = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    if (!tenantId) {
+      return res.status(constants.HTTPS_BAD_REQUEST || 400).json({ status: false, message: 'tenantId (entiId) is required' });
+    }
+    const centerRecId = safeTrim(req.body.centerRecId);
+    if (!centerRecId) {
+      return res.status(constants.HTTPS_BAD_REQUEST || 400).json({ status: false, message: 'centerRecId is required' });
+    }
+    const sort = req.query.sort || '-createdAt';
+    const search = safeTrim(req.query.search);
+    const status = safeTrim(req.query.status);
+    const query = { tenantId, centerRecId, isdeleted: false };
+    if (status) query.status = status;
+    if (search) {
+      query.$or = [{ venueName: { $regex: search, $options: 'i' } }, { area: { $regex: search, $options: 'i' } }, { city: { $regex: search, $options: 'i' } }];
+    }
+    const page = parseInt(req.query.page, 10) || 1;
+    const limit = parseInt(req.query.limit, 10) || 10;
+    const skip = (page - 1) * limit;
+    const count = await CenterVenue.countDocuments(query);
+    const data = await CenterVenue.find(query).sort(sort).skip(skip).limit(limit);
+    return res.status(constants.HTTPS_SUCCESS || 200).json({
+      status: true,
+      message: 'Venue list retrieved successfully',
+      data,
+      page,
+      count
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const viewVenue = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const recId = safeTrim(req.body.recId);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    if (!recId) return res.status(400).json({ status: false, message: 'recId is required' });
+    const doc = await CenterVenue.findOne({ _id: recId, tenantId, isdeleted: false }).lean();
+    if (!doc) return res.status(404).json({ status: false, message: 'Venue not found' });
+    return res.status(constants.HTTPS_SUCCESS || 200).json({ status: true, data: doc });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const updateVenue = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const recId = safeTrim(req.body.recId);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    if (!recId) return res.status(400).json({ status: false, message: 'recId is required' });
+    const updateDoc = {};
+    if (req.body.venueName !== undefined) updateDoc.venueName = safeTrim(req.body.venueName);
+    if (req.body.address1 !== undefined) updateDoc.address1 = safeTrim(req.body.address1) || null;
+    if (req.body.address2 !== undefined) updateDoc.address2 = safeTrim(req.body.address2) || null;
+    if (req.body.area !== undefined) updateDoc.area = safeTrim(req.body.area).toLowerCase() || null;
+    if (req.body.city !== undefined) updateDoc.city = safeTrim(req.body.city) || null;
+    if (req.body.state !== undefined) updateDoc.state = safeTrim(req.body.state) || null;
+    if (req.body.pincode !== undefined) updateDoc.pincode = safeTrim(req.body.pincode) || null;
+    if (req.body.capacity !== undefined) {
+      updateDoc.capacity = req.body.capacity === null || req.body.capacity === '' ? null : Number(req.body.capacity);
+    }
+    if (req.body.status !== undefined) updateDoc.status = req.body.status;
+    if (Object.keys(updateDoc).length === 0) {
+      return res.status(400).json({ status: false, message: 'No fields to update' });
+    }
+    const updated = await CenterVenue.findOneAndUpdate({ _id: recId, tenantId, isdeleted: false }, { $set: updateDoc }, { new: true });
+    if (!updated) return res.status(404).json({ status: false, message: 'Venue not found or already deleted' });
+    return res.status(constants.HTTPS_SUCCESS || 200).json({
+      status: true,
+      message: 'Venue updated successfully',
+      data: updated
+    });
+  } catch (err) {
+    if (err && err.code === 11000) {
+      return res.status(409).json({ status: false, message: 'Duplicate venueName.' });
+    }
+    return next(err);
+  }
+};
+
+const deleteVenue = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const recId = safeTrim(req.body.recId);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    if (!recId) return res.status(400).json({ status: false, message: 'recId is required' });
+    const deleted = await CenterVenue.findOneAndUpdate({ _id: recId, tenantId, isdeleted: false }, { $set: { isdeleted: true } }, { new: true });
+    if (!deleted) return res.status(404).json({ status: false, message: 'Venue not found or already deleted' });
+    return res.status(constants.HTTPS_SUCCESS || 200).json({
+      status: true,
+      message: 'Venue deleted successfully',
+      data: deleted
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   createInstitute,
   viewInstitute,
@@ -2016,5 +2280,11 @@ export default {
   listBankAccounts,
   viewBankAccount,
   deleteBankAccount,
-  bulkImportBankAccounts
+  bulkImportBankAccounts,
+  createVenue,
+  listVenues,
+  viewVenue,
+  updateVenue,
+  deleteVenue,
+  importUsers
 };

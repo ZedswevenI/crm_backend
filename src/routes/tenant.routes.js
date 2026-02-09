@@ -20,6 +20,13 @@ routes.post('/center/edit', validatetoken, tenantCtrl.updateCenter);
 routes.post('/center/delete', validatetoken, tenantCtrl.deleteCenter);
 routes.post('/center/view', validatetoken, tenantCtrl.viewCenter);
 
+// Center Venue Routes
+routes.post('/venue/create', validatetoken, tenantCtrl.createVenue);
+routes.post('/venue/list', validatetoken, tenantCtrl.listVenues);
+routes.post('/venue/edit', validatetoken, tenantCtrl.updateVenue);
+routes.post('/venue/delete', validatetoken, tenantCtrl.deleteVenue);
+routes.post('/venue/view', validatetoken, tenantCtrl.viewVenue);
+
 // User Routes
 routes.post('/user/login', tenantCtrl.Loginuser);
 routes.post('/user/auth/refresh', tenantCtrl.refreshToken);
@@ -30,6 +37,7 @@ routes.post('/user/list', validatetoken, tenantCtrl.listUsers);
 routes.post('/user/edit', validatetoken, tenantCtrl.updateUser);
 routes.post('/user/delete', validatetoken, tenantCtrl.deleteUser);
 routes.post('/user/view', validatetoken, tenantCtrl.viewUser);
+routes.post('/user/import', validate, tenantCtrl.importUsers);
 
 // program Routes
 routes.post('/program/create', validatetoken, programCtrl.createProgram);
