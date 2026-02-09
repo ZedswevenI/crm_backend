@@ -20,6 +20,13 @@ routes.post('/center/edit', validatetoken, tenantCtrl.updateCenter);
 routes.post('/center/delete', validatetoken, tenantCtrl.deleteCenter);
 routes.post('/center/view', validatetoken, tenantCtrl.viewCenter);
 
+// Center Venue Routes
+routes.post('/venue/create', validatetoken, tenantCtrl.createVenue);
+routes.post('/venue/list', validatetoken, tenantCtrl.listVenues);
+routes.post('/venue/edit', validatetoken, tenantCtrl.updateVenue);
+routes.post('/venue/delete', validatetoken, tenantCtrl.deleteVenue);
+routes.post('/venue/view', validatetoken, tenantCtrl.viewVenue);
+
 // User Routes
 routes.post('/user/login', tenantCtrl.Loginuser);
 routes.post('/user/auth/refresh', tenantCtrl.refreshToken);
@@ -30,6 +37,7 @@ routes.post('/user/list', validatetoken, tenantCtrl.listUsers);
 routes.post('/user/edit', validatetoken, tenantCtrl.updateUser);
 routes.post('/user/delete', validatetoken, tenantCtrl.deleteUser);
 routes.post('/user/view', validatetoken, tenantCtrl.viewUser);
+routes.post('/user/import', validate, tenantCtrl.importUsers);
 
 // program Routes
 routes.post('/program/create', validatetoken, programCtrl.createProgram);
@@ -94,12 +102,16 @@ routes.post('/topic/create', validatetoken, manageCtrl.createTopic);
 routes.post('/topic/list', validatetoken, manageCtrl.listTopics);
 routes.post('/topic/delete', validatetoken, manageCtrl.deleteTopic);
 routes.post('/topic/import', validatetoken, manageCtrl.bulkUpsertTopics);
+routes.post('/topic/view', validatetoken, manageCtrl.viewTopic);
+routes.post('/topic/update', validatetoken, manageCtrl.updateTopic);
 
 // Sub Topics
 routes.post('/subtopic/create', validatetoken, manageCtrl.createSubTopic);
 routes.post('/subtopic/list', validatetoken, manageCtrl.listSubTopics);
 routes.post('/subtopic/delete', validatetoken, manageCtrl.deleteSubTopic);
 routes.post('/subtopic/import', validatetoken, manageCtrl.bulkUpsertSubTopics);
+routes.post('/subtopic/view', validatetoken, manageCtrl.viewSubTopic);
+routes.post('/subtopic/update', validatetoken, manageCtrl.updateSubTopic);
 
 // Exam Category
 routes.post('/exam/category/create', validatetoken, manageCtrl.createExamCategory);
@@ -107,6 +119,7 @@ routes.post('/exam/category/list', validatetoken, manageCtrl.listExamCategories)
 routes.post('/exam/category/delete', validatetoken, manageCtrl.deleteExamCategory);
 routes.post('/exam/category/update', validatetoken, manageCtrl.editExamCategory);
 routes.post('/exam/category/import', validatetoken, manageCtrl.bulkUpsertExamCategories);
+routes.post('/exam/category/view', validatetoken, manageCtrl.viewExamCategory);
 
 // Sub Topics
 routes.post('/exam/subcategory/create', validatetoken, manageCtrl.createExamSubCategory);
@@ -114,6 +127,7 @@ routes.post('/exam/subcategory/list', validatetoken, manageCtrl.listExamSubCateg
 routes.post('/exam/subcategory/delete', validatetoken, manageCtrl.deleteExamSubCategory);
 routes.post('/exam/subcategory/update', validatetoken, manageCtrl.editExamSubCategory);
 routes.post('/exam/subcategory/import', validatetoken, manageCtrl.bulkUpsertExamSubCategories);
+routes.post('/exam/subcategory/view', validatetoken, manageCtrl.viewExamSubCategory);
 
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Tenant routes' }));
 

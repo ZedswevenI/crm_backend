@@ -343,17 +343,17 @@ const updateProgramExamMappings = async (req, res, next) => {
       const categoryId = safeTrim(r?.categoryId);
       const subCategoryId = safeTrim(r?.subCategoryId);
       if (!categoryId || !subCategoryId) continue;
-
       const key = `${categoryId}__${subCategoryId}`;
       if (!map.has(key)) {
+        const so = toNum(r?.sortOrder);
         map.set(key, {
           categoryId,
           subCategoryId,
-          sortOrder: toNum(r?.sortOrder)
+          sortOrder: Number.isFinite(so) ? so : 0
         });
       }
     }
-    const cleanRows = Array.from(map.values());
+    let cleanRows = Array.from(map.values());
     if (!cleanRows.length) {
       return res.status(400).json({ status: false, message: 'No valid rows (categoryId/subCategoryId missing)' });
     }
@@ -377,7 +377,16 @@ const updateProgramExamMappings = async (req, res, next) => {
         data: bad.slice(0, 20)
       });
     }
-    const updated = await Program.findOneAndUpdate({ _id: recId, tenantId, isdeleted: false }, { $set: { examMappings: cleanRows } }, { new: true, runValidators: true }).lean();
+    cleanRows.sort((a, b) => {
+      const as = Number.isFinite(a.sortOrder) && a.sortOrder > 0 ? a.sortOrder : Number.MAX_SAFE_INTEGER;
+      const bs = Number.isFinite(b.sortOrder) && b.sortOrder > 0 ? b.sortOrder : Number.MAX_SAFE_INTEGER;
+      if (as !== bs) return as - bs;
+      const ak = `${a.categoryId}__${a.subCategoryId}`;
+      const bk = `${b.categoryId}__${b.subCategoryId}`;
+      return ak.localeCompare(bk);
+    });
+    cleanRows = cleanRows.map((r, idx) => ({ ...r, sortOrder: idx + 1 }));
+    const updated = await Program.findOneAndUpdate({ _id: recId, tenantId, isdeleted: false }, { $set: { examMappings: cleanRows, updatedBy: userId || null } }, { new: true, runValidators: true }).lean();
     return res.status(200).json({
       status: true,
       message: 'Program exam mappings updated',
