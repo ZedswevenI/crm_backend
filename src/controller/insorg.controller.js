@@ -532,27 +532,43 @@ const bulkUpsertTopics = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     const userId = safeTrim(req.body?.userId || req.user?.userId);
+
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-    const classNo = toNum(req.body?.classNo);
-    const subjectIdRaw = req.body?.subjectId;
+
     const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
-    if (!ensureClassNo(classNo) || !subjectIdRaw) {
-      return res.status(400).json({ status: false, message: 'classNo (6..13) and subjectId are required' });
-    }
-    if (!mongoose.Types.ObjectId.isValid(String(subjectIdRaw))) {
-      return res.status(400).json({ status: false, message: 'Invalid subjectId' });
-    }
-    const subjectId = new mongoose.Types.ObjectId(String(subjectIdRaw));
-    const subj = await Subject.findOne({ tenantId, _id: subjectId, isdeleted: false }, { _id: 1 }).lean();
-    if (!subj) return res.status(400).json({ status: false, message: 'Subject not found' });
     if (!rows.length) return res.status(400).json({ status: false, message: 'rows is required (non-empty array)' });
+
+    // Optional defaults (if frontend sends at top-level)
+    const defaultClassNo = toNum(req.body?.classNo);
+    const defaultSubjectIdRaw = req.body?.subjectId;
+
+    // 1) Clean + validate + dedupe rows by (classNo + subjectId + topicName)
     const map = new Map();
+    const subjectIdStrSet = new Set();
+
+    let badRowCount = 0;
+
     for (const r of rows) {
+      const classNo = toNum(r?.classNo ?? defaultClassNo);
+      const subjectIdRaw = r?.subjectId ?? defaultSubjectIdRaw;
+
       const topicName = normName(r?.topicName);
-      if (!topicName) continue;
-      const key = topicName.toLowerCase();
+      if (!ensureClassNo(classNo) || !subjectIdRaw || !topicName) {
+        badRowCount++;
+        continue;
+      }
+
+      const subjectIdStr = String(subjectIdRaw).trim();
+      if (!mongoose.Types.ObjectId.isValid(subjectIdStr)) {
+        badRowCount++;
+        continue;
+      }
+      subjectIdStrSet.add(subjectIdStr);
+      const key = `${classNo}__${subjectIdStr.toLowerCase()}__${topicName.toLowerCase()}`;
       if (!map.has(key)) {
         map.set(key, {
+          classNo,
+          subjectIdStr,
           topicName,
           topicCode: safeTrim(r?.topicCode) || null,
           sortOrder: toNum(r?.sortOrder)
@@ -560,40 +576,72 @@ const bulkUpsertTopics = async (req, res, next) => {
       }
     }
     const cleanRows = Array.from(map.values());
-    if (!cleanRows.length) return res.status(400).json({ status: false, message: 'No valid topic rows (topicName missing)' });
-    const ops = cleanRows.map((r) => ({
-      updateOne: {
-        filter: { tenantId, classNo, subjectId, topicName: r.topicName, isdeleted: false },
-        update: {
-          $set: {
-            topicCode: r.topicCode,
-            sortOrder: r.sortOrder,
-            status: 'Active',
-            updatedBy: userId || null
-          },
-          $setOnInsert: {
+    if (!cleanRows.length) {
+      return res.status(400).json({
+        status: false,
+        message: 'No valid topic rows. Each row requires classNo (6..13), subjectId (ObjectId), and topicName'
+      });
+    }
+    const subjectIds = Array.from(subjectIdStrSet).map((id) => new mongoose.Types.ObjectId(id));
+    const subjectDocs = await Subject.find({ tenantId, _id: { $in: subjectIds }, isdeleted: false }, { _id: 1 }).lean();
+    const validSubjectSet = new Set(subjectDocs.map((s) => String(s._id)));
+    const finalRows = cleanRows.filter((r) => validSubjectSet.has(r.subjectIdStr));
+    if (!finalRows.length) {
+      return res.status(400).json({
+        status: false,
+        message: 'No rows accepted. Subject not found / invalid for given tenant.'
+      });
+    }
+    const ops = finalRows.map((r) => {
+      const subjectId = new mongoose.Types.ObjectId(r.subjectIdStr);
+      return {
+        updateOne: {
+          filter: {
             tenantId,
-            classNo,
+            classNo: r.classNo,
             subjectId,
             topicName: r.topicName,
-            topicCode: r.topicCode,
-            sortOrder: r.sortOrder,
-            status: 'Active',
-            isdeleted: false,
-            createdBy: userId || null
-          }
-        },
-        upsert: true
-      }
-    }));
+            isdeleted: false
+          },
+          update: {
+            $set: {
+              topicCode: r.topicCode,
+              sortOrder: r.sortOrder,
+              status: 'Active',
+              updatedBy: userId || null
+            },
+            $setOnInsert: {
+              tenantId,
+              classNo: r.classNo,
+              subjectId,
+              topicName: r.topicName,
+              isdeleted: false,
+              createdBy: userId || null
+            }
+          },
+          upsert: true
+        }
+      };
+    });
     const wr = await Topic.bulkWrite(ops, { ordered: false });
-    const saved = await Topic.find({ tenantId, classNo, subjectId, isdeleted: false }, { _id: 0 }).sort({ sortOrder: 1, createdAt: 1 }).lean();
+    const saved = await Topic.find(
+      {
+        tenantId,
+        isdeleted: false,
+        subjectId: { $in: subjectIds.filter((id) => validSubjectSet.has(String(id))) }
+      },
+      { _id: 0 }
+    )
+      .sort({ classNo: 1, sortOrder: 1, createdAt: 1 })
+      .lean();
     return res.status(200).json({
       status: true,
       message: 'Bulk topics upserted',
       data: {
         input: rows.length,
-        accepted: cleanRows.length,
+        accepted: finalRows.length,
+        skipped: rows.length - finalRows.length,
+        invalidRows: badRowCount,
         matched: wr.matchedCount || 0,
         modified: wr.modifiedCount || 0,
         upserted: wr.upsertedCount || 0,
@@ -833,7 +881,7 @@ const deleteSubTopic = async (req, res, next) => {
 const bulkUpsertSubTopics = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
-    const userId = safeTrim(req.body?.userId || req.user?.userId);
+    const userId = safeTrim(req.body?.userId);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
     const classNo = toNum(req.body?.classNo);
     const subjectIdRaw = req.body?.subjectId;
@@ -863,7 +911,9 @@ const bulkUpsertSubTopics = async (req, res, next) => {
       }
     }
     const cleanRows = Array.from(map.values());
-    if (!cleanRows.length) return res.status(400).json({ status: false, message: 'No valid subtopic rows (subTopicName missing)' });
+    if (!cleanRows.length) {
+      return res.status(400).json({ status: false, message: 'No valid subtopic rows (subTopicName missing)' });
+    }
     const ops = cleanRows.map((r) => ({
       updateOne: {
         filter: { tenantId, classNo, subjectId, topicId, subTopicName: r.subTopicName, isdeleted: false },
@@ -880,9 +930,6 @@ const bulkUpsertSubTopics = async (req, res, next) => {
             subjectId,
             topicId,
             subTopicName: r.subTopicName,
-            subTopicCode: r.subTopicCode,
-            sortOrder: r.sortOrder,
-            status: 'Active',
             isdeleted: false,
             createdBy: userId || null
           }
@@ -1014,8 +1061,6 @@ const bulkUpsertExamCategories = async (req, res, next) => {
           $setOnInsert: {
             tenantId,
             categoryName: r.categoryName,
-            categoryCode: r.categoryCode,
-            status: 'Active',
             isdeleted: false,
             createdBy: userId || null
           }
@@ -1384,9 +1429,6 @@ const bulkUpsertExamSubCategories = async (req, res, next) => {
             tenantId,
             categoryId,
             subCategoryName: r.subCategoryName,
-            subCategoryCode: r.subCategoryCode,
-            sortOrder: r.sortOrder,
-            status: 'Active',
             isdeleted: false,
             createdBy: userId || null
           }

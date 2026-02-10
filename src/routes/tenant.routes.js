@@ -37,7 +37,7 @@ routes.post('/user/list', validatetoken, tenantCtrl.listUsers);
 routes.post('/user/edit', validatetoken, tenantCtrl.updateUser);
 routes.post('/user/delete', validatetoken, tenantCtrl.deleteUser);
 routes.post('/user/view', validatetoken, tenantCtrl.viewUser);
-routes.post('/user/import', validate, tenantCtrl.importUsers);
+routes.post('/user/import', validatetoken, tenantCtrl.importUsers);
 
 // program Routes
 routes.post('/program/create', validatetoken, programCtrl.createProgram);
