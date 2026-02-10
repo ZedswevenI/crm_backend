@@ -3,7 +3,7 @@ import constants from '../helpers/constants.js';
 import Batch from '../models/batch.model.js';
 import StudentProfile from '../models/studentProfile.model.js';
 import Program from '../models/program.model.js';
-import AcademicYear from '../models/academicYear.model.js';
+import AcademicYearConfig from '../models/academicYear.model.js';
 import BatchAssignEnable from '../models/batchenabledAssignment.model.js';
 
 const pickTenantId = (req) => String(req?.body?.tenantId || req?.body?.entiId || '').trim();
@@ -128,7 +128,7 @@ const validateStudentsForBatch = async (tenantId, batch, studentIds, mode) => {
 };
 
 const getAcademicYearOrderMap = async (tenantId, programId) => {
-  const docs = await AcademicYear.find({ tenantId, programId, isdeleted: false, status: 'Active' }, { _id: 0, years: 1 }).sort({ startOn: 1 }).lean();
+  const docs = await AcademicYearConfig.find({ tenantId, programId, isdeleted: false, status: 'Active' }, { _id: 0, years: 1 }).sort({ startOn: 1 }).lean();
   console.log('years ', docs);
   const flatYears = [];
   for (const d of docs || []) {
@@ -761,6 +761,87 @@ const getBatchSubjects = async (req, res, next) => {
   }
 };
 
+const normalizeAy = (s) => safeTrim(s).replace(/\s+/g, '').replace(/–/g, '-');
+const makeCohortAy = (courseStartYear) => {
+  const y = Number(courseStartYear);
+  if (!Number.isFinite(y) || y <= 0) return '';
+  return `${y}-${y + 1}`;
+};
+
+const pickActiveAcademicYearFromCfg = (yearsArr) => {
+  const now = Date.now();
+  const arr = Array.isArray(yearsArr) ? yearsArr : [];
+  const hit = arr.find((y) => {
+    const s = y?.startOn ?? null;
+    const e = y?.endOn ?? null;
+    if (!s || !e) return false;
+    return Number(s) <= now && now < Number(e);
+  });
+  if (hit?.academicYear) return hit;
+  const sorted = [...arr].sort((a, b) => {
+    const as = a?.startOn ?? Number.MAX_SAFE_INTEGER;
+    const bs = b?.startOn ?? Number.MAX_SAFE_INTEGER;
+    return Number(as) - Number(bs);
+  });
+  return sorted[0] || null;
+};
+
+const getBatchAyInfo = async (req, res, next) => {
+  console.log(req.body);
+  try {
+    const tenantId = pickTenantId(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    const programId = safeTrim(req.body?.programId);
+    const courseStartYear = String(req.body?.courseStartYear);
+    if (!programId) return res.status(400).json({ status: false, message: 'programId is required' });
+    if (courseStartYear === undefined || courseStartYear === null || courseStartYear === '') return res.status(400).json({ status: false, message: 'courseStartYear is required' });
+    const cohortAy = String(req.body?.cohortAy);
+    if (!cohortAy) return res.status(400).json({ status: false, message: 'Invalid courseStartYear' });
+    const cfgs = await AcademicYearConfig.find({ tenantId, programId, isdeleted: false, status: 'Active' }, { _id: 0, cohortAy: 1, years: 1, duration: 1 }).lean();
+    const cfg = (cfgs || []).find((c) => normalizeAy(c?.cohortAy) === normalizeAy(cohortAy));
+    if (!cfg) {
+      return res.status(404).json({
+        status: false,
+        message: `AcademicYear config not found for programId=${programId} cohortAy=${cohortAy}`
+      });
+    }
+    const requestedAy = safeTrim(req.body?.academicYear);
+    let yearRow = null;
+    if (requestedAy) {
+      yearRow = (cfg.years || []).find((y) => normalizeAy(y?.academicYear) === normalizeAy(requestedAy)) || null;
+      if (!yearRow) {
+        return res.status(400).json({
+          status: false,
+          message: `academicYear not found under cohortAy=${cfg.cohortAy}: ${requestedAy}`
+        });
+      }
+    } else {
+      yearRow = pickActiveAcademicYearFromCfg(cfg.years);
+      if (!yearRow) {
+        return res.status(400).json({
+          status: false,
+          message: `No years configured under cohortAy=${cfg.cohortAy}`
+        });
+      }
+    }
+    return res.status(constants.HTTPS_SUCCESS).json({
+      status: true,
+      message: 'Request success',
+      data: {
+        programId,
+        courseStartYear: Number(courseStartYear),
+        programStartAy: cfg.cohortAy,
+        academicYear: yearRow.academicYear,
+        startDate: yearRow.startOn ?? null,
+        endDate: yearRow.endOn ?? null,
+        years: cfg.years || []
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   createBatch,
   listBatches,
@@ -775,5 +856,6 @@ export default {
   removeStudentsFromBatch,
   shuffleStudentsBetweenBatches,
   recalcBatchStudentCount,
-  getBatchSubjects
+  getBatchSubjects,
+  getBatchAyInfo
 };
