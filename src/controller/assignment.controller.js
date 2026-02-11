@@ -960,6 +960,191 @@ const listResultsByBatch = async (req, res, next) => {
   }
 };
 
+const listTopicEnableStatus = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const batchId = safeTrim(req.body?.batchId);
+    const classNo = toNum(req.query?.classNo);
+    const subjectId = safeTrim(req.query?.subjectId);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    if (!batchId) return res.status(400).json({ status: false, message: 'batchId is required' });
+    if (!classNo) return res.status(400).json({ status: false, message: 'classNo is required' });
+    if (!subjectId || !mustObjectId(subjectId)) return res.status(400).json({ status: false, message: 'Invalid subjectId' });
+    const enabledRows = await BatchAssignEnable.find({ tenantId, batchId, subjectId, isdeleted: false, status: 'enabled' }, { _id: 0, testId: 1 }).lean();
+    const enabledTestIds = (enabledRows || []).map((x) => safeTrim(x?.testId)).filter(Boolean);
+    const enabledAssignments = enabledTestIds.length
+      ? await Assignment.find(
+          {
+            tenantId,
+            isdeleted: false,
+            classNo,
+            subjectId: new mongoose.Types.ObjectId(subjectId),
+            testId: { $in: enabledTestIds }
+          },
+          { _id: 0, testId: 1, topicId: 1 }
+        ).lean()
+      : [];
+    const enabledTopicCount = new Map();
+    for (const a of enabledAssignments || []) {
+      const tid = safeTrim(a?.topicId);
+      if (!tid) continue;
+      enabledTopicCount.set(tid, (enabledTopicCount.get(tid) || 0) + 1);
+    }
+    const enabledTopicSet = new Set(Array.from(enabledTopicCount.keys()));
+    const allTopics = await Topic.find({ tenantId, isdeleted: false, classNo, subjectId: new mongoose.Types.ObjectId(subjectId) }, { _id: 0, topicId: 1, topicName: 1, topicCode: 1, sortOrder: 1, status: 1 })
+      .sort({ sortOrder: 1, createdAt: 1 })
+      .lean();
+    const rows = (allTopics || []).map((t) => {
+      const tid = safeTrim(t?.topicId);
+      return {
+        topicId: tid,
+        topicName: safeTrim(t?.topicName),
+        topicCode: safeTrim(t?.topicCode),
+        enabled: enabledTopicSet.has(tid),
+        enabledTestCount: enabledTopicCount.get(tid) || 0
+      };
+    });
+    return res.status(constants.HTTPS_SUCCESS).json({
+      status: true,
+      message: 'Topic enable status loaded',
+      data: rows
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const enabledTestsByTopic = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const batchId = safeTrim(req.body?.batchId);
+    const classNo = toNum(req.query?.classNo);
+    const subjectIdRaw = safeTrim(req.query?.subjectId);
+    const topicId = safeTrim(req.query?.topicId);
+    if (!tenantId) {
+      return res.status(constants.HTTPS_BAD_REQUEST).json({
+        status: false,
+        message: 'tenantId (entiId) is required'
+      });
+    }
+    if (!batchId) {
+      return res.status(constants.HTTPS_BAD_REQUEST).json({
+        status: false,
+        message: 'batchId is required'
+      });
+    }
+    if (!ensureClassNo(classNo)) {
+      return res.status(constants.HTTPS_BAD_REQUEST).json({
+        status: false,
+        message: 'Invalid classNo (6..13)'
+      });
+    }
+    if (!subjectIdRaw || !mustObjectId(subjectIdRaw)) {
+      return res.status(constants.HTTPS_BAD_REQUEST).json({
+        status: false,
+        message: 'Invalid subjectId'
+      });
+    }
+    if (!topicId) {
+      return res.status(constants.HTTPS_BAD_REQUEST).json({
+        status: false,
+        message: 'topicId is required'
+      });
+    }
+    const subjectObjId = new mongoose.Types.ObjectId(String(subjectIdRaw));
+    const enabledRows = await BatchAssignEnable.find(
+      {
+        tenantId,
+        batchId,
+        subjectId: subjectIdRaw,
+        isdeleted: false,
+        status: 'enabled'
+      },
+      { _id: 0, testId: 1, testNo: 1, enabledAt: 1 }
+    ).lean();
+    const enabledTestIds = (enabledRows || []).map((x) => safeTrim(x?.testId)).filter(Boolean);
+    if (!enabledTestIds.length) {
+      return res.status(constants.HTTPS_SUCCESS).json({
+        status: true,
+        message: 'No enabled tests for this batch/subject',
+        data: [],
+        count: 0
+      });
+    }
+    const assignments = await Assignment.find(
+      {
+        tenantId,
+        isdeleted: false,
+        classNo,
+        subjectId: subjectObjId,
+        topicId,
+        testId: { $in: enabledTestIds }
+      },
+      {
+        _id: 0,
+        testId: 1,
+        testNo: 1,
+        testCode: 1,
+        topicId: 1,
+        subTopicId: 1,
+        categoryId: 1,
+        subCategoryId: 1
+      }
+    ).lean();
+    if (!assignments.length) {
+      return res.status(constants.HTTPS_SUCCESS).json({
+        status: true,
+        message: 'No enabled tests found for this topic',
+        data: [],
+        count: 0
+      });
+    }
+    const topicDoc = await Topic.findOne({ tenantId, isdeleted: false, classNo, subjectId: subjectObjId, topicId }, { _id: 0, topicId: 1, topicName: 1, topicCode: 1 }).lean();
+    const subTopicIds = Array.from(new Set((assignments || []).map((a) => safeTrim(a?.subTopicId)).filter(Boolean)));
+    const [subTopics, cats, subs] = await Promise.all([
+      SubTopic.find({ tenantId, isdeleted: false, classNo, subjectId: subjectObjId, topicId, subTopicId: { $in: subTopicIds } }, { _id: 0, subTopicId: 1, subTopicName: 1, subTopicCode: 1 }).lean(),
+      ExamCategory.find({ tenantId, isdeleted: false, categoryId: { $in: Array.from(new Set(assignments.map((a) => safeTrim(a?.categoryId)).filter(Boolean))) } }, { _id: 0, categoryId: 1, categoryName: 1, categoryCode: 1 }).lean(),
+      ExamSubCategory.find({ tenantId, isdeleted: false, subCategoryId: { $in: Array.from(new Set(assignments.map((a) => safeTrim(a?.subCategoryId)).filter(Boolean))) } }, { _id: 0, subCategoryId: 1, subCategoryName: 1, subCategoryCode: 1, categoryId: 1 }).lean()
+    ]);
+    const stMap = new Map((subTopics || []).map((x) => [safeTrim(x.subTopicId), x]));
+    const catMap = new Map((cats || []).map((x) => [safeTrim(x.categoryId), x]));
+    const subCatMap = new Map((subs || []).map((x) => [safeTrim(x.subCategoryId), x]));
+    const tName = safeTrim(topicDoc?.topicName || '');
+    const tCode = safeTrim(topicDoc?.topicCode || '');
+    const data = (assignments || []).map((a) => {
+      const st = stMap.get(safeTrim(a?.subTopicId)) || null;
+      const cat = catMap.get(safeTrim(a?.categoryId)) || null;
+      const subc = subCatMap.get(safeTrim(a?.subCategoryId)) || null;
+      return {
+        topicId: safeTrim(a?.topicId),
+        topicName: tName || safeTrim(a?.topicId),
+        topicCode: tCode || null,
+        subTopicId: safeTrim(a?.subTopicId),
+        subTopicName: safeTrim(st?.subTopicName) || safeTrim(a?.subTopicId),
+        subTopicCode: safeTrim(st?.subTopicCode) || null,
+        categoryId: safeTrim(a?.categoryId),
+        examCategory: safeTrim(cat?.categoryName) || safeTrim(a?.categoryId),
+        examCategoryCode: safeTrim(cat?.categoryCode) || null,
+        subCategoryId: safeTrim(a?.subCategoryId),
+        examSubCategory: safeTrim(subc?.subCategoryName) || safeTrim(a?.subCategoryId),
+        examSubCategoryCode: safeTrim(subc?.subCategoryCode) || null,
+        testId: safeTrim(a?.testId),
+        testNo: safeTrim(a?.testNo),
+        testCode: safeTrim(a?.testCode) || null
+      };
+    });
+    data.sort((x, y) => toNum(x.testNo) - toNum(y.testNo));
+    return res.status(constants.HTTPS_SUCCESS).json({
+      status: true,
+      message: 'Enabled tests loaded',
+      data,
+      count: data.length
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   createAssignment,
   listAssignments,
@@ -972,5 +1157,7 @@ export default {
   submitAssignmentResult,
   listResultsByStudent,
   listResultsByTest,
-  listResultsByBatch
+  listResultsByBatch,
+  listTopicEnableStatus,
+  enabledTestsByTopic
 };

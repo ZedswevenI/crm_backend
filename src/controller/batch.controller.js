@@ -98,32 +98,38 @@ const validateStudentsForBatch = async (tenantId, batch, studentIds, mode) => {
       studentId: 1,
       admissionNo: 1,
       academicYear: 1,
+      currentAcademicYear: 1,
       programId: 1,
       centerId: 1,
       batchId: 1
     }
   ).lean();
-
   const byId = new Map((students || []).map((s) => [String(s.studentId), s]));
   const missing = studentIds.filter((id) => !byId.has(id));
   if (missing.length) return { ok: false, msg: `Some students not found/inactive: ${missing.join(', ')}` };
-
   const badProgram = studentIds.filter((id) => String(byId.get(id)?.programId || '') !== String(batch.programId || ''));
   if (badProgram.length) return { ok: false, msg: `Program mismatch for students: ${badProgram.join(', ')}` };
-
-  const badYear = studentIds.filter((id) => String(byId.get(id)?.academicYear || '') !== String(batch.academicYear || ''));
-  if (badYear.length) return { ok: false, msg: `Academic year mismatch for students: ${badYear.join(', ')}` };
-
+  const normalizeAyStrict = (s) =>
+    safeTrim(s)
+      .replace(/\s+/g, '')
+      .replace(/–/g, '-')
+      .replace(/—/g, '-')
+      .replace(/\u2013/g, '-')
+      .replace(/\u2014/g, '-')
+      .toLowerCase();
+  const bAy = normalizeAyStrict(batch?.academicYear);
+  const badYear = studentIds.filter((id) => normalizeAyStrict(byId.get(id)?.currentAcademicYear) !== bAy);
+  if (badYear.length) {
+    return { ok: false, msg: `Academic year mismatch for students: ${badYear.join(', ')}` };
+  }
   const badCenter = studentIds.filter((id) => String(byId.get(id)?.centerId || '') !== String(batch.centerId || ''));
   if (badCenter.length) return { ok: false, msg: `Center mismatch for students: ${badCenter.join(', ')}` };
-
   if (mode === 'ASSIGN_ONLY_UNASSIGNED') {
     const alreadyAssigned = studentIds.filter((id) => !!safeTrim(byId.get(id)?.batchId));
     if (alreadyAssigned.length) {
       return { ok: false, msg: `These students are already assigned to a batch: ${alreadyAssigned.join(', ')}` };
     }
   }
-
   return { ok: true, msg: 'OK', students };
 };
 
@@ -412,14 +418,10 @@ const closeBatch = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-
     const batchId = safeTrim(req.body.batchId);
     if (!batchId) return res.status(400).json({ status: false, message: 'batchId is required' });
-
     const updatedBy = req.body.userId || null;
-
     session.startTransaction();
-
     const b = await Batch.findOne({ tenantId, batchId, isdeleted: false }).session(session);
     if (!b) {
       await session.abortTransaction();
@@ -431,18 +433,16 @@ const closeBatch = async (req, res, next) => {
       session.endSession();
       return res.status(400).json({ status: false, message: 'Batch already closed' });
     }
-
-    // release all students
+    if (!safeTrim(b.programStartAy)) {
+      b.programStartAy = safeTrim(b.academicYear) || safeTrim(b.cohortAy) || safeTrim(b.batchStartAy) || safeTrim(b.startingAy) || safeTrim(b.academicYear);
+    }
     await StudentProfile.updateMany({ tenantId, isdeleted: false, status: 'ACTIVE', batchId }, { $set: { batchId: null, batchCode: null, updatedBy } }, { session });
-
     b.status = 'CLOSED';
     b.studentCount = 0;
     b.updatedBy = updatedBy;
     await b.save({ session });
-
     await session.commitTransaction();
     session.endSession();
-
     return res.status(constants.HTTPS_SUCCESS).json({ status: true, message: 'Batch closed and students released' });
   } catch (err) {
     try {
@@ -453,7 +453,6 @@ const closeBatch = async (req, res, next) => {
   }
 };
 
-// -------- Staff Map (overwrite / change / remove) ----------
 const saveBatchStaffMap = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
@@ -498,24 +497,18 @@ const saveBatchStaffMap = async (req, res, next) => {
   }
 };
 
-// -------- Student Eligibility / Assign / Move / Remove / Shuffle ----------
 const listEligibleStudentsForBatch = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-
     const batchId = safeTrim(req.body.batchId);
     if (!batchId) return res.status(400).json({ status: false, message: 'batchId is required' });
-
     const b = await fetchBatchById(tenantId, batchId);
     if (!b) return res.status(404).json({ status: false, message: 'Batch not found' });
-
     const page = Math.max(parseInt(req.query.page || '1', 10), 1);
     const limit = Math.min(Math.max(parseInt(req.query.limit || '20', 10), 1), 200);
     const skip = (page - 1) * limit;
-    console.log('b ', b);
     const search = safeTrim(req.query.search);
-
     const query = {
       tenantId,
       isdeleted: false,
@@ -524,14 +517,11 @@ const listEligibleStudentsForBatch = async (req, res, next) => {
       centerId: b.centerId,
       batchId: null
     };
-
     if (search) {
       const rx = new RegExp(escapeRegex(search), 'i');
       query.$or = [{ admissionNo: rx }, { registrationNumber: rx }, { 'student.name': rx }, { 'student.phone': rx }, { 'student.parentPhone': rx }];
     }
-
     const [rows, count] = await Promise.all([StudentProfile.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(), StudentProfile.countDocuments(query)]);
-
     return res.status(constants.HTTPS_SUCCESS).json({ status: true, message: 'Request success', data: rows, count });
   } catch (err) {
     return next(err);
@@ -842,6 +832,142 @@ const getBatchAyInfo = async (req, res, next) => {
   }
 };
 
+const listBatchesForEnablement = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const classNo = toNum(req.body?.classNo);
+    const subjectId = safeTrim(req.body?.subjectId);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    if (!ensureClassNo(classNo)) return res.status(400).json({ status: false, message: 'Invalid classNo (6..13)' });
+    if (!subjectId) return res.status(400).json({ status: false, message: 'subjectId is required' });
+    const q = {
+      tenantId,
+      isdeleted: false,
+      classNo,
+      status: { $in: ['ACTIVE', 'DRAFT'] },
+      staffMap: { $elemMatch: { subjectId } }
+    };
+    const rows = await Batch.find(q, {
+      _id: 0,
+      batchId: 1,
+      batchName: 1,
+      batchCode: 1,
+      academicYear: 1,
+      programId: 1,
+      centerId: 1,
+      centerName: 1,
+      studentCount: 1,
+      status: 1
+    })
+      .sort({ batchName: 1 })
+      .lean();
+    return res.status(constants.HTTPS_SUCCESS).json({
+      status: true,
+      message: 'Batches loaded',
+      data: rows
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const listTopicsForEnablement = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const classNo = toNum(req.body?.classNo);
+    const subjectIdRaw = req.body?.subjectId;
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    if (!ensureClassNo(classNo)) return res.status(400).json({ status: false, message: 'Invalid classNo (6..13)' });
+    if (!subjectIdRaw || !mustObjectId(subjectIdRaw)) return res.status(400).json({ status: false, message: 'Invalid subjectId' });
+    const subjectId = new mongoose.Types.ObjectId(String(subjectIdRaw));
+    const rows = await Topic.find({ tenantId, isdeleted: false, status: 'Active', classNo, subjectId }, { _id: 0, topicId: 1, topicName: 1, topicCode: 1, sortOrder: 1 }).sort({ sortOrder: 1, topicName: 1 }).lean();
+    return res.status(constants.HTTPS_SUCCESS).json({
+      status: true,
+      message: 'Topics loaded',
+      data: rows
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const listTestsForEnablement = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const classNo = toNum(req.body?.classNo);
+    const subjectIdRaw = req.body?.subjectId;
+    const subjectIdStr = safeTrim(req.body?.subjectId);
+    const topicId = safeTrim(req.body?.topicId);
+    const batchId = safeTrim(req.body?.batchId);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    if (!ensureClassNo(classNo)) return res.status(400).json({ status: false, message: 'Invalid classNo (6..13)' });
+    if (!subjectIdRaw || !mustObjectId(subjectIdRaw)) return res.status(400).json({ status: false, message: 'Invalid subjectId' });
+    if (!topicId) return res.status(400).json({ status: false, message: 'topicId is required' });
+    if (!batchId) return res.status(400).json({ status: false, message: 'batchId is required' });
+    const subjectIdObj = new mongoose.Types.ObjectId(String(subjectIdRaw));
+    const rows = await Assignment.aggregate([
+      {
+        $match: {
+          tenantId,
+          isdeleted: false,
+          classNo,
+          subjectId: subjectIdObj,
+          topicId
+        }
+      },
+      {
+        $lookup: {
+          from: BatchAssignEnable.collection.name,
+          let: { tId: '$testId' },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [{ $eq: ['$tenantId', tenantId] }, { $eq: ['$batchId', batchId] }, { $eq: ['$subjectId', subjectIdStr] }, { $eq: ['$testId', '$$tId'] }, { $eq: ['$isdeleted', false] }, { $eq: ['$status', 'enabled'] }]
+                }
+              }
+            },
+            { $project: { _id: 0, enabledAt: 1, enabledBy: 1 } }
+          ],
+          as: 'en'
+        }
+      },
+      {
+        $addFields: {
+          enabled: { $gt: [{ $size: '$en' }, 0] },
+          enabledAt: { $ifNull: [{ $arrayElemAt: ['$en.enabledAt', 0] }, null] },
+          enabledBy: { $ifNull: [{ $arrayElemAt: ['$en.enabledBy', 0] }, null] }
+        }
+      },
+      {
+        $project: {
+          _id: 0,
+          testId: 1,
+          testNo: 1,
+          testCode: 1,
+          numberOfQuestions: 1,
+          status: 1,
+          classNo: 1,
+          topicId: 1,
+          subTopicId: 1,
+          categoryId: 1,
+          subCategoryId: 1,
+          enabled: 1,
+          enabledAt: 1
+        }
+      },
+      { $sort: { testNo: 1, testCode: 1 } }
+    ]);
+    return res.status(constants.HTTPS_SUCCESS).json({
+      status: true,
+      message: 'Tests loaded',
+      data: rows
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   createBatch,
   listBatches,
@@ -857,5 +983,8 @@ export default {
   shuffleStudentsBetweenBatches,
   recalcBatchStudentCount,
   getBatchSubjects,
-  getBatchAyInfo
+  getBatchAyInfo,
+  listBatchesForEnablement,
+  listTopicsForEnablement,
+  listTestsForEnablement
 };
