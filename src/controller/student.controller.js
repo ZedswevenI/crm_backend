@@ -783,6 +783,7 @@ const getAllClassSubjectTopics = async (req, res, next) => {
 
 const getStudentTopicsTests = async (req, res, next) => {
   try {
+    console.log('download method');
     const tenantId = String(req.body?.entiId || '').trim();
     const regNo = String(req.body?.regNo || '').trim();
     const subjectRaw = String(req.body?.subjectId || '').trim();
@@ -837,6 +838,7 @@ const getStudentTopicsTests = async (req, res, next) => {
         message: 'Assignment testId missing'
       });
     }
+    console.log('testId ', testId, tenantId);
     const qDocs = await AssignmentQns.find(
       {
         tenantId,
@@ -847,6 +849,7 @@ const getStudentTopicsTests = async (req, res, next) => {
     )
       .sort({ sortOrder: 1, createdAt: 1 })
       .lean();
+    console.log('qDocs ', qDocs);
     return res.status(200).json({
       status: true,
       data: {
