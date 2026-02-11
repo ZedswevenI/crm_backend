@@ -41,6 +41,8 @@ routes.post('/result/list/student', assignCtrl.listResultsByStudent);
 routes.post('/result/list/test', assignCtrl.listResultsByTest);
 routes.post('/result/list/batch', assignCtrl.listResultsByBatch);
 
+routes.post('/gettestds', assignCtrl.getTestIds);
+
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Admission routes' }));
 
 export default routes;
