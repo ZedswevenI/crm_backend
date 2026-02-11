@@ -17,7 +17,7 @@ routes.post('/delete', validatetoken, assignCtrl.deleteAssignment);
 routes.post('/import', validatetoken, assignCtrl.importAssignments);
 
 routes.post('/question/image/upload', validatetoken, uploadQuestionImage, questionCtrl.uploadSingleQuestionImage);
-routes.post('/question/image/download', validatetoken, questionCtrl.getQuestionImage);
+routes.post('/question/image/download', questionCtrl.getQuestionImage);
 
 routes.post('/question/bulkcreate', questionCtrl.createQuestionsBulk);
 routes.post('/question/list/bytopic', validatetoken, questionCtrl.listQuestionsByTopic);
