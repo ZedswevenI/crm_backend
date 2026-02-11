@@ -8,6 +8,7 @@ import assignCtrl from '../controller/assignment.controller.js';
 import questionCtrl from '../controller/assignmentQns.controller.js';
 
 import { uploadQuestionImage } from '../middlewares/multer.js';
+import validateSchema from '../middlewares/validation.js';
 
 routes.post('/create', validatetoken, assignCtrl.createAssignment);
 routes.post('/edit', validatetoken, assignCtrl.updateAssignment);
@@ -32,6 +33,8 @@ routes.post('/question/create', validatetoken, questionCtrl.createQuestion);
 routes.post('/enableto/batch', validatetoken, assignCtrl.enableTeststoBatch);
 routes.post('/disableto/batch', validatetoken, assignCtrl.disableTeststoBatch);
 routes.post('/enabledto/batch/list', validatetoken, assignCtrl.listEnabledTestsforBatch);
+routes.post('/topic/enablestatus', validatetoken, assignCtrl.listTopicEnableStatus);
+routes.post('/enabled/tests/by-topic', validatetoken, assignCtrl.enabledTestsByTopic);
 
 routes.post('/result/submit', assignCtrl.submitAssignmentResult);
 routes.post('/result/list/student', assignCtrl.listResultsByStudent);
