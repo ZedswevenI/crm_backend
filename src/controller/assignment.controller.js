@@ -1145,6 +1145,15 @@ const enabledTestsByTopic = async (req, res, next) => {
   }
 };
 
+const getTestIds = async (req, res, next) => {
+  try {
+    const Tests = await Assignment.find({}, { testId: 1, testNo: 1 });
+    return res.status(200).json({ status: true, data: Tests, count: Tests.length });
+  } catch (err) {
+    next(err);
+  }
+};
+
 export default {
   createAssignment,
   listAssignments,
@@ -1159,5 +1168,6 @@ export default {
   listResultsByTest,
   listResultsByBatch,
   listTopicEnableStatus,
-  enabledTestsByTopic
+  enabledTestsByTopic,
+  getTestIds: getTestIds
 };

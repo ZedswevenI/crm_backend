@@ -177,6 +177,7 @@ const getQuestionImage = async (req, res) => {
 
 const createQuestionsBulk = async (req, res, next) => {
   try {
+    console.log('method called');
     const tenantId = req.body.entiId;
     const userId = req.user?.userId || req.body?.userId || null;
     const testId = req.body.testId;
