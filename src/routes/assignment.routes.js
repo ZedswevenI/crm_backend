@@ -30,6 +30,13 @@ routes.post('/question/update', validatetoken, questionCtrl.updateQuestion);
 routes.post('/question/delete', validatetoken, questionCtrl.deleteQuestion);
 routes.post('/question/create', validatetoken, questionCtrl.createQuestion);
 
+routes.post('/question/bookmark/create', questionCtrl.createBookmark);
+routes.post('/question/bookmark/list', questionCtrl.listBookmarks);
+routes.post('/question/bookmark/remove', questionCtrl.removeBookmark);
+routes.post('/question/report/create', questionCtrl.createReport);
+routes.post('/question/report/list', questionCtrl.listReports);
+routes.post('/question/report/updatestatus', questionCtrl.updateReportStatus);
+
 routes.post('/enableto/batch', validatetoken, assignCtrl.enableTeststoBatch);
 routes.post('/disableto/batch', validatetoken, assignCtrl.disableTeststoBatch);
 routes.post('/enabledto/batch/list', validatetoken, assignCtrl.listEnabledTestsforBatch);
