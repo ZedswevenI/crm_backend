@@ -17,7 +17,7 @@ routes.post('/delete', validatetoken, assignCtrl.deleteAssignment);
 routes.post('/import', validatetoken, assignCtrl.importAssignments);
 
 routes.post('/question/image/upload', validatetoken, uploadQuestionImage, questionCtrl.uploadSingleQuestionImage);
-routes.post('/question/image/download', validatetoken, questionCtrl.getQuestionImage);
+routes.post('/question/image/download', questionCtrl.getQuestionImage);
 
 routes.post('/question/bulkcreate', questionCtrl.createQuestionsBulk);
 routes.post('/question/list/bytopic', validatetoken, questionCtrl.listQuestionsByTopic);
@@ -29,6 +29,13 @@ routes.post('/question/view', validatetoken, questionCtrl.viewQuestion);
 routes.post('/question/update', validatetoken, questionCtrl.updateQuestion);
 routes.post('/question/delete', validatetoken, questionCtrl.deleteQuestion);
 routes.post('/question/create', validatetoken, questionCtrl.createQuestion);
+
+routes.post('/question/bookmark/create', questionCtrl.createBookmark);
+routes.post('/question/bookmark/list', questionCtrl.listBookmarks);
+routes.post('/question/bookmark/remove', questionCtrl.removeBookmark);
+routes.post('/question/report/create', questionCtrl.createReport);
+routes.post('/question/report/list', questionCtrl.listReports);
+routes.post('/question/report/updatestatus', questionCtrl.updateReportStatus);
 
 routes.post('/enableto/batch', validatetoken, assignCtrl.enableTeststoBatch);
 routes.post('/disableto/batch', validatetoken, assignCtrl.disableTeststoBatch);

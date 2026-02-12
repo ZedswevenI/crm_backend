@@ -14,6 +14,8 @@ routes.post('/period/cancel', validatetoken, timeTableController.cancelPeriod);
 routes.post('/period/rearrange-staff', validatetoken, timeTableController.rearrangeStaff);
 routes.post('/period/move', validatetoken, timeTableController.changePeriod);
 routes.post('/period/replace', validatetoken, timeTableController.replacePeriod);
+routes.post('/day/cancel', validatetoken, timeTableController.cancelWholeDay);
+routes.post('/day/edit', validatetoken, timeTableController.editWholeDay);
 
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Timetable routes' }));
 
