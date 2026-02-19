@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import constants from '../helpers/constants.js';
 import TimeTable from '../models/timetable.model.js';
+import LateEntryLog from '../models/lateEntrylog.model.js';
 
 const pickTenantId = (req) => String(req?.body?.tenantId || req?.body?.entiId || '').trim();
 const safeTrim = (v) => (v === undefined || v === null ? '' : String(v).trim());
@@ -551,6 +552,152 @@ const replacePeriod = async (req, res, next) => {
     return next(err);
   }
 };
+
+const bulkUploadTimeTables = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = safeTrim(req.body?.userId);
+    const data = Array.isArray(req.body?.data) ? req.body.data : [];
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+    if (!data.length) return res.status(400).json({ status: false, message: 'No data provided for bulk upload' });
+    const ops = [];
+    for (const item of data) {
+      const batchCode = safeTrim(item.batchCode);
+      const inputWeekStart = toInt(item.wkStartOn, 0);
+      if (!batchCode || !inputWeekStart) continue;
+      const correctedMonday = getPreviousMonday(inputWeekStart);
+      const weekIn = Array.isArray(item.week) ? item.week : [];
+      const week = [];
+      for (const d of weekIn) {
+        const day = normDay(d?.day);
+        if (!isValidDay(day)) continue;
+        const periodsIn = Array.isArray(d?.periods) ? d.periods : [];
+        const periods = [];
+        for (const p of periodsIn) {
+          const np = normalizePeriod({ ...p, day });
+          if (np.ok) periods.push(np.period);
+        }
+        week.push({ day, periods });
+      }
+      ops.push({
+        updateOne: {
+          filter: { tenantId, batchCode, wkStartOn: correctedMonday, isdeleted: false },
+          update: {
+            $set: {
+              centerCode: safeTrim(item.centerCode) || null,
+              phase: safeTrim(item.phase) || null,
+              status: safeTrim(item.status) || 'Active',
+              week,
+              updatedBy: userId || null
+            },
+            $setOnInsert: { createdBy: userId || null }
+          },
+          upsert: true
+        }
+      });
+    }
+    if (!ops.length) return res.status(400).json({ status: false, message: 'No valid timetable data found to process' });
+    const result = await TimeTable.bulkWrite(ops, { ordered: false });
+    return res.status(200).json({
+      status: true,
+      message: 'Bulk upload completed',
+      data: {
+        matchedCount: result.matchedCount,
+        modifiedCount: result.modifiedCount,
+        upsertedCount: result.upsertedCount
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const logLateEntry = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = safeTrim(req.body?.userId);
+    const { type, personId, personName, timetableId, batchCode, date, periodNo, scheduledStartMin, delayMinutes, reason } = req.body;
+    if (!tenantId || !type || !personId || !timetableId || !date || !periodNo || scheduledStartMin === undefined || delayMinutes === undefined) {
+      return res.status(400).json({ status: false, message: 'Missing required fields for late entry' });
+    }
+    if (!['STAFF', 'STUDENT'].includes(String(type).toUpperCase())) {
+      return res.status(400).json({ status: false, message: 'Invalid type. Must be STAFF or STUDENT' });
+    }
+    const doc = await LateEntryLog.findOneAndUpdate(
+      { tenantId, type: String(type).toUpperCase(), personId, date: toInt(date, 0), periodNo: toInt(periodNo, 0), isdeleted: false },
+      {
+        $set: {
+          personName: safeTrim(personName),
+          timetableId: safeTrim(timetableId),
+          batchCode: safeTrim(batchCode),
+          scheduledStartMin: toInt(scheduledStartMin, 0),
+          actualEntryTime: Date.now(),
+          delayMinutes: toInt(delayMinutes, 0),
+          reason: safeTrim(reason) || null,
+          updatedBy: userId
+        },
+        $setOnInsert: { createdBy: userId }
+      },
+      { new: true, upsert: true }
+    );
+    return res.status(200).json({
+      status: true,
+      message: `${type} late entry logged successfully`,
+      data: doc
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const listStaffLateEntries = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+
+    const page = Math.max(parseInt(req.query.page || req.body.page || '1', 10), 1);
+    const limit = Math.min(Math.max(parseInt(req.query.limit || req.body.limit || '20', 10), 1), 200);
+    const skip = (page - 1) * limit;
+
+    const { personId, batchCode, dateFrom, dateTo, search } = req.body;
+
+    const query = { tenantId, type: 'STAFF', isdeleted: false };
+
+    if (personId) query.personId = safeTrim(personId);
+    if (batchCode) query.batchCode = safeTrim(batchCode);
+    if (dateFrom) query.date = { ...(query.date || {}), $gte: toInt(dateFrom, 0) };
+    if (dateTo) query.date = { ...(query.date || {}), $lte: toInt(dateTo, 0) };
+    if (search) query.personName = new RegExp(escapeRegex(search), 'i');
+
+    const [rows, count] = await Promise.all([LateEntryLog.find(query).sort({ date: -1, actualEntryTime: -1 }).skip(skip).limit(limit).lean(), LateEntryLog.countDocuments(query)]);
+
+    return res.json({ status: true, data: rows, count, page, limit });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const listStudentLateEntries = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+    const page = Math.max(parseInt(req.query.page || req.body.page || '1', 10), 1);
+    const limit = Math.min(Math.max(parseInt(req.query.limit || req.body.limit || '20', 10), 1), 200);
+    const skip = (page - 1) * limit;
+    const { personId, batchCode, dateFrom, dateTo, search } = req.body;
+    const query = { tenantId, type: 'STUDENT', isdeleted: false };
+    if (personId) query.personId = safeTrim(personId);
+    if (batchCode) query.batchCode = safeTrim(batchCode);
+    if (dateFrom) query.date = { ...(query.date || {}), $gte: toInt(dateFrom, 0) };
+    if (dateTo) query.date = { ...(query.date || {}), $lte: toInt(dateTo, 0) };
+    if (search) query.personName = new RegExp(escapeRegex(search), 'i');
+    const [rows, count] = await Promise.all([LateEntryLog.find(query).sort({ date: -1, actualEntryTime: -1 }).skip(skip).limit(limit).lean(), LateEntryLog.countDocuments(query)]);
+    return res.json({ status: true, data: rows, count, page, limit });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   createTimeTable,
   cancelWholeDay,
@@ -561,5 +708,9 @@ export default {
   cancelPeriod,
   rearrangeStaff,
   changePeriod,
-  replacePeriod
+  replacePeriod,
+  bulkUploadTimeTables,
+  logLateEntry,
+  listStudentLateEntries,
+  listStaffLateEntries
 };

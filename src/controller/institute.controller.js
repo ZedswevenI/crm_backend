@@ -141,7 +141,7 @@ const toStaffResponse = (d) => {
 
 const STAFF_ROLES = ['Faculty', 'Center Head', 'Counsellor', 'Admin'];
 const FACULTY_TYPES = ['TEACHING', 'NON_TEACHING'];
-const PAYROLL_TYPES = ['suguna', 'z7i'];
+const PAYROLL_TYPES = ['Suguna', 'Z7I', 'suguna', 'z7i', 'Z7i', 'SUGUNA'];
 const WEEKOFF_DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 const isValidEmail = (email) => {
@@ -1745,7 +1745,7 @@ const bulkImportStaff = async (req, res, next) => {
       relievingDate: r.relievingDate,
       facultyType: r.facultyType,
       subject: r.subject,
-      payroll: r.payroll,
+      payroll: r.payroll.toUpperCase(),
       department: r.department,
       weekoff: r.weekoff,
       status: r.status,
