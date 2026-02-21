@@ -29,6 +29,7 @@ routes.post('/question/view', validatetoken, questionCtrl.viewQuestion);
 routes.post('/question/update', validatetoken, questionCtrl.updateQuestion);
 routes.post('/question/delete', validatetoken, questionCtrl.deleteQuestion);
 routes.post('/question/create', validatetoken, questionCtrl.createQuestion);
+routes.post('/question/sortorder', validatetoken, questionCtrl.updateQuestionSortOrder);
 
 routes.post('/question/bookmark/create', questionCtrl.createBookmark);
 routes.post('/question/bookmark/list', questionCtrl.listBookmarks);

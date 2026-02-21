@@ -67,6 +67,8 @@ const createAssignment = async (req, res, next) => {
     const subCategoryId = safeTrim(req.body?.subCategoryId);
     const testNo = safeTrim(req.body?.testNo);
     const testCode = safeTrim(req.body?.testCode);
+    const duration = toNum(req.body?.duration) || 60;
+    const computeFor = toNum(req.body?.computeFor) || 10;
     const numberOfQuestions = toNum(req.body?.numberOfQuestions);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
     if (!ensureClassNo(classNo)) return res.status(400).json({ status: false, message: 'Invalid classNo (6..13)' });
@@ -105,6 +107,8 @@ const createAssignment = async (req, res, next) => {
       testId: uuid(),
       testNo,
       testCode,
+      duration,
+      computeFor,
       numberOfQuestions,
       status: safeTrim(req.body?.status) || 'active',
       createdBy: userId || null,
@@ -117,7 +121,6 @@ const createAssignment = async (req, res, next) => {
       data: doc
     });
   } catch (err) {
-    console.log('err ', err);
     if (err && err.code === 11000) return res.status(409).json({ status: false, message: 'Duplicate assignment (testId)' });
     return next(err);
   }
@@ -151,6 +154,12 @@ const updateAssignment = async (req, res, next) => {
     if (req.body?.status !== undefined) {
       const st = safeTrim(req.body.status);
       if (st) set.status = st;
+    }
+    if (req.body?.duration !== undefined) {
+      if (st) set.duration = req.body?.duration;
+    }
+    if (req.body?.computeFor !== undefined) {
+      if (st) set.computeFor = req.body?.computeFor;
     }
     const willChangeMapping = req.body?.classNo !== undefined || req.body?.subjectId !== undefined || req.body?.topicId !== undefined || req.body?.subTopicId !== undefined || req.body?.categoryId !== undefined || req.body?.subCategoryId !== undefined;
     if (willChangeMapping) {
@@ -231,17 +240,44 @@ const listAssignments = async (req, res, next) => {
       const n = toNum(search);
       if (n) query.$or.push({ testNo: n });
     }
+    let rows = [];
+    let count = 0;
     if (String(list).toLowerCase() === 'full') {
-      const rows = await Assignment.find(query).sort(sort).populate({ path: 'subjectId', model: 'subject', select: 'subjectName subjectCode' }).lean();
+      rows = await Assignment.find(query).sort(sort).populate({ path: 'subjectId', model: 'subject', select: 'subjectName subjectCode' }).lean();
+      count = rows.length;
+    } else {
+      count = await Assignment.countDocuments(query);
+      rows = await Assignment.find(query).sort(sort).skip(skip).limit(limit).populate({ path: 'subjectId', model: 'subject', select: 'subjectName subjectCode' }).lean();
+    }
+    const topicIds = [...new Set(rows.map((r) => r.topicId).filter(Boolean))];
+    const subTopicIds = [...new Set(rows.map((r) => r.subTopicId).filter(Boolean))];
+    const catIds = [...new Set(rows.map((r) => r.categoryId).filter(Boolean))];
+    const subCatIds = [...new Set(rows.map((r) => r.subCategoryId).filter(Boolean))];
+    const [topics, subtopics, categories, subcategories] = await Promise.all([
+      Topic.find({ tenantId, topicId: { $in: topicIds }, isdeleted: false }, 'topicId topicName').lean(),
+      SubTopic.find({ tenantId, subTopicId: { $in: subTopicIds }, isdeleted: false }, 'subTopicId subTopicName').lean(),
+      ExamCategory.find({ tenantId, categoryId: { $in: catIds }, isdeleted: false }, 'categoryId categoryName').lean(),
+      ExamSubCategory.find({ tenantId, subCategoryId: { $in: subCatIds }, isdeleted: false }, 'subCategoryId subCategoryName').lean()
+    ]);
+    const topicMap = new Map(topics.map((t) => [t.topicId, t.topicName]));
+    const subTopicMap = new Map(subtopics.map((st) => [st.subTopicId, st.subTopicName]));
+    const catMap = new Map(categories.map((c) => [c.categoryId, c.categoryName]));
+    const subCatMap = new Map(subcategories.map((sc) => [sc.subCategoryId, sc.subCategoryName]));
+    rows = rows.map((r) => ({
+      ...r,
+      topicName: topicMap.get(r.topicId) || null,
+      subTopicName: subTopicMap.get(r.subTopicId) || null,
+      categoryName: catMap.get(r.categoryId) || null,
+      subCategoryName: subCatMap.get(r.subCategoryId) || null
+    }));
+    if (String(list).toLowerCase() === 'full') {
       return res.status(constants.HTTPS_SUCCESS).send({
         status: true,
         data: rows,
-        count: rows.length,
+        count: count,
         message: 'Assignment details retrieved Successfully'
       });
     }
-    const count = await Assignment.countDocuments(query);
-    const rows = await Assignment.find(query).sort(sort).skip(skip).limit(limit).populate({ path: 'subjectId', model: 'subject', select: 'subjectName subjectCode' }).lean();
     return res.status(constants.HTTPS_SUCCESS).send({
       status: true,
       data: rows,
@@ -294,6 +330,8 @@ const importAssignments = async (req, res, next) => {
       const testNo = toNum(r.testNo);
       const testCode = safeTrim(r.testCode);
       const numberOfQuestions = toNum(r.numberOfQuestions);
+      const duration = toNum(req.body?.duration) || 60;
+      const computeFor = toNum(req.body?.computeFor) || 10;
       if (!ensureClassNo(classNo) || !subjectIdRaw || !mustObjectId(subjectIdRaw) || !topicId || !subTopicId || !categoryId || !subCategoryId || !testNo || !testCode) {
         rowErrors.push({ row: i + 1, message: 'classNo, subjectId, topicId, subTopicId, categoryId, subCategoryId, testNo, testCode are required' });
         continue;
@@ -321,6 +359,8 @@ const importAssignments = async (req, res, next) => {
         testNo,
         testCode,
         numberOfQuestions,
+        duration,
+        computeFor,
         status: safeTrim(r.status) || 'active',
         updatedBy: userId || null,
         isdeleted: false
@@ -359,71 +399,6 @@ const importAssignments = async (req, res, next) => {
     return next(err);
   }
 };
-
-// const enableTeststoBatch = async (req, res, next) => {
-//   try {
-//     const tenantId = safeTrim(req.body?.entiId || req.body?.tenantId);
-//     const batchId = safeTrim(req.body?.batchId);
-//     const subjectId = safeTrim(req.body?.subjectId);
-//     const classNo = toNum(req.body?.classNo);
-//     const userId = safeTrim(req.body?.userId);
-//     const tests = Array.isArray(req.body?.tests) ? req.body.tests : [];
-//     if (!tenantId || !batchId || !subjectId || !tests.length) {
-//       return res.status(constants.HTTPS_BAD_REQUEST).json({
-//         status: false,
-//         message: 'entiId, batchId, subjectId and tests[] are required'
-//       });
-//     }
-//     const now = Date.now();
-//     const ops = [];
-//     for (const t of tests) {
-//       const testId = safeTrim(t?.testId);
-//       const testNo = t?.testNo === null || t?.testNo === undefined ? null : safeTrim(t?.testNo);
-//       if (!testId) continue;
-//       ops.push({
-//         updateOne: {
-//           filter: { tenantId, batchId, subjectId, testId },
-//           update: {
-//             $set: {
-//               tenantId,
-//               batchId,
-//               subjectId,
-//               classNo,
-//               testId,
-//               testNo,
-//               status: 'enabled',
-//               enabledAt: now,
-//               enabledBy: userId || null,
-//               disabledAt: null,
-//               disabledBy: null,
-//               isdeleted: false
-//             }
-//           },
-//           upsert: true
-//         }
-//       });
-//     }
-//     if (!ops.length) {
-//       return res.status(constants.HTTPS_BAD_REQUEST).json({
-//         status: false,
-//         message: 'No valid testId found in tests[]'
-//       });
-//     }
-//     await BatchAssignEnable.bulkWrite(ops, { ordered: false });
-//     return res.status(constants.HTTPS_SUCCESS).json({
-//       status: true,
-//       message: 'Tests enabled successfully'
-//     });
-//   } catch (err) {
-//     if (String(err?.code) === '11000') {
-//       return res.status(constants.HTTPS_SUCCESS).json({
-//         status: true,
-//         message: 'Tests enabled successfully'
-//       });
-//     }
-//     return next(err);
-//   }
-// };
 
 const enableTeststoBatch = async (req, res, next) => {
   try {
@@ -596,118 +571,6 @@ const evalObjective = (q, answerRaw) => {
   }
   return { isCorrect: null, correctAnswerRaw: correct, marksAwarded: 0 };
 };
-
-// const submitAssignmentResult = async (req, res, next) => {
-//   try {
-//     const tenantId = pickTenantId(req);
-//     const admissionNo = safeTrim(req.body?.admissionNo);
-//     const classNo = toNum(req.body?.classNo);
-//     const subjectId = safeTrim(req.body?.subjectId);
-//     const testId = safeTrim(req.body?.testId);
-//     const numberOfReattempts = toNum(req.body?.numberOfReattempts || 1);
-//     if (!tenantId || !admissionNo || !classNo || !subjectId || !testId) {
-//       return res.status(constants.HTTPS_BAD_REQUEST).json({
-//         status: false,
-//         message: 'entiId, admissionNo, classNo, subjectId, testId are required'
-//       });
-//     }
-//     if (numberOfReattempts < 0) {
-//       return res.status(constants.HTTPS_BAD_REQUEST).json({
-//         status: false,
-//         message: 'numberOfReattempts must be >= 0'
-//       });
-//     }
-//     const assignment = await Assignment.findOne({
-//       tenantId,
-//       isdeleted: false,
-//       classNo,
-//       subjectId: new mongoose.Types.ObjectId(subjectId),
-//       testId
-//     }).lean();
-//     if (!assignment) {
-//       return res.status(constants.HTTPS_NOT_FOUND).json({ status: false, message: 'Assignment not found for this testId' });
-//     }
-//     const incomingAnswers = Array.isArray(req.body?.answers) ? req.body.answers : [];
-//     if (!incomingAnswers.length) {
-//       return res.status(constants.HTTPS_BAD_REQUEST).json({ status: false, message: 'answers[] is required' });
-//     }
-//     const questions = await AssignmentQns.find({ tenantId, testId, isdeleted: false }, { _id: 0, questionId: 1, questionType: 1, positiveMarks: 1, negativeMarks: 1, questionOptions: 1 }).lean();
-//     const qById = new Map((questions || []).map((q) => [safeTrim(q.questionId), q]));
-//     const evaluated = [];
-//     for (const a of incomingAnswers) {
-//       const qid = safeTrim(a?.questionId);
-//       if (!qid) continue;
-//       const q = qById.get(qid) || null;
-//       const isSkipped = a?.isSkipped === true;
-//       const answerRaw = isSkipped ? null : (a?.answerRaw ?? null);
-//       const pos = q ? toNum(q.positiveMarks) : toNum(a?.positiveMarks);
-//       const neg = q ? toNum(q.negativeMarks) : toNum(a?.negativeMarks);
-//       let isCorrect = null;
-//       let correctAnswerRaw = null;
-//       let marksAwarded = 0;
-//       if (q && !isSkipped) {
-//         const ev = evalObjective(q, answerRaw);
-//         isCorrect = ev.isCorrect;
-//         correctAnswerRaw = ev.correctAnswerRaw ?? null;
-//         if (isCorrect === true) marksAwarded = pos;
-//         else if (isCorrect === false) marksAwarded = neg ? -Math.abs(neg) : 0;
-//         else marksAwarded = 0;
-//       }
-//       if (isSkipped) {
-//         isCorrect = null;
-//         marksAwarded = 0;
-//       }
-//       evaluated.push({
-//         questionId: qid,
-//         answerRaw,
-//         isCorrect,
-//         isSkipped,
-//         positiveMarks: pos,
-//         negativeMarks: neg,
-//         marksAwarded,
-//         correctAnswerRaw
-//       });
-//     }
-//     const doc = await AssignmentResult.create({
-//       tenantId,
-//       admissionNo,
-//       studentId: safeTrim(req.body?.studentId) || null,
-//       batchId: safeTrim(req.body?.batchId) || null,
-//       classNo,
-//       subjectId: new mongoose.Types.ObjectId(subjectId),
-//       topicId: safeTrim(assignment.topicId),
-//       subTopicId: safeTrim(assignment.subTopicId),
-//       categoryId: safeTrim(assignment.categoryId),
-//       subCategoryId: safeTrim(assignment.subCategoryId),
-//       testId: safeTrim(assignment.testId),
-//       testNo: safeTrim(assignment.testNo),
-//       testCode: safeTrim(assignment.testCode),
-//       assignmentId: assignment._id,
-//       numberOfReattempts,
-//       startedAt: toNum(req.body?.startedAt) || null,
-//       completedAt: toNum(req.body?.completedAt) || Date.now(),
-//       totalQuestions: toNum(req.body?.totalQuestions) || evaluated.length,
-//       totalMarks: toNum(req.body?.totalMarks) || 0,
-//       answers: evaluated,
-//       status: 'completed',
-//       createdBy: safeTrim(req.body?.userId) || safeTrim(req.body?.createdBy) || null,
-//       updatedBy: safeTrim(req.body?.userId) || safeTrim(req.body?.updatedBy) || null
-//     });
-//     return res.status(constants.HTTPS_SUCCESS).json({
-//       status: true,
-//       message: 'Test result submitted',
-//       data: doc
-//     });
-//   } catch (err) {
-//     if (err?.code === 11000) {
-//       return res.status(constants.HTTPS_BAD_REQUEST).json({
-//         status: false,
-//         message: 'Duplicate submission for this student/test/reattempt'
-//       });
-//     }
-//     return next(err);
-//   }
-// };
 
 const submitAssignmentResult = async (req, res, next) => {
   try {

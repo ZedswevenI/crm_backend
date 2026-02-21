@@ -9,6 +9,11 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import s3Client from '../middlewares/s3config.js';
 import StudentBookmark from '../models/studentBookmark.model.js';
 import QuestionReport from '../models/questionReport.model.js';
+import Assignment from '../models/assignment.model.js';
+import ExamCategory from '../models/examcategory.model.js';
+import ExamSubCategory from '../models/examsubcategory.model.js';
+import Topic from '../models/topic.model.js';
+import SubTopic from '../models/subtopic.model.js';
 
 const { ObjectId } = mongoose.Types;
 const QUESTION_BUCKET = process.env.AWS_S3_QUESTION_BUCKET;
@@ -373,8 +378,8 @@ const listQuestionsByTestId = async (req, res) => {
     if (questionType) query.questionType = safeTrim(questionType).toLowerCase();
     if (status) query.status = safeTrim(status);
     const questions = await AssignmentQns.find(query)
-      .select('tenantId testId questionId questionType difficulty images positiveMarks negativeMarks questionHtml passageHtml instructionHtml questionOptions solutionHtml enablePassage enableInstruction enableSolution correctAnswer tags status createdBy updatedBy createdAt updatedAt')
-      .sort({ _id: 1 })
+      .select('tenantId testId questionId questionType difficulty images positiveMarks negativeMarks questionHtml passageHtml instructionHtml questionOptions solutionHtml enablePassage enableInstruction enableSolution correctAnswer sortOrder tags status createdBy updatedBy createdAt updatedAt')
+      .sort({ sortOrder: 1 })
       .lean();
     if (!questions.length) {
       return res.status(200).json({
@@ -382,17 +387,44 @@ const listQuestionsByTestId = async (req, res) => {
         data: []
       });
     }
+    const assignment = await Assignment.findOne({ tenantId, testId: safeTrim(testId), isdeleted: false })
+      .populate({ path: 'subjectId', model: 'subject', select: 'subjectName subjectCode' })
+      .lean();
+    let meta = { testId: safeTrim(testId) };
+    if (assignment) {
+      const [topic, subtopic, category, subcategory] = await Promise.all([
+        Topic.findOne({ tenantId, topicId: assignment.topicId }, 'topicName').lean(),
+        SubTopic.findOne({ tenantId, subTopicId: assignment.subTopicId }, 'subTopicName').lean(),
+        ExamCategory.findOne({ tenantId, categoryId: assignment.categoryId }, 'categoryName').lean(),
+        ExamSubCategory.findOne({ tenantId, subCategoryId: assignment.subCategoryId }, 'subCategoryName').lean()
+      ]);
+      meta = {
+        ...meta,
+        testNo: assignment.testNo,
+        testCode: assignment.testCode,
+        subjectId: assignment.subjectId?._id || assignment.subjectId,
+        subjectName: assignment.subjectId?.subjectName || null,
+        classNo: assignment.classNo,
+        topicId: assignment.topicId,
+        topicName: topic?.topicName || null,
+        subTopicId: assignment.subTopicId,
+        subTopicName: subtopic?.subTopicName || null,
+        categoryId: assignment.categoryId,
+        categoryName: category?.categoryName || null,
+        subCategoryId: assignment.subCategoryId,
+        subCategoryName: subcategory?.subCategoryName || null
+      };
+    }
     return res.status(200).json({
       status: true,
       data: [
         {
-          testId: safeTrim(testId),
+          ...meta,
           questions
         }
       ]
     });
   } catch (err) {
-    logger.error('listQuestionsByTestId error:', err);
     return res.status(500).json({
       status: false,
       message: err.message || 'Failed to fetch questions by testId.'
@@ -957,6 +989,39 @@ const updateReportStatus = async (req, res, next) => {
   }
 };
 
+const updateQuestionSortOrder = async (req, res, next) => {
+  try {
+    const tenantId = safeTrim(req.body?.entiId || req.body?.tenantId);
+    const testId = safeTrim(req.body?.testId);
+    const questions = req.body?.questions;
+    if (!tenantId || !testId) {
+      return res.status(400).json({ status: false, message: 'entiId and testId are required.' });
+    }
+    if (!Array.isArray(questions) || questions.length === 0) {
+      return res.status(400).json({ status: false, message: 'questions array is required.' });
+    }
+    const bulkOps = questions.map((q) => {
+      return {
+        updateOne: {
+          filter: { _id: safeTrim(q.qId), tenantId, testId, isdeleted: false },
+          update: {
+            $set: { sortOrder: Number(q.sortOrder) || 0 }
+          }
+        }
+      };
+    });
+    if (bulkOps.length > 0) {
+      await AssignmentQns.bulkWrite(bulkOps, { ordered: false });
+    }
+    return res.status(200).json({
+      status: true,
+      message: 'Question sort order updated successfully'
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   uploadSingleQuestionImage,
   getQuestionImage,
@@ -975,5 +1040,6 @@ export default {
   listBookmarks,
   createReport,
   listReports,
-  updateReportStatus
+  updateReportStatus,
+  updateQuestionSortOrder
 };

@@ -40,6 +40,62 @@ const refreshStudentCount = async (tenantId, batchId, session) => {
   return cnt;
 };
 
+const toIntYear = (v) => {
+  const n = parseInt(String(v ?? '').trim(), 10);
+  return Number.isFinite(n) ? n : 0;
+};
+
+const buildCohortAndRunningYears = ({ startYear, duration }) => {
+  const sy = toIntYear(startYear);
+  const dur = toIntYear(duration);
+  if (!sy || sy < 2000) return null;
+  if (!dur || dur < 1 || dur > 6) return null;
+  const endYear = sy + dur;
+  const cohortAy = `${sy} - ${endYear}`;
+  const runningYears = [];
+  for (let i = 0; i < dur; i++) {
+    const y1 = sy + i;
+    const y2 = y1 + 1;
+    runningYears.push(`${y1}-${y2}`);
+  }
+  return { startYear: sy, endYear, cohortAy, runningYears, currentAy: runningYears[0] || null };
+};
+const startOfAcademicYearEpoch = (year) => new Date(Number(year), 3, 1, 0, 0, 0, 0).getTime();
+const endOfAcademicYearEpoch = (year) => new Date(Number(year), 2, 31, 23, 59, 59, 999).getTime();
+
+const upsertAcademicYearConfigIfMissing = async ({ tenantId, programId, cohortAy, duration, runningYears, userId }) => {
+  if (!tenantId || !programId || !cohortAy || !duration || !Array.isArray(runningYears) || !runningYears.length) return;
+  const exists = await AcademicYearConfig.findOne({ tenantId, programId, cohortAy, isdeleted: false }, { _id: 1 }).lean();
+  if (exists) return;
+  const years = runningYears.map((ay) => {
+    const m = String(ay).match(/^(\d{4})-(\d{4})$/);
+    const y1 = m ? Number(m[1]) : 0;
+    const y2 = m ? Number(m[2]) : 0;
+    return {
+      academicYear: ay,
+      startOn: y1 ? startOfAcademicYearEpoch(y1) : null,
+      endOn: y2 ? endOfAcademicYearEpoch(y2) : null
+    };
+  });
+  await AcademicYearConfig.updateOne(
+    { tenantId, programId, cohortAy, isdeleted: false },
+    {
+      $set: {
+        tenantId,
+        programId,
+        cohortAy,
+        duration: toIntYear(duration),
+        years,
+        status: 'Active',
+        isdeleted: false,
+        updatedBy: userId || null
+      },
+      $setOnInsert: { createdBy: userId || null }
+    },
+    { upsert: true }
+  );
+};
+
 const backfillStudentsIntoEnabledTests = async (tenantId, batchId, studentIds, session) => {
   const studs = await StudentProfile.find({ tenantId, isdeleted: false, status: 'ACTIVE', studentId: { $in: studentIds } }, { _id: 0, studentId: 1, admissionNo: 1, cgpa: 1 })
     .lean()
@@ -180,7 +236,79 @@ const resolveBatchYearAndClass = async (tenantId, programId, academicYear, progr
   return { ok: true, yearNo, classNo, startingClass: prog.startingClass, duration: prog.duration };
 };
 
-// ---------- controllers ----------
+// const createBatch = async (req, res, next) => {
+//   try {
+//     const tenantId = pickTenantId(req);
+//     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+//     const payload = req.body || {};
+//     const batchName = safeTrim(payload.batchName);
+//     const batchCode = safeTrim(payload.batchCode);
+//     const academicYear = payload.academicYear;
+//     const programId = safeTrim(payload.programId);
+//     const centerId = safeTrim(payload.centerId);
+//     const startDate = toEpoch(payload.startDate);
+//     const endDate = toEpoch(payload.endDate);
+//     const programStartAy = safeTrim(payload.programStartAy) || academicYear;
+//     if (!batchName || !batchCode || !academicYear || !programId || !centerId || !startDate || !endDate) {
+//       return res.status(400).json({
+//         status: false,
+//         message: 'batchName, batchCode, academicYear, programId, centerId, startDate, endDate are required'
+//       });
+//     }
+//     const program = await Program.findOne({ tenantId, programId, isdeleted: false }, { duration: 1, startingClass: 1 }).lean();
+//     if (!program) return res.status(400).json({ status: false, message: 'Program not found' });
+//     const startAyMatch = String(programStartAy).match(/^(\d{4})/);
+//     const startYear = startAyMatch ? toIntYear(startAyMatch[1]) : 0;
+//     if (startYear > 0 && program.duration) {
+//       const calc = buildCohortAndRunningYears({ startYear, duration: program.duration });
+//       if (calc) {
+//         await upsertAcademicYearConfigIfMissing({
+//           tenantId,
+//           programId,
+//           cohortAy: calc.cohortAy,
+//           duration: program.duration,
+//           runningYears: calc.runningYears,
+//           userId
+//         });
+//       }
+//     }
+
+//     const yr = await resolveBatchYearAndClass(tenantId, programId, academicYear, programStartAy);
+//     if (!yr.ok) return res.status(400).json({ status: false, message: yr.msg });
+//     const doc = await Batch.create({
+//       tenantId,
+//       batchName,
+//       batchCode,
+//       academicYear,
+//       programId,
+//       programCode: safeTrim(payload.programCode) || null,
+//       programName: safeTrim(payload.programName) || null,
+//       centerId,
+//       centerCode: safeTrim(payload.centerCode) || null,
+//       centerName: safeTrim(payload.centerName) || null,
+//       startDate,
+//       endDate,
+//       programStartAy,
+//       yearNo: yr.yearNo,
+//       classNo: yr.classNo,
+//       status: safeTrim(payload.status) || 'ACTIVE',
+//       staffMap: Array.isArray(payload.staffMap) ? payload.staffMap : [],
+//       studentCount: 0,
+//       remarks: safeTrim(payload.remarks) || null,
+//       isdeleted: false,
+//       createdBy: payload.userId || null,
+//       updatedBy: payload.userId || null
+//     });
+//     return res.status(constants.HTTPS_SUCCESS).json({ status: true, message: 'Batch created', data: doc });
+//   } catch (err) {
+//     console.log('err ', err);
+//     if (err?.code === 11000) {
+//       return res.status(409).json({ status: false, message: 'Batch code already exists for this academic year' });
+//     }
+//     return next(err);
+//   }
+// };
+
 const createBatch = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
@@ -194,15 +322,41 @@ const createBatch = async (req, res, next) => {
     const startDate = toEpoch(payload.startDate);
     const endDate = toEpoch(payload.endDate);
     const programStartAy = safeTrim(payload.programStartAy) || academicYear;
-    const yr = await resolveBatchYearAndClass(tenantId, programId, academicYear, programStartAy);
-    console.log(yr);
-    if (!yr.ok) return res.status(400).json({ status: false, message: yr.msg });
+    const userId = safeTrim(payload.userId);
+
     if (!batchName || !batchCode || !academicYear || !programId || !centerId || !startDate || !endDate) {
       return res.status(400).json({
         status: false,
         message: 'batchName, batchCode, academicYear, programId, centerId, startDate, endDate are required'
       });
     }
+
+    // ⚡ NEW: AUTO-CREATE ACADEMIC YEAR CONFIG IF MISSING
+    const program = await Program.findOne({ tenantId, programId, isdeleted: false }, { duration: 1, startingClass: 1 }).lean();
+    if (!program) return res.status(400).json({ status: false, message: 'Program not found' });
+
+    // Extract startYear from programStartAy (e.g., "2025-2026" -> 2025)
+    const startAyMatch = String(programStartAy).match(/^(\d{4})/);
+    const startYear = startAyMatch ? toIntYear(startAyMatch[1]) : 0;
+
+    if (startYear > 0 && program.duration) {
+      const calc = buildCohortAndRunningYears({ startYear, duration: program.duration });
+      if (calc) {
+        await upsertAcademicYearConfigIfMissing({
+          tenantId,
+          programId,
+          cohortAy: calc.cohortAy,
+          duration: program.duration,
+          runningYears: calc.runningYears,
+          userId
+        });
+      }
+    }
+
+    // Now resolve the year (It will never fail due to missing config anymore!)
+    const yr = await resolveBatchYearAndClass(tenantId, programId, academicYear, programStartAy);
+    if (!yr.ok) return res.status(400).json({ status: false, message: yr.msg });
+
     const doc = await Batch.create({
       tenantId,
       batchName,
@@ -224,9 +378,10 @@ const createBatch = async (req, res, next) => {
       studentCount: 0,
       remarks: safeTrim(payload.remarks) || null,
       isdeleted: false,
-      createdBy: payload.userId || null,
-      updatedBy: payload.userId || null
+      createdBy: userId || null,
+      updatedBy: userId || null
     });
+
     return res.status(constants.HTTPS_SUCCESS).json({ status: true, message: 'Batch created', data: doc });
   } catch (err) {
     console.log('err ', err);
@@ -308,6 +463,74 @@ const viewBatch = async (req, res, next) => {
   }
 };
 
+// const updateBatch = async (req, res, next) => {
+//   try {
+//     const tenantId = pickTenantId(req);
+//     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+//     const payload = req.body || {};
+//     const batchId = safeTrim(payload.batchId);
+//     if (!batchId) return res.status(400).json({ status: false, message: 'batchId is required' });
+//     const cur = await Batch.findOne({ tenantId, batchId, isdeleted: false });
+//     if (!cur) return res.status(404).json({ status: false, message: 'Batch not found' });
+//     const guard = ensureBatchEditable(cur);
+//     if (!guard.ok) return res.status(400).json({ status: false, message: guard.msg });
+//     const patch = {};
+//     if (payload.batchName !== undefined) patch.batchName = safeTrim(payload.batchName);
+//     if (payload.batchCode !== undefined) patch.batchCode = safeTrim(payload.batchCode);
+//     if (payload.academicYear !== undefined) patch.academicYear = safeTrim(payload.academicYear);
+//     if (payload.programId !== undefined) patch.programId = safeTrim(payload.programId);
+//     if (payload.programCode !== undefined) patch.programCode = safeTrim(payload.programCode) || null;
+//     if (payload.programName !== undefined) patch.programName = safeTrim(payload.programName) || null;
+//     if (payload.centerId !== undefined) patch.centerId = safeTrim(payload.centerId);
+//     if (payload.centerCode !== undefined) patch.centerCode = safeTrim(payload.centerCode) || null;
+//     if (payload.centerName !== undefined) patch.centerName = safeTrim(payload.centerName) || null;
+//     if (payload.status !== undefined) patch.status = safeTrim(payload.status) || cur.status;
+//     if (payload.remarks !== undefined) patch.remarks = safeTrim(payload.remarks) || null;
+//     if (payload.userId !== undefined) patch.updatedBy = payload.userId || null;
+//     if (payload.startDate !== undefined) patch.startDate = toEpoch(payload.startDate);
+//     if (payload.endDate !== undefined) patch.endDate = toEpoch(payload.endDate);
+//     if (payload.programStartAy !== undefined) patch.programStartAy = safeTrim(payload.programStartAy);
+//     const effStart = patch.startDate !== undefined ? patch.startDate : cur.startDate;
+//     const effEnd = patch.endDate !== undefined ? patch.endDate : cur.endDate;
+//     if (effStart && effEnd && effStart >= effEnd) {
+//       return res.status(400).json({ status: false, message: 'startDate must be before endDate' });
+//     }
+//     if (patch.batchName !== undefined && !patch.batchName) {
+//       return res.status(400).json({ status: false, message: 'batchName cannot be empty' });
+//     }
+//     if (patch.batchCode !== undefined && !patch.batchCode) {
+//       return res.status(400).json({ status: false, message: 'batchCode cannot be empty' });
+//     }
+//     const changingCore = (patch.programId !== undefined && String(patch.programId) !== String(cur.programId)) || (patch.academicYear !== undefined && String(patch.academicYear) !== String(cur.academicYear)) || (patch.centerId !== undefined && String(patch.centerId) !== String(cur.centerId));
+//     if (changingCore) {
+//       const hasStudents = await StudentProfile.countDocuments({ tenantId, isdeleted: false, status: 'ACTIVE', batchId });
+//       if (hasStudents > 0) {
+//         return res.status(400).json({
+//           status: false,
+//           message: 'Cannot change program/center/academicYear while students are assigned. Remove/shift students first.'
+//         });
+//       }
+//       const effAcademicYear = patch.academicYear !== undefined ? patch.academicYear : cur.academicYear;
+//       const effProgramId = patch.programId !== undefined ? patch.programId : cur.programId;
+//       const effStartAy = patch.programStartAy !== undefined ? patch.programStartAy : cur.programStartAy || cur.academicYear;
+//       const yr = await resolveBatchYearAndClass(tenantId, effProgramId, effAcademicYear, effStartAy);
+//       if (!yr.ok) return res.status(400).json({ status: false, message: yr.msg });
+//       patch.programStartAy = effStartAy;
+//       patch.yearNo = yr.yearNo;
+//       patch.classNo = yr.classNo;
+//     }
+
+//     const doc = await Batch.findOneAndUpdate({ tenantId, batchId, isdeleted: false }, { $set: patch }, { new: true }).lean();
+//     if (!doc) return res.status(404).json({ status: false, message: 'Batch not found' });
+//     return res.status(constants.HTTPS_SUCCESS).json({ status: true, message: 'Batch updated', data: doc });
+//   } catch (err) {
+//     if (err?.code === 11000) {
+//       return res.status(409).json({ status: false, message: 'Batch code already exists for this academic year' });
+//     }
+//     return next(err);
+//   }
+// };
+
 const updateBatch = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
@@ -315,10 +538,13 @@ const updateBatch = async (req, res, next) => {
     const payload = req.body || {};
     const batchId = safeTrim(payload.batchId);
     if (!batchId) return res.status(400).json({ status: false, message: 'batchId is required' });
+
     const cur = await Batch.findOne({ tenantId, batchId, isdeleted: false });
     if (!cur) return res.status(404).json({ status: false, message: 'Batch not found' });
+
     const guard = ensureBatchEditable(cur);
     if (!guard.ok) return res.status(400).json({ status: false, message: guard.msg });
+
     const patch = {};
     if (payload.batchName !== undefined) patch.batchName = safeTrim(payload.batchName);
     if (payload.batchCode !== undefined) patch.batchCode = safeTrim(payload.batchCode);
@@ -335,6 +561,7 @@ const updateBatch = async (req, res, next) => {
     if (payload.startDate !== undefined) patch.startDate = toEpoch(payload.startDate);
     if (payload.endDate !== undefined) patch.endDate = toEpoch(payload.endDate);
     if (payload.programStartAy !== undefined) patch.programStartAy = safeTrim(payload.programStartAy);
+
     const effStart = patch.startDate !== undefined ? patch.startDate : cur.startDate;
     const effEnd = patch.endDate !== undefined ? patch.endDate : cur.endDate;
     if (effStart && effEnd && effStart >= effEnd) {
@@ -346,7 +573,9 @@ const updateBatch = async (req, res, next) => {
     if (patch.batchCode !== undefined && !patch.batchCode) {
       return res.status(400).json({ status: false, message: 'batchCode cannot be empty' });
     }
+
     const changingCore = (patch.programId !== undefined && String(patch.programId) !== String(cur.programId)) || (patch.academicYear !== undefined && String(patch.academicYear) !== String(cur.academicYear)) || (patch.centerId !== undefined && String(patch.centerId) !== String(cur.centerId));
+
     if (changingCore) {
       const hasStudents = await StudentProfile.countDocuments({ tenantId, isdeleted: false, status: 'ACTIVE', batchId });
       if (hasStudents > 0) {
@@ -355,9 +584,30 @@ const updateBatch = async (req, res, next) => {
           message: 'Cannot change program/center/academicYear while students are assigned. Remove/shift students first.'
         });
       }
+
       const effAcademicYear = patch.academicYear !== undefined ? patch.academicYear : cur.academicYear;
       const effProgramId = patch.programId !== undefined ? patch.programId : cur.programId;
       const effStartAy = patch.programStartAy !== undefined ? patch.programStartAy : cur.programStartAy || cur.academicYear;
+
+      // ⚡ NEW: AUTO-CREATE CONFIG ON UPDATE
+      const effProgram = await Program.findOne({ tenantId, programId: effProgramId, isdeleted: false }, { duration: 1 }).lean();
+      const startAyMatch = String(effStartAy).match(/^(\d{4})/);
+      const startYear = startAyMatch ? toIntYear(startAyMatch[1]) : 0;
+
+      if (startYear > 0 && effProgram?.duration) {
+        const calc = buildCohortAndRunningYears({ startYear, duration: effProgram.duration });
+        if (calc) {
+          await upsertAcademicYearConfigIfMissing({
+            tenantId,
+            programId: effProgramId,
+            cohortAy: calc.cohortAy,
+            duration: effProgram.duration,
+            runningYears: calc.runningYears,
+            userId: payload.userId
+          });
+        }
+      }
+
       const yr = await resolveBatchYearAndClass(tenantId, effProgramId, effAcademicYear, effStartAy);
       if (!yr.ok) return res.status(400).json({ status: false, message: yr.msg });
       patch.programStartAy = effStartAy;
@@ -777,23 +1027,46 @@ const pickActiveAcademicYearFromCfg = (yearsArr) => {
 };
 
 const getBatchAyInfo = async (req, res, next) => {
-  console.log(req.body);
   try {
     const tenantId = pickTenantId(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
     const programId = safeTrim(req.body?.programId);
     const courseStartYear = String(req.body?.courseStartYear);
+    const userId = safeTrim(req.body?.userId);
     if (!programId) return res.status(400).json({ status: false, message: 'programId is required' });
-    if (courseStartYear === undefined || courseStartYear === null || courseStartYear === '') return res.status(400).json({ status: false, message: 'courseStartYear is required' });
+    if (courseStartYear === undefined || courseStartYear === null || courseStartYear === '') {
+      return res.status(400).json({ status: false, message: 'courseStartYear is required' });
+    }
     const cohortAy = String(req.body?.cohortAy);
-    if (!cohortAy) return res.status(400).json({ status: false, message: 'Invalid courseStartYear' });
-    const cfgs = await AcademicYearConfig.find({ tenantId, programId, isdeleted: false, status: 'Active' }, { _id: 0, cohortAy: 1, years: 1, duration: 1 }).lean();
-    const cfg = (cfgs || []).find((c) => normalizeAy(c?.cohortAy) === normalizeAy(cohortAy));
+    if (!cohortAy) return res.status(400).json({ status: false, message: 'Invalid cohortAy' });
+    let cfgs = await AcademicYearConfig.find({ tenantId, programId, isdeleted: false, status: 'Active' }, { _id: 0, cohortAy: 1, years: 1, duration: 1 }).lean();
+    let cfg = (cfgs || []).find((c) => normalizeAy(c?.cohortAy) === normalizeAy(cohortAy));
     if (!cfg) {
-      return res.status(404).json({
-        status: false,
-        message: `AcademicYear config not found for programId=${programId} cohortAy=${cohortAy}`
-      });
+      const program = await Program.findOne({ tenantId, programId, isdeleted: false }, { duration: 1 }).lean();
+      if (program && program.duration) {
+        const startYear = toIntYear(courseStartYear);
+        if (startYear > 0) {
+          const calc = buildCohortAndRunningYears({ startYear, duration: program.duration });
+          if (calc) {
+            await upsertAcademicYearConfigIfMissing({
+              tenantId,
+              programId,
+              cohortAy: calc.cohortAy,
+              duration: program.duration,
+              runningYears: calc.runningYears,
+              userId
+            });
+            cfgs = await AcademicYearConfig.find({ tenantId, programId, isdeleted: false, status: 'Active' }, { _id: 0, cohortAy: 1, years: 1, duration: 1 }).lean();
+            cfg = (cfgs || []).find((c) => normalizeAy(c?.cohortAy) === normalizeAy(calc.cohortAy));
+          }
+        }
+      }
+      if (!cfg) {
+        return res.status(404).json({
+          status: false,
+          message: `AcademicYear config not found and auto-creation failed for programId=${programId} cohortAy=${cohortAy}`
+        });
+      }
     }
     const requestedAy = safeTrim(req.body?.academicYear);
     let yearRow = null;

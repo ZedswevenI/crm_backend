@@ -13,6 +13,8 @@ const AssignmentSchema = new mongoose.Schema(
     testNo: { type: String, required: true },
     testCode: { type: String, required: true, trim: true },
     numberOfQuestions: { type: Number, required: true, default: 0 },
+    duration: { type: Number, required: true, default: 60 },
+    computeFor: { type: Number, required: true, default: 10 },
     status: { type: String, default: 'active' },
     createdBy: { type: String, default: null },
     updatedBy: { type: String, default: null },
