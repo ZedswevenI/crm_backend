@@ -2,9 +2,13 @@ import mongoose from 'mongoose';
 import constants from '../helpers/constants.js';
 import Attendance from '../models/attandence.model.js';
 import TimeTable from '../models/timetable.model.js';
+import StudentProfile from '../models/studentProfile.model.js';
+import LateEntryLog from '../models/lateEntrylog.model.js';
 
 const pickTenantId = (req) => String(req?.body?.tenantId || req?.body?.entiId || '').trim();
+
 const safeTrim = (v) => (v === undefined || v === null ? '' : String(v).trim());
+
 const toInt = (v, def = 0) => {
   const n = Number(v);
   return Number.isFinite(n) ? Math.trunc(n) : def;
@@ -19,8 +23,26 @@ const markAttendance = async (req, res, next) => {
     if (!tenantId || !batchCode || !timetableId || !date || !periodNo || !facultyId) {
       return res.status(400).json({ status: false, message: 'Missing required fields' });
     }
+    const parsedDate = toInt(date, 0);
+    const parsedPeriod = toInt(periodNo, 0);
+    const inputStudents = Array.isArray(students) ? students : [];
+    const lateLogs = await LateEntryLog.find({
+      tenantId,
+      batchCode,
+      date: parsedDate,
+      periodNo: parsedPeriod,
+      type: 'STUDENT',
+      isdeleted: false
+    }).lean();
+    const lateStudentIds = new Set(lateLogs.map((log) => log.personId));
+    const processedStudents = inputStudents.map((student) => {
+      if (lateStudentIds.has(student.studentId)) {
+        return { ...student, status: 'LATE' };
+      }
+      return student;
+    });
     const doc = await Attendance.findOneAndUpdate(
-      { tenantId, batchCode, date: toInt(date, 0), periodNo: toInt(periodNo, 0), isdeleted: false },
+      { tenantId, batchCode, date: parsedDate, periodNo: parsedPeriod, isdeleted: false },
       {
         $set: {
           timetableId,
@@ -28,14 +50,13 @@ const markAttendance = async (req, res, next) => {
           subjectId,
           topicTaught: safeTrim(topicTaught),
           feedback: safeTrim(feedback),
-          students: Array.isArray(students) ? students : [],
+          students: processedStudents,
           updatedBy: userId
         },
         $setOnInsert: { createdBy: userId }
       },
       { new: true, upsert: true }
     );
-
     return res.status(200).json({ status: true, message: 'Attendance saved successfully', data: doc });
   } catch (err) {
     return next(err);
@@ -56,6 +77,20 @@ const getAbsenteesReport = async (req, res, next) => {
       pipeline.push({ $match: { 'students.studentId': safeTrim(studentId) } });
     }
     pipeline.push({
+      $lookup: {
+        from: 'studentprofiles',
+        localField: 'students.studentId',
+        foreignField: 'studentId',
+        as: 'studentProfileDoc'
+      }
+    });
+    pipeline.push({
+      $unwind: {
+        path: '$studentProfileDoc',
+        preserveNullAndEmptyArrays: true
+      }
+    });
+    pipeline.push({
       $project: {
         _id: 0,
         attendanceId: 1,
@@ -65,7 +100,11 @@ const getAbsenteesReport = async (req, res, next) => {
         subjectId: 1,
         studentId: '$students.studentId',
         admissionNo: '$students.admissionNo',
-        remarks: '$students.remarks'
+        remarks: '$students.remarks',
+        studentName: '$studentProfileDoc.student.name',
+        registrationNumber: '$studentProfileDoc.registrationNumber',
+        studentPhone: '$studentProfileDoc.student.phone',
+        parentPhone: '$studentProfileDoc.student.parentPhone'
       }
     });
     const absentees = await Attendance.aggregate(pipeline);
@@ -147,18 +186,90 @@ const getStaffSchedule = async (req, res, next) => {
 const getStudentSchedule = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
-    const batchCode = safeTrim(req.body?.batchCode);
+    const studentId = safeTrim(req.body?.studentId);
     const date = toInt(req.body?.date, 0);
-    if (!tenantId || !batchCode || !date) return res.status(400).json({ status: false, message: 'Missing fields' });
+    if (!tenantId || !studentId || !date) {
+      return res.status(400).json({ status: false, message: 'tenantId, studentId, and date are required' });
+    }
+    const student = await StudentProfile.findOne({
+      tenantId,
+      studentId,
+      status: 'ACTIVE',
+      isdeleted: false
+    }).lean();
+    if (!student || !student.batchCode) {
+      return res.status(200).json({
+        status: true,
+        data: [],
+        message: 'Student not found or not currently assigned to a batch'
+      });
+    }
     const d = new Date(date);
     const dayStr = DAYS[d.getDay()];
-    const tt = await TimeTable.findOne({ tenantId, batchCode, isdeleted: false, 'week.day': dayStr }).lean();
+    const tt = await TimeTable.findOne({
+      tenantId,
+      batchCode: student.batchCode,
+      isdeleted: false,
+      'week.day': dayStr
+    }).lean();
     if (!tt) return res.status(200).json({ status: true, data: [] });
     const daySchedule = tt.week.find((w) => w.day === dayStr);
-    return res.status(200).json({ status: true, data: daySchedule ? daySchedule.periods : [] });
+    return res.status(200).json({
+      status: true,
+      batchCode: student.batchCode,
+      data: daySchedule ? daySchedule.periods : []
+    });
   } catch (err) {
     return next(err);
   }
 };
 
-export default { markAttendance, getAbsenteesReport, getPendingAttendance, getStaffSchedule, getStudentSchedule };
+const getStudentsForAttendance = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const { batchCode, date, periodNo } = req.body;
+    if (!tenantId || !batchCode || !date || !periodNo) {
+      return res.status(400).json({ status: false, message: 'tenantId, batchCode, date, and periodNo are required' });
+    }
+    const students = await StudentProfile.find({ tenantId, batchCode, status: 'ACTIVE', isdeleted: false }, { studentId: 1, admissionNo: 1, 'student.name': 1 }).sort({ 'student.name': 1 }).lean();
+    if (!students.length) {
+      return res.status(200).json({ status: true, data: [], message: 'No active students found in this batch' });
+    }
+    const existingAttendance = await Attendance.findOne({
+      tenantId,
+      batchCode,
+      date: toInt(date, 0),
+      periodNo: toInt(periodNo, 0),
+      isdeleted: false
+    }).lean();
+    const result = students.map((st) => {
+      let currentStatus = 'PRESENT';
+      let remarks = null;
+      if (existingAttendance) {
+        const savedRecord = existingAttendance.students.find((s) => s.studentId === st.studentId);
+        if (savedRecord) {
+          currentStatus = savedRecord.status;
+          remarks = savedRecord.remarks;
+        }
+      }
+      return {
+        studentId: st.studentId,
+        admissionNo: st.admissionNo,
+        name: st.student?.name,
+        status: currentStatus,
+        remarks: remarks
+      };
+    });
+    return res.status(200).json({
+      status: true,
+      data: result,
+      isEditMode: !!existingAttendance,
+      existingFeedback: existingAttendance?.feedback || '',
+      existingTopicTaught: existingAttendance?.topicTaught || ''
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+export default { markAttendance, getAbsenteesReport, getPendingAttendance, getStaffSchedule, getStudentSchedule, getStudentsForAttendance };

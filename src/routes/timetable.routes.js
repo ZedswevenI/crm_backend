@@ -9,6 +9,7 @@ import timeTableController from '../controller/timetable.controller.js';
 routes.post('/create', validatetoken, timeTableController.createTimeTable);
 routes.post('/import', validatetoken, timeTableController.bulkUploadTimeTables);
 routes.post('/view', validatetoken, timeTableController.viewTimeTable);
+routes.post('/viewbybatch', validatetoken, timeTableController.viewBatchScheduleByDate);
 routes.post('/list-by-batch', validatetoken, timeTableController.listTimeTablesByBatch);
 routes.post('/list', validatetoken, timeTableController.listTimeTables);
 routes.post('/period/cancel', validatetoken, timeTableController.cancelPeriod);

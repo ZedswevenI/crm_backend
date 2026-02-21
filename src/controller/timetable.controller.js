@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import constants from '../helpers/constants.js';
 import TimeTable from '../models/timetable.model.js';
 import LateEntryLog from '../models/lateEntrylog.model.js';
+import Attendance from '../models/attandence.model.js';
 
 const pickTenantId = (req) => String(req?.body?.tenantId || req?.body?.entiId || '').trim();
 const safeTrim = (v) => (v === undefined || v === null ? '' : String(v).trim());
@@ -228,39 +229,30 @@ const cancelWholeDay = async (req, res, next) => {
   }
 };
 
-// ======================================================
-// 🔹 EDIT WHOLE DAY
-// ======================================================
 const editWholeDay = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     const timetableId = safeTrim(req.body?.timetableId);
     const date = toInt(req.body?.date, 0);
     const periods = Array.isArray(req.body?.periods) ? req.body.periods : [];
-
     if (!tenantId || !timetableId || !date)
       return res.status(400).json({
         status: false,
         message: 'tenantId, timetableId and date required'
       });
-
     const tt = await TimeTable.findOne({
       _id: timetableId,
       tenantId,
       isdeleted: false
     });
-
     if (!tt)
       return res.status(404).json({
         status: false,
         message: 'Timetable not found'
       });
-
     const d = new Date(date);
     const day = DAYS[d.getDay() === 0 ? 6 : d.getDay() - 1];
-
     const normalizedPeriods = [];
-
     for (const p of periods) {
       const np = normalizePeriod({ ...p, day });
       if (!np.ok)
@@ -268,10 +260,8 @@ const editWholeDay = async (req, res, next) => {
           status: false,
           message: np.msg
         });
-
       normalizedPeriods.push(np.period);
     }
-
     upsertOverride(tt, {
       date,
       day,
@@ -280,9 +270,7 @@ const editWholeDay = async (req, res, next) => {
       period: { periods: normalizedPeriods },
       reason: 'Whole day edited'
     });
-
     await tt.save();
-
     return res.json({
       status: true,
       message: 'Whole day updated'
@@ -296,42 +284,31 @@ const listTimeTables = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-
     const page = Math.max(parseInt(req.query.page || '1', 10), 1);
     const limit = Math.min(Math.max(parseInt(req.query.limit || '20', 10), 1), 200);
     const skip = (page - 1) * limit;
-
     const list = safeTrim(req.query.list);
     const search = safeTrim(req.query.search);
-
     const batchCode = safeTrim(req.query.batchCode);
     const centerCode = safeTrim(req.query.centerCode);
     const phase = safeTrim(req.query.phase);
     const wkFrom = toInt(req.query.wkFrom, 0);
     const wkTo = toInt(req.query.wkTo, 0);
-
     const query = { tenantId, isdeleted: false };
-
     if (batchCode) query.batchCode = batchCode;
     if (centerCode) query.centerCode = centerCode;
     if (phase) query.phase = phase;
-
     if (wkFrom) query.wkStartOn = { ...(query.wkStartOn || {}), $gte: wkFrom };
     if (wkTo) query.wkStartOn = { ...(query.wkStartOn || {}), $lte: wkTo };
-
     if (search) {
       const rx = new RegExp(escapeRegex(search), 'i');
       query.$or = [{ batchCode: rx }, { centerCode: rx }, { phase: rx }];
     }
-
     if (list === 'full') {
       const rows = await TimeTable.find(query).sort({ wkStartOn: -1 }).lean();
-
       return res.json({ status: true, data: rows, count: rows.length });
     }
-
     const [rows, count] = await Promise.all([TimeTable.find(query).sort({ wkStartOn: -1 }).skip(skip).limit(limit).lean(), TimeTable.countDocuments(query)]);
-
     return res.json({ status: true, data: rows, count });
   } catch (err) {
     return next(err);
@@ -342,13 +319,10 @@ const viewTimeTable = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-
     const timetableId = safeTrim(req.body?.timetableId);
     const batchCode = safeTrim(req.body?.batchCode);
     const wkStartOn = toInt(req.body?.wkStartOn, 0);
-
     const query = { tenantId, isdeleted: false };
-
     if (timetableId) {
       query._id = timetableId;
     } else {
@@ -357,14 +331,11 @@ const viewTimeTable = async (req, res, next) => {
           status: false,
           message: 'Provide timetableId OR (batchCode + wkStartOn)'
         });
-
       query.batchCode = batchCode;
       query.wkStartOn = wkStartOn;
     }
-
     const doc = await TimeTable.findOne(query).lean();
     if (!doc) return res.status(404).json({ status: false, message: 'Timetable not found' });
-
     return res.json({ status: true, data: doc });
   } catch (err) {
     return next(err);
@@ -612,6 +583,92 @@ const bulkUploadTimeTables = async (req, res, next) => {
   }
 };
 
+const viewBatchScheduleByDate = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const batchCode = safeTrim(req.body?.batchCode);
+    const fromDate = toInt(req.body?.fromDate, 0);
+    const toDate = toInt(req.body?.toDate, fromDate);
+    if (!tenantId || !batchCode || !fromDate) {
+      return res.status(400).json({ status: false, message: 'tenantId, batchCode, and fromDate are required' });
+    }
+    if (toDate < fromDate) {
+      return res.status(400).json({ status: false, message: 'toDate cannot be before fromDate' });
+    }
+    const msPerDay = 24 * 60 * 60 * 1000;
+    if (toDate - fromDate > 31 * msPerDay) {
+      return res.status(400).json({ status: false, message: 'Date range cannot exceed 31 days' });
+    }
+    const weekStarts = new Set();
+    let curr = fromDate;
+    while (curr <= toDate) {
+      weekStarts.add(getPreviousMonday(curr));
+      curr += msPerDay;
+    }
+    const timetables = await TimeTable.find({
+      tenantId,
+      batchCode,
+      wkStartOn: { $in: Array.from(weekStarts) },
+      isdeleted: false
+    }).lean();
+    const ttMap = {};
+    for (const tt of timetables) {
+      ttMap[tt.wkStartOn] = tt;
+    }
+    const schedule = [];
+    curr = fromDate;
+    while (curr <= toDate) {
+      const d = new Date(curr);
+      const dayName = DAYS[d.getDay() === 0 ? 6 : d.getDay() - 1];
+      const wkStart = getPreviousMonday(curr);
+      const tt = ttMap[wkStart];
+      let dayData = {
+        date: curr,
+        day: dayName,
+        isHoliday: false,
+        holidayReason: null,
+        periods: []
+      };
+      if (tt) {
+        const baseDay = (tt.week || []).find((w) => w.day === dayName);
+        let periods = baseDay ? JSON.parse(JSON.stringify(baseDay.periods)) : [];
+        const dayOverrides = (tt.overrides || []).filter((o) => o.date === curr);
+        let isWholeDayCancelled = false;
+        let wholeDayReason = null;
+        for (const ov of dayOverrides) {
+          if (ov.action === 'CANCEL_DAY') {
+            isWholeDayCancelled = true;
+            wholeDayReason = ov.reason;
+            break;
+          } else if (ov.action === 'CANCEL_PERIOD') {
+            const idx = periods.findIndex((p) => p.periodNo === ov.periodNo);
+            if (idx !== -1) periods[idx] = { ...periods[idx], ...ov.period, isCancelled: true, cancelReason: ov.reason };
+          } else if (ov.action === 'REPLACE_PERIOD' && ov.periodNo !== null) {
+            const idx = periods.findIndex((p) => p.periodNo === ov.periodNo);
+            if (idx !== -1) periods[idx] = { ...periods[idx], ...ov.period };
+            else periods.push(ov.period);
+          } else if (ov.action === 'MOVE_PERIOD') {
+            const idx = periods.findIndex((p) => p.periodNo === ov.periodNo);
+            if (idx !== -1) periods[idx] = { ...periods[idx], ...ov.period };
+          }
+        }
+        if (isWholeDayCancelled) {
+          dayData.isHoliday = true;
+          dayData.holidayReason = wholeDayReason;
+          dayData.periods = [];
+        } else {
+          dayData.periods = periods.sort((a, b) => (a.periodNo || 0) - (b.periodNo || 0));
+        }
+      }
+      schedule.push(dayData);
+      curr += msPerDay;
+    }
+    return res.status(200).json({ status: true, data: schedule });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 const logLateEntry = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
@@ -620,11 +677,12 @@ const logLateEntry = async (req, res, next) => {
     if (!tenantId || !type || !personId || !timetableId || !date || !periodNo || scheduledStartMin === undefined || delayMinutes === undefined) {
       return res.status(400).json({ status: false, message: 'Missing required fields for late entry' });
     }
-    if (!['STAFF', 'STUDENT'].includes(String(type).toUpperCase())) {
+    const upperType = String(type).toUpperCase();
+    if (!['STAFF', 'STUDENT'].includes(upperType)) {
       return res.status(400).json({ status: false, message: 'Invalid type. Must be STAFF or STUDENT' });
     }
     const doc = await LateEntryLog.findOneAndUpdate(
-      { tenantId, type: String(type).toUpperCase(), personId, date: toInt(date, 0), periodNo: toInt(periodNo, 0), isdeleted: false },
+      { tenantId, type: upperType, personId, date: toInt(date, 0), periodNo: toInt(periodNo, 0), isdeleted: false },
       {
         $set: {
           personName: safeTrim(personName),
@@ -640,9 +698,24 @@ const logLateEntry = async (req, res, next) => {
       },
       { new: true, upsert: true }
     );
+    if (upperType === 'STUDENT') {
+      await Attendance.updateOne(
+        {
+          tenantId,
+          batchCode,
+          date: toInt(date, 0),
+          periodNo: toInt(periodNo, 0),
+          isdeleted: false,
+          'students.studentId': personId
+        },
+        {
+          $set: { 'students.$.status': 'LATE' }
+        }
+      );
+    }
     return res.status(200).json({
       status: true,
-      message: `${type} late entry logged successfully`,
+      message: `${type} late entry logged and synced successfully`,
       data: doc
     });
   } catch (err) {
@@ -712,5 +785,6 @@ export default {
   bulkUploadTimeTables,
   logLateEntry,
   listStudentLateEntries,
-  listStaffLateEntries
+  listStaffLateEntries,
+  viewBatchScheduleByDate
 };

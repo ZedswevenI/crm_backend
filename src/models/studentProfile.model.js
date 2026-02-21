@@ -22,14 +22,14 @@ const StudentProfileSchema = new mongoose.Schema(
     portalStudentId: { type: String, trim: true, index: true },
     student: {
       name: { type: String, required: true, trim: true },
-      phone: { type: String, required: true, trim: true },
-      email: { type: String, trim: true },
-      parentName: { type: String, required: true, trim: true },
-      parentPhone: { type: String, required: true, trim: true },
-      address: { type: String, trim: true, default: null },
-      city: { type: String, trim: true, default: null },
-      state: { type: String, trim: true, default: null },
-      pincode: { type: String, trim: true, default: null }
+      phone: { type: String, required: false, trim: true },
+      email: { type: String, trim: false },
+      parentName: { type: String, required: false, trim: true },
+      parentPhone: { type: String, required: false, trim: true, default: null },
+      address: { type: String, trim: false, default: null },
+      city: { type: String, trim: false, default: null },
+      state: { type: String, trim: false, default: null },
+      pincode: { type: String, trim: false, default: null }
     },
     academicYear: { type: String, required: true, trim: true, index: true },
     programId: { type: String, required: true, ref: 'program', trim: true, index: true },
