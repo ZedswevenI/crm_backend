@@ -8,13 +8,15 @@ uuid();
  * L2 - Admission Manager
  * L3 - Accounts Manager
  * L4 - Academic Operations
+ * L5 - Faculty
  */
-const ROLE_LEVELS = ['L1', 'L2', 'L3', 'L4'];
+const ROLE_LEVELS = ['L1', 'L2', 'L3', 'L4', 'L5'];
 
 const userSchema = new mongoose.Schema(
   {
     tenantId: { type: String, required: true, ref: 'tenant', trim: true, index: true },
     userId: { type: String, required: true, default: uuid, trim: true },
+    staffId: { type: String, default: null, index: true },
     name: { type: String, required: true, trim: true },
     email: {
       type: String,
@@ -55,7 +57,8 @@ userSchema.pre('validate', async function (next) {
       L1: 'Academic Head',
       L2: 'Admission Manager',
       L3: 'Accounts Manager',
-      L4: 'Academic Operations'
+      L4: 'Academic Operations',
+      L5: 'Faculty'
     };
     this.roleLabel = map[this.roleLevel] || this.roleLabel || 'Academic Operations';
     const existingEmail = await this.constructor.exists(

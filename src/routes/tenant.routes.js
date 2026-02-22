@@ -38,6 +38,7 @@ routes.post('/user/edit', validatetoken, tenantCtrl.updateUser);
 routes.post('/user/delete', validatetoken, tenantCtrl.deleteUser);
 routes.post('/user/view', validatetoken, tenantCtrl.viewUser);
 routes.post('/user/import', validatetoken, tenantCtrl.importUsers);
+routes.post('/user/link/staff', validatetoken, tenantCtrl.syncExistingUsersAndStaff);
 
 // program Routes
 routes.post('/program/create', validatetoken, programCtrl.createProgram);
