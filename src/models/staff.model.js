@@ -11,6 +11,7 @@ const staffSchema = new mongoose.Schema(
   {
     tenantId: { type: String, required: true, ref: 'tenant', trim: true, index: true },
     staffId: { type: String, required: true, default: uuid, trim: true },
+    userId: { type: String, default: null, ref: 'user', index: true },
     employeeId: { type: String, required: true, trim: true },
     staffCode: { type: String, required: true, trim: true, index: true },
     staffName: { type: String, required: true, trim: true, index: true },
