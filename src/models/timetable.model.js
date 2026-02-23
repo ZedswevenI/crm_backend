@@ -20,10 +20,15 @@ const TimeRangeSchema = new mongoose.Schema(
 
 const PeriodSchema = new mongoose.Schema(
   {
-    periodNo: { type: Number, required: true, min: 1 },
-    time: { type: TimeRangeSchema, required: true },
-    facultyId: { type: String, required: true, trim: true, index: true },
+    periodNo: { type: Number, min: 1 },
+    time: { type: TimeRangeSchema },
+    periodType: { type: String, enum: ['LECTURE', 'EXAM', 'LAB'], default: 'LECTURE' },
+    examId: { type: String, default: null, trim: true },
+    examDescription: { type: String, default: null, trim: true },
+    facultyId: { type: String, trim: true, index: true },
     facultyName: { type: String, default: null, trim: true },
+    mode: { type: String, enum: ['OFFLINE', 'ONLINE'], default: 'OFFLINE' },
+    zoomUrl: { type: String, default: null, trim: true },
     subjectId: { type: String, default: null, trim: true, index: true },
     subjectCode: { type: String, default: null, trim: true },
     subjectName: { type: String, default: null, trim: true },
