@@ -10,6 +10,8 @@ export const signAccessToken = (user) =>
       userId: user._id,
       CRN: user.userId,
       email: user.email,
+      roleLevel: user.roleLevel,
+      staffId: user.staffId,
       name: user.name
     },
     ACCESS_SECRET,
@@ -22,6 +24,8 @@ export const signRefreshToken = (user) =>
       userId: user._id,
       CRN: user.userId,
       email: user.email,
+      roleLevel: user.roleLevel,
+      staffId: user.staffId,
       name: user.name
     },
     REFRESH_SECRET,

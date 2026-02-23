@@ -11,6 +11,7 @@ import timetableRoute from './timetable.routes.js';
 import studentRoute from './student.routes.js';
 import assignmentRoute from './assignment.routes.js';
 import attendanceRoute from './attendance.routes.js';
+import teacherRoute from './teacher.routes.js';
 
 routes.post('/healthcheck', (req, res) => {
   try {
@@ -28,5 +29,6 @@ routes.use('/timetable', timetableRoute);
 routes.use('/student', studentRoute);
 routes.use('/assignment', assignmentRoute);
 routes.use('/attendance', attendanceRoute);
+routes.use('/teacher', teacherRoute);
 
 export default routes;
