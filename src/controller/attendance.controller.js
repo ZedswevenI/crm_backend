@@ -15,6 +15,30 @@ const toInt = (v, def = 0) => {
 };
 const DAYS = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
 
+const getEffectivePeriods = (tt, dateMs) => {
+  const d = new Date(dateMs);
+  const dayStr = DAYS[d.getDay()];
+  const baseDay = (tt.week || []).find((w) => String(w.day).toUpperCase() === dayStr);
+  let periods = baseDay ? JSON.parse(JSON.stringify(baseDay.periods)) : [];
+  const dayOverrides = (tt.overrides || []).filter((o) => toInt(o.date, 0) === dateMs);
+  for (const ov of dayOverrides) {
+    if (ov.action === 'CANCEL_DAY') {
+      return [];
+    } else if (ov.action === 'CANCEL_PERIOD') {
+      const idx = periods.findIndex((p) => p.periodNo === ov.periodNo);
+      if (idx !== -1) periods[idx] = { ...periods[idx], ...ov.period, isCancelled: true };
+    } else if (ov.action === 'REPLACE_PERIOD' && ov.periodNo !== null) {
+      const idx = periods.findIndex((p) => p.periodNo === ov.periodNo);
+      if (idx !== -1) periods[idx] = { ...periods[idx], ...ov.period };
+      else periods.push(ov.period);
+    } else if (ov.action === 'MOVE_PERIOD') {
+      const idx = periods.findIndex((p) => p.periodNo === ov.periodNo);
+      if (idx !== -1) periods[idx] = { ...periods[idx], ...ov.period };
+    }
+  }
+  return periods.filter((p) => !p.isCancelled).sort((a, b) => (a.periodNo || 0) - (b.periodNo || 0));
+};
+
 const markAttendance = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
@@ -121,8 +145,9 @@ const getPendingAttendance = async (req, res, next) => {
     const batchCode = safeTrim(req.body?.batchCode);
     if (!tenantId || !date) return res.status(400).json({ status: false, message: 'tenantId and date are required' });
     const d = new Date(date);
-    const dayStr = DAYS[d.getDay()];
-    const ttQuery = { tenantId, isdeleted: false, 'week.day': dayStr };
+    const diff = d.getDay() === 0 ? -6 : 1 - d.getDay();
+    const mondayMs = new Date(d.setDate(d.getDate() + diff)).setHours(0, 0, 0, 0);
+    const ttQuery = { tenantId, isdeleted: false, wkStartOn: mondayMs };
     if (batchCode) ttQuery.batchCode = batchCode;
     const timetables = await TimeTable.find(ttQuery).lean();
     const attQuery = { tenantId, date, isdeleted: false };
@@ -131,20 +156,20 @@ const getPendingAttendance = async (req, res, next) => {
     const completedSet = new Set(completedAtt.map((a) => `${a.batchCode}_${a.periodNo}`));
     const pending = [];
     for (const tt of timetables) {
-      const daySchedule = tt.week.find((w) => w.day === dayStr);
-      if (!daySchedule) continue;
-
-      for (const period of daySchedule.periods) {
-        if (period.isCancelled) continue;
+      const activePeriods = getEffectivePeriods(tt, date);
+      for (const period of activePeriods) {
         const key = `${tt.batchCode}_${period.periodNo}`;
         if (!completedSet.has(key)) {
           pending.push({
             batchCode: tt.batchCode,
             timetableId: tt._id,
             periodNo: period.periodNo,
+            periodType: period.periodType,
+            mode: period.mode,
             facultyId: period.facultyId,
             facultyName: period.facultyName,
-            subjectId: period.subjectId
+            subjectId: period.subjectId,
+            subjectName: period.subjectName
           });
         }
       }
@@ -162,14 +187,14 @@ const getStaffSchedule = async (req, res, next) => {
     const date = toInt(req.body?.date, 0);
     if (!tenantId || !facultyId || !date) return res.status(400).json({ status: false, message: 'Missing fields' });
     const d = new Date(date);
-    const dayStr = DAYS[d.getDay()];
-    const timetables = await TimeTable.find({ tenantId, isdeleted: false, 'week.day': dayStr }).lean();
+    const diff = d.getDay() === 0 ? -6 : 1 - d.getDay();
+    const mondayMs = new Date(d.setDate(d.getDate() + diff)).setHours(0, 0, 0, 0);
+    const timetables = await TimeTable.find({ tenantId, isdeleted: false, wkStartOn: mondayMs }).lean();
     let myClasses = [];
     for (const tt of timetables) {
-      const daySchedule = tt.week.find((w) => w.day === dayStr);
-      if (!daySchedule) continue;
-      const periods = daySchedule.periods.filter((p) => p.facultyId === facultyId && !p.isCancelled);
-      periods.forEach((p) => {
+      const activePeriods = getEffectivePeriods(tt, date);
+      const myPeriods = activePeriods.filter((p) => p.facultyId === facultyId);
+      myPeriods.forEach((p) => {
         myClasses.push({
           batchCode: tt.batchCode,
           timetableId: tt._id,
@@ -191,33 +216,20 @@ const getStudentSchedule = async (req, res, next) => {
     if (!tenantId || !studentId || !date) {
       return res.status(400).json({ status: false, message: 'tenantId, studentId, and date are required' });
     }
-    const student = await StudentProfile.findOne({
-      tenantId,
-      studentId,
-      status: 'ACTIVE',
-      isdeleted: false
-    }).lean();
+    const student = await StudentProfile.findOne({ tenantId, studentId, status: 'ACTIVE', isdeleted: false }).lean();
     if (!student || !student.batchCode) {
-      return res.status(200).json({
-        status: true,
-        data: [],
-        message: 'Student not found or not currently assigned to a batch'
-      });
+      return res.status(200).json({ status: true, data: [], message: 'Student not found or not assigned to a batch' });
     }
     const d = new Date(date);
-    const dayStr = DAYS[d.getDay()];
-    const tt = await TimeTable.findOne({
-      tenantId,
-      batchCode: student.batchCode,
-      isdeleted: false,
-      'week.day': dayStr
-    }).lean();
+    const diff = d.getDay() === 0 ? -6 : 1 - d.getDay();
+    const mondayMs = new Date(d.setDate(d.getDate() + diff)).setHours(0, 0, 0, 0);
+    const tt = await TimeTable.findOne({ tenantId, batchCode: student.batchCode, wkStartOn: mondayMs, isdeleted: false }).lean();
     if (!tt) return res.status(200).json({ status: true, data: [] });
-    const daySchedule = tt.week.find((w) => w.day === dayStr);
+    const activePeriods = getEffectivePeriods(tt, date);
     return res.status(200).json({
       status: true,
       batchCode: student.batchCode,
-      data: daySchedule ? daySchedule.periods : []
+      data: activePeriods
     });
   } catch (err) {
     return next(err);

@@ -7,6 +7,7 @@ import validatetoken from '../middlewares/auth.js';
 import timeTableController from '../controller/timetable.controller.js';
 
 routes.post('/create', validatetoken, timeTableController.createTimeTable);
+routes.post('/validate', validatetoken, timeTableController.validateSchedule);
 routes.post('/import', validatetoken, timeTableController.bulkUploadTimeTables);
 routes.post('/view', validatetoken, timeTableController.viewTimeTable);
 routes.post('/viewbybatch', validatetoken, timeTableController.viewBatchScheduleByDate);
@@ -18,6 +19,9 @@ routes.post('/period/move', validatetoken, timeTableController.changePeriod);
 routes.post('/period/replace', validatetoken, timeTableController.replacePeriod);
 routes.post('/day/cancel', validatetoken, timeTableController.cancelWholeDay);
 routes.post('/day/edit', validatetoken, timeTableController.editWholeDay);
+routes.post('/update/zoomlink', validatetoken, timeTableController.updateZoomLink);
+routes.post('/convertToExam', validatetoken, timeTableController.convertToExam);
+routes.post('/bulk/zoomlink/upload', validatetoken, timeTableController.bulkUpdateZoomLinks);
 
 routes.post('/late-entry/log', validatetoken, timeTableController.logLateEntry);
 routes.post('/late-entry/list/student', validatetoken, timeTableController.listStudentLateEntries);

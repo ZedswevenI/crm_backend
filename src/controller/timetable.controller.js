@@ -3,6 +3,7 @@ import constants from '../helpers/constants.js';
 import TimeTable from '../models/timetable.model.js';
 import LateEntryLog from '../models/lateEntrylog.model.js';
 import Attendance from '../models/attandence.model.js';
+import Staff from '../models/staff.model.js';
 
 const pickTenantId = (req) => String(req?.body?.tenantId || req?.body?.entiId || '').trim();
 const safeTrim = (v) => (v === undefined || v === null ? '' : String(v).trim());
@@ -14,6 +15,57 @@ const toInt = (v, def = 0) => {
 const DAYS = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY', 'SUNDAY'];
 const isValidDay = (d) => DAYS.includes(String(d || '').toUpperCase());
 const normDay = (d) => String(d || '').toUpperCase();
+
+const getOffsetDate = (wkStartOn, dayName) => {
+  const offsets = { MONDAY: 0, TUESDAY: 1, WEDNESDAY: 2, THURSDAY: 3, FRIDAY: 4, SATURDAY: 5, SUNDAY: 6 };
+  const offsetMs = (offsets[dayName] || 0) * 24 * 60 * 60 * 1000;
+  return wkStartOn + offsetMs;
+};
+
+const checkStaffConflicts = async (tenantId, facultyId, date, day, startMin, endMin, excludeTimetableId = null) => {
+  const staff = await Staff.findOne({ staffId: facultyId, tenantId, isdeleted: false }).lean();
+  if (staff && staff.weekoff && staff.weekoff.includes(day)) {
+    return { conflict: true, message: `Faculty ${staff.name || facultyId} has a week-off on ${day}.` };
+  }
+  const wkStartOn = getPreviousMonday(date);
+  const query = { tenantId, wkStartOn, isdeleted: false };
+  if (excludeTimetableId) query._id = { $ne: excludeTimetableId };
+  const timetables = await TimeTable.find(query).lean();
+  for (const tt of timetables) {
+    const dayOverrides = (tt.overrides || []).filter((o) => o.date === date);
+    if (dayOverrides.some((o) => o.action === 'CANCEL_DAY')) continue;
+    const baseDay = (tt.week || []).find((w) => w.day === day);
+    let periods = baseDay ? JSON.parse(JSON.stringify(baseDay.periods)) : [];
+    for (const ov of dayOverrides) {
+      if (ov.action === 'CANCEL_PERIOD') {
+        const idx = periods.findIndex((p) => p.periodNo === ov.periodNo);
+        if (idx !== -1) periods[idx] = { ...periods[idx], isCancelled: true };
+      } else if (ov.action === 'REPLACE_PERIOD' || ov.action === 'ADD_PERIOD') {
+        const idx = periods.findIndex((p) => p.periodNo === ov.periodNo);
+        if (idx !== -1) periods[idx] = { ...periods[idx], ...ov.period };
+        else periods.push(ov.period);
+      } else if (ov.action === 'MOVE_PERIOD') {
+        const idx = periods.findIndex((p) => p.periodNo === ov.periodNo);
+        if (idx !== -1) periods[idx] = { ...periods[idx], ...ov.period };
+      }
+    }
+    for (const p of periods) {
+      if (p.isCancelled) continue;
+      const currentFaculty = p.replacementFacultyId || p.facultyId;
+      if (currentFaculty === String(facultyId)) {
+        const pStart = toInt(p.time?.startMin, 0);
+        const pEnd = toInt(p.time?.endMin, 0);
+        if (startMin < pEnd && endMin > pStart) {
+          return {
+            conflict: true,
+            message: `Faculty is already booked in batch ${tt.batchCode} from ${p.time.startLabel} to ${p.time.endLabel} mins.`
+          };
+        }
+      }
+    }
+  }
+  return { conflict: false };
+};
 
 const getPreviousMonday = (epochMs) => {
   const d = new Date(epochMs);
@@ -43,6 +95,15 @@ const normalizePeriod = (p) => {
   if (!facultyId) return { ok: false, msg: 'facultyId is required' };
   if (periodNo <= 0) return { ok: false, msg: 'periodNo must be >= 1' };
   if (p?.day !== undefined && !isValidDay(day)) return { ok: false, msg: 'Invalid day' };
+  const periodType = safeTrim(p?.periodType) || 'LECTURE';
+  const validPeriodTypes = ['LECTURE', 'EXAM', 'LAB', 'TUTORIAL', 'TEST', 'REVISION'];
+  if (!validPeriodTypes.includes(periodType)) {
+    return { ok: false, msg: `periodType must be one of: ${validPeriodTypes.join(', ')}` };
+  }
+  const mode = safeTrim(p?.mode) || 'OFFLINE';
+  if (!['OFFLINE', 'ONLINE'].includes(mode)) {
+    return { ok: false, msg: 'mode must be OFFLINE or ONLINE' };
+  }
   return {
     ok: true,
     period: {
@@ -53,6 +114,11 @@ const normalizePeriod = (p) => {
         startLabel: safeTrim(time?.startLabel) || null,
         endLabel: safeTrim(time?.endLabel) || null
       },
+      periodType,
+      examId: safeTrim(p?.examId) || null,
+      examDescription: safeTrim(p?.examDescription) || null,
+      mode,
+      zoomUrl: safeTrim(p?.zoomUrl) || null,
       facultyId,
       facultyName: safeTrim(p?.facultyName) || null,
       subjectId: safeTrim(p?.subjectId) || null,
@@ -106,22 +172,30 @@ const createTimeTable = async (req, res, next) => {
     const correctedMonday = getPreviousMonday(inputWeekStart);
     const weekIn = Array.isArray(payload.week) ? payload.week : [];
     const week = [];
+    const existingDoc = await TimeTable.findOne({ tenantId, batchCode, wkStartOn: correctedMonday, isdeleted: false }).lean();
+    const excludeTimetableId = existingDoc ? existingDoc._id : null;
     for (const d of weekIn) {
       const day = normDay(d?.day);
-      if (!isValidDay(day))
-        return res.status(400).json({
-          status: false,
-          message: `Invalid day ${d?.day}`
-        });
+      if (!isValidDay(day)) return res.status(400).json({ status: false, message: `Invalid day ${d?.day}` });
+
+      const exactDate = getOffsetDate(correctedMonday, day);
       const periodsIn = Array.isArray(d?.periods) ? d.periods : [];
       const periods = [];
+
       for (const p of periodsIn) {
         const np = normalizePeriod({ ...p, day });
-        if (!np.ok)
+        if (!np.ok) return res.status(400).json({ status: false, message: np.msg });
+
+        // CONFLICT CHECK
+        const check = await checkStaffConflicts(tenantId, np.period.facultyId, exactDate, day, np.period.time.startMin, np.period.time.endMin, excludeTimetableId);
+
+        if (check.conflict) {
           return res.status(400).json({
             status: false,
-            message: np.msg
+            message: `Conflict on ${day} Period ${np.period.periodNo}: ${check.message}`
           });
+        }
+
         periods.push(np.period);
       }
       week.push({ day, periods });
@@ -229,40 +303,182 @@ const cancelWholeDay = async (req, res, next) => {
   }
 };
 
+// const editWholeDay = async (req, res, next) => {
+//   try {
+//     const tenantId = pickTenantId(req);
+//     const timetableId = safeTrim(req.body?.timetableId);
+//     const date = toInt(req.body?.date, 0);
+//     const periods = Array.isArray(req.body?.periods) ? req.body.periods : [];
+//     if (!tenantId || !timetableId || !date)
+//       return res.status(400).json({
+//         status: false,
+//         message: 'tenantId, timetableId and date required'
+//       });
+//     const tt = await TimeTable.findOne({
+//       _id: timetableId,
+//       tenantId,
+//       isdeleted: false
+//     });
+//     if (!tt)
+//       return res.status(404).json({
+//         status: false,
+//         message: 'Timetable not found'
+//       });
+//     const d = new Date(date);
+//     const day = DAYS[d.getDay() === 0 ? 6 : d.getDay() - 1];
+//     const normalizedPeriods = [];
+//     for (const p of periods) {
+//       const np = normalizePeriod({ ...p, day });
+//       if (!np.ok)
+//         return res.status(400).json({
+//           status: false,
+//           message: np.msg
+//         });
+//       normalizedPeriods.push(np.period);
+//     }
+//     upsertOverride(tt, {
+//       date,
+//       day,
+//       periodNo: null,
+//       action: 'REPLACE_PERIOD',
+//       period: { periods: normalizedPeriods },
+//       reason: 'Whole day edited'
+//     });
+//     await tt.save();
+//     return res.json({
+//       status: true,
+//       message: 'Whole day updated'
+//     });
+//   } catch (err) {
+//     return next(err);
+//   }
+// };
+
+// const editWholeDay = async (req, res, next) => {
+//   try {
+//     const tenantId = pickTenantId(req);
+//     const timetableId = safeTrim(req.body?.timetableId);
+//     const date = toInt(req.body?.date, 0);
+//     const periods = Array.isArray(req.body?.periods) ? req.body.periods : [];
+//     if (!tenantId || !timetableId || !date) return res.status(400).json({ status: false, message: 'tenantId, timetableId and date required' });
+//     const tt = await TimeTable.findOne({ _id: timetableId, tenantId, isdeleted: false });
+//     if (!tt) return res.status(404).json({ status: false, message: 'Timetable not found' });
+//     const d = new Date(date);
+//     const day = DAYS[d.getDay() === 0 ? 6 : d.getDay() - 1];
+//     const normalizedPeriods = [];
+//     for (const p of periods) {
+//       const np = normalizePeriod({ ...p, day });
+//       if (!np.ok) return res.status(400).json({ status: false, message: np.msg });
+//       const activeFacultyId = np.period.replacementFacultyId || np.period.facultyId;
+//       const conflictStatus = await checkStaffConflicts(tenantId, activeFacultyId, date, day, np.period.time.startMin, np.period.time.endMin, timetableId);
+
+//       if (conflictStatus.conflict) {
+//         return res.status(400).json({ status: false, message: conflictStatus.message });
+//       }
+//       normalizedPeriods.push(np.period);
+//     }
+//     tt.overrides = tt.overrides.filter((o) => {
+//       if (toInt(o?.date) !== date) return true;
+//       if (String(o?.day || '') !== day) return true;
+//       return false;
+//     });
+//     console.log('overrides after filter:', tt.overrides.length);
+//     console.log('normalizedPeriods:', normalizedPeriods.length);
+//     upsertOverride(tt, {
+//       date,
+//       day,
+//       periodNo: null,
+//       action: 'REPLACE_PERIOD',
+//       period: { periods: normalizedPeriods },
+//       reason: 'Whole day edited'
+//     });
+//     await tt.save();
+//     return res.json({ status: true, message: 'Whole day updated successfully' });
+//   } catch (err) {
+//     return next(err);
+//   }
+// };
+
+// const editWholeDay = async (req, res, next) => {
+//   try {
+//     const tenantId = pickTenantId(req);
+//     const timetableId = safeTrim(req.body?.timetableId);
+//     const date = toInt(req.body?.date, 0);
+//     const periods = Array.isArray(req.body?.periods) ? req.body.periods : [];
+//     const day = normDay(req.body?.day);
+//     console.log('=== editWholeDay debug ===');
+//     console.log('date received:', date, typeof date);
+//     console.log('day received:', day);
+//     console.log('all overrides:');
+//     if (!tenantId || !timetableId || !date || !day) return res.status(400).json({ status: false, message: 'tenantId, timetableId, date and day are required' });
+//     if (!isValidDay(day)) return res.status(400).json({ status: false, message: `Invalid day: ${day}` });
+//     const tt = await TimeTable.findOne({ _id: timetableId, tenantId, isdeleted: false });
+//     if (!tt) return res.status(404).json({ status: false, message: 'Timetable not found' });
+//     tt.overrides.forEach((o, i) => {
+//       console.log(`  [${i}] date:${o.date} (${typeof o.date}) day:"${o.day}" action:${o.action} periodNo:${o.periodNo}`);
+//       console.log(`       date match: ${toInt(o.date) === date} | day match: ${normDay(o.day) === day}`);
+//     });
+//     const normalizedPeriods = [];
+//     for (const p of periods) {
+//       const np = normalizePeriod({ ...p, day });
+//       if (!np.ok) return res.status(400).json({ status: false, message: np.msg });
+//       const activeFacultyId = np.period.replacementFacultyId || np.period.facultyId;
+//       const conflictStatus = await checkStaffConflicts(tenantId, activeFacultyId, date, day, np.period.time.startMin, np.period.time.endMin, timetableId);
+//       if (conflictStatus.conflict) {
+//         return res.status(400).json({ status: false, message: conflictStatus.message });
+//       }
+//       normalizedPeriods.push(np.period);
+//     }
+//     tt.overrides = tt.overrides.filter((o) => {
+//       if (toInt(o?.date) !== date) return true;
+//       if (normDay(o?.day) !== day) return true;
+//       return false;
+//     });
+//     upsertOverride(tt, {
+//       date,
+//       day,
+//       periodNo: null,
+//       action: 'REPLACE_PERIOD',
+//       period: { periods: normalizedPeriods },
+//       reason: 'Whole day edited'
+//     });
+
+//     await tt.save();
+//     return res.json({ status: true, message: 'Whole day updated successfully' });
+//   } catch (err) {
+//     return next(err);
+//   }
+// };
+
 const editWholeDay = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     const timetableId = safeTrim(req.body?.timetableId);
     const date = toInt(req.body?.date, 0);
     const periods = Array.isArray(req.body?.periods) ? req.body.periods : [];
-    if (!tenantId || !timetableId || !date)
-      return res.status(400).json({
-        status: false,
-        message: 'tenantId, timetableId and date required'
-      });
-    const tt = await TimeTable.findOne({
-      _id: timetableId,
-      tenantId,
-      isdeleted: false
-    });
-    if (!tt)
-      return res.status(404).json({
-        status: false,
-        message: 'Timetable not found'
-      });
-    const d = new Date(date);
-    const day = DAYS[d.getDay() === 0 ? 6 : d.getDay() - 1];
+    const day = normDay(req.body?.day);
+
+    if (!tenantId || !timetableId || !date || !day) return res.status(400).json({ status: false, message: 'tenantId, timetableId, date and day are required' });
+    if (!isValidDay(day)) return res.status(400).json({ status: false, message: `Invalid day: ${day}` });
+
+    const tt = await TimeTable.findOne({ _id: timetableId, tenantId, isdeleted: false });
+    if (!tt) return res.status(404).json({ status: false, message: 'Timetable not found' });
+
     const normalizedPeriods = [];
     for (const p of periods) {
       const np = normalizePeriod({ ...p, day });
-      if (!np.ok)
-        return res.status(400).json({
-          status: false,
-          message: np.msg
-        });
+      if (!np.ok) return res.status(400).json({ status: false, message: np.msg });
+      const activeFacultyId = np.period.replacementFacultyId || np.period.facultyId;
+      const conflictStatus = await checkStaffConflicts(tenantId, activeFacultyId, date, day, np.period.time.startMin, np.period.time.endMin, timetableId);
+      if (conflictStatus.conflict) return res.status(400).json({ status: false, message: conflictStatus.message });
       normalizedPeriods.push(np.period);
     }
-    upsertOverride(tt, {
+
+    // Remove ALL existing overrides for this date+day
+    tt.overrides = tt.overrides.filter((o) => !(toInt(o?.date) === date && normDay(o?.day) === day));
+
+    // Push fresh whole-day replacement
+    tt.overrides.push({
       date,
       day,
       periodNo: null,
@@ -270,11 +486,12 @@ const editWholeDay = async (req, res, next) => {
       period: { periods: normalizedPeriods },
       reason: 'Whole day edited'
     });
+
+    // Critical — tells Mongoose the array was mutated
+    tt.markModified('overrides');
+
     await tt.save();
-    return res.json({
-      status: true,
-      message: 'Whole day updated'
-    });
+    return res.json({ status: true, message: 'Whole day updated successfully' });
   } catch (err) {
     return next(err);
   }
@@ -450,6 +667,43 @@ const rearrangeStaff = async (req, res, next) => {
   }
 };
 
+// const changePeriod = async (req, res, next) => {
+//   try {
+//     const tenantId = pickTenantId(req);
+//     const timetableId = safeTrim(req.body?.timetableId);
+//     const date = toInt(req.body?.date, 0);
+//     const day = normDay(req.body?.day);
+//     const fromPeriodNo = toInt(req.body?.fromPeriodNo, 0);
+//     const toPeriodNo = toInt(req.body?.toPeriodNo, 0);
+
+//     if (!tenantId || !timetableId || !date || !fromPeriodNo || !toPeriodNo) return res.status(400).json({ status: false, message: 'Missing required fields' });
+
+//     const tt = await TimeTable.findOne({ _id: timetableId, tenantId, isdeleted: false });
+//     if (!tt) return res.status(404).json({ status: false, message: 'Timetable not found' });
+
+//     const base = findTemplatePeriod(tt, day, fromPeriodNo);
+//     if (!base) return res.status(400).json({ status: false, message: 'Template period not found' });
+
+//     upsertOverride(tt, {
+//       date,
+//       day,
+//       periodNo: fromPeriodNo,
+//       action: 'MOVE_PERIOD',
+//       period: {
+//         ...(base.toObject?.() ?? base),
+//         periodNo: toPeriodNo
+//       },
+//       reason: 'Period moved'
+//     });
+
+//     await tt.save();
+
+//     return res.json({ status: true, message: 'Period moved' });
+//   } catch (err) {
+//     return next(err);
+//   }
+// };
+
 const changePeriod = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
@@ -458,30 +712,41 @@ const changePeriod = async (req, res, next) => {
     const day = normDay(req.body?.day);
     const fromPeriodNo = toInt(req.body?.fromPeriodNo, 0);
     const toPeriodNo = toInt(req.body?.toPeriodNo, 0);
-
     if (!tenantId || !timetableId || !date || !fromPeriodNo || !toPeriodNo) return res.status(400).json({ status: false, message: 'Missing required fields' });
-
     const tt = await TimeTable.findOne({ _id: timetableId, tenantId, isdeleted: false });
     if (!tt) return res.status(404).json({ status: false, message: 'Timetable not found' });
-
-    const base = findTemplatePeriod(tt, day, fromPeriodNo);
-    if (!base) return res.status(400).json({ status: false, message: 'Template period not found' });
-
+    const fromBase = findTemplatePeriod(tt, day, fromPeriodNo);
+    if (!fromBase) return res.status(400).json({ status: false, message: 'Source period not found' });
+    const toBase = findTemplatePeriod(tt, day, toPeriodNo);
     upsertOverride(tt, {
       date,
       day,
       periodNo: fromPeriodNo,
       action: 'MOVE_PERIOD',
-      period: {
-        ...(base.toObject?.() ?? base),
-        periodNo: toPeriodNo
-      },
+      period: { ...(fromBase.toObject?.() ?? fromBase), periodNo: toPeriodNo },
       reason: 'Period moved'
     });
-
+    if (toBase) {
+      upsertOverride(tt, {
+        date,
+        day,
+        periodNo: toPeriodNo,
+        action: 'MOVE_PERIOD',
+        period: { ...(toBase.toObject?.() ?? toBase), periodNo: fromPeriodNo },
+        reason: 'Period swapped'
+      });
+    } else {
+      upsertOverride(tt, {
+        date,
+        day,
+        periodNo: toPeriodNo,
+        action: 'CANCEL_PERIOD',
+        period: null,
+        reason: 'Source slot freed after move'
+      });
+    }
     await tt.save();
-
-    return res.json({ status: true, message: 'Period moved' });
+    return res.json({ status: true, message: 'Period swapped' });
   } catch (err) {
     return next(err);
   }
@@ -524,47 +789,133 @@ const replacePeriod = async (req, res, next) => {
   }
 };
 
+// const bulkUploadTimeTables = async (req, res, next) => {
+//   try {
+//     const tenantId = pickTenantId(req);
+//     const userId = safeTrim(req.body?.userId);
+//     const data = Array.isArray(req.body?.data) ? req.body.data : [];
+//     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+//     if (!data.length) return res.status(400).json({ status: false, message: 'No data provided for bulk upload' });
+//     const ops = [];
+//     for (const item of data) {
+//       const batchCode = safeTrim(item.batchCode);
+//       const inputWeekStart = toInt(item.wkStartOn, 0);
+//       if (!batchCode || !inputWeekStart) continue;
+//       const correctedMonday = getPreviousMonday(inputWeekStart);
+//       const weekIn = Array.isArray(item.week) ? item.week : [];
+//       const week = [];
+//       for (const d of weekIn) {
+//         const day = normDay(d?.day);
+//         if (!isValidDay(day)) continue;
+//         const periodsIn = Array.isArray(d?.periods) ? d.periods : [];
+//         const periods = [];
+//         for (const p of periodsIn) {
+//           const np = normalizePeriod({ ...p, day });
+//           if (np.ok) periods.push(np.period);
+//         }
+//         week.push({ day, periods });
+//       }
+//       ops.push({
+//         updateOne: {
+//           filter: { tenantId, batchCode, wkStartOn: correctedMonday, isdeleted: false },
+//           update: {
+//             $set: {
+//               centerCode: safeTrim(item.centerCode) || null,
+//               phase: safeTrim(item.phase) || null,
+//               status: safeTrim(item.status) || 'Active',
+//               week,
+//               updatedBy: userId || null
+//             },
+//             $setOnInsert: { createdBy: userId || null }
+//           },
+//           upsert: true
+//         }
+//       });
+//     }
+//     if (!ops.length) return res.status(400).json({ status: false, message: 'No valid timetable data found to process' });
+//     const result = await TimeTable.bulkWrite(ops, { ordered: false });
+//     return res.status(200).json({
+//       status: true,
+//       message: 'Bulk upload completed',
+//       data: {
+//         matchedCount: result.matchedCount,
+//         modifiedCount: result.modifiedCount,
+//         upsertedCount: result.upsertedCount
+//       }
+//     });
+//   } catch (err) {
+//     return next(err);
+//   }
+// };
+
 const bulkUploadTimeTables = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     const userId = safeTrim(req.body?.userId);
     const data = Array.isArray(req.body?.data) ? req.body.data : [];
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-    if (!data.length) return res.status(400).json({ status: false, message: 'No data provided for bulk upload' });
+    if (!data.length) return res.status(400).json({ status: false, message: 'No data provided' });
     const ops = [];
-    for (const item of data) {
+    const bulkErrors = [];
+    for (let i = 0; i < data.length; i++) {
+      const item = data[i];
       const batchCode = safeTrim(item.batchCode);
       const inputWeekStart = toInt(item.wkStartOn, 0);
       if (!batchCode || !inputWeekStart) continue;
       const correctedMonday = getPreviousMonday(inputWeekStart);
       const weekIn = Array.isArray(item.week) ? item.week : [];
       const week = [];
+      let rowHasConflict = false;
+      const existingDoc = await TimeTable.findOne({ tenantId, batchCode, wkStartOn: correctedMonday, isdeleted: false }).lean();
+      const excludeTimetableId = existingDoc ? existingDoc._id : null;
       for (const d of weekIn) {
         const day = normDay(d?.day);
         if (!isValidDay(day)) continue;
+        const exactDate = getOffsetDate(correctedMonday, day);
         const periodsIn = Array.isArray(d?.periods) ? d.periods : [];
         const periods = [];
         for (const p of periodsIn) {
           const np = normalizePeriod({ ...p, day });
-          if (np.ok) periods.push(np.period);
+          if (np.ok) {
+            const check = await checkStaffConflicts(tenantId, np.period.facultyId, exactDate, day, np.period.time.startMin, np.period.time.endMin, excludeTimetableId);
+            if (check.conflict) {
+              bulkErrors.push({
+                batchCode,
+                row: i + 1,
+                message: `Conflict on ${day} Period ${np.period.periodNo}: ${check.message}`
+              });
+              rowHasConflict = true;
+            } else {
+              periods.push(np.period);
+            }
+          }
         }
         week.push({ day, periods });
       }
-      ops.push({
-        updateOne: {
-          filter: { tenantId, batchCode, wkStartOn: correctedMonday, isdeleted: false },
-          update: {
-            $set: {
-              centerCode: safeTrim(item.centerCode) || null,
-              phase: safeTrim(item.phase) || null,
-              status: safeTrim(item.status) || 'Active',
-              week,
-              updatedBy: userId || null
+      if (!rowHasConflict) {
+        ops.push({
+          updateOne: {
+            filter: { tenantId, batchCode, wkStartOn: correctedMonday, isdeleted: false },
+            update: {
+              $set: {
+                centerCode: safeTrim(item.centerCode) || null,
+                phase: safeTrim(item.phase) || null,
+                status: safeTrim(item.status) || 'Active',
+                week,
+                updatedBy: userId || null
+              },
+              $setOnInsert: { createdBy: userId || null }
             },
-            $setOnInsert: { createdBy: userId || null }
-          },
-          upsert: true
-        }
+            upsert: true
+          }
+        });
+      }
+    }
+    if (bulkErrors.length > 0) {
+      return res.status(400).json({
+        status: false,
+        message: 'Bulk upload aborted due to scheduling conflicts',
+        conflicts: bulkErrors
       });
     }
     if (!ops.length) return res.status(400).json({ status: false, message: 'No valid timetable data found to process' });
@@ -771,6 +1122,253 @@ const listStudentLateEntries = async (req, res, next) => {
   }
 };
 
+const updateZoomLink = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const timetableId = safeTrim(req.body?.timetableId);
+    const date = toInt(req.body?.date, 0);
+    const day = normDay(req.body?.day);
+    const periodNo = toInt(req.body?.periodNo, 0);
+    const zoomUrl = safeTrim(req.body?.zoomUrl);
+    if (!tenantId || !timetableId || !date || !periodNo) {
+      return res.status(400).json({ status: false, message: 'Missing required fields' });
+    }
+    const tt = await TimeTable.findOne({ _id: timetableId, tenantId, isdeleted: false });
+    if (!tt) return res.status(404).json({ status: false, message: 'Timetable not found' });
+    const existingOverride = (tt.overrides || []).find((o) => o.date === date && o.periodNo === periodNo && (o.action === 'REPLACE_PERIOD' || o.action === 'ADD_PERIOD'));
+    let periodToSave;
+    if (existingOverride && existingOverride.period) {
+      const baseObj = existingOverride.period.toObject?.() ?? existingOverride.period;
+      periodToSave = { ...baseObj, zoomUrl, mode: zoomUrl ? 'ONLINE' : baseObj.mode };
+    } else {
+      const base = findTemplatePeriod(tt, day, periodNo);
+      if (!base) return res.status(400).json({ status: false, message: 'Template period not found' });
+      const baseObj = base.toObject?.() ?? base;
+      periodToSave = { ...baseObj, zoomUrl, mode: zoomUrl ? 'ONLINE' : baseObj.mode };
+    }
+    upsertOverride(tt, {
+      date,
+      day,
+      periodNo,
+      action: 'REPLACE_PERIOD',
+      period: periodToSave,
+      reason: 'Zoom link updated'
+    });
+    tt.updatedBy = req.body.userId || null;
+    await tt.save();
+    return res.json({ status: true, message: 'Zoom link updated successfully' });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const convertToExam = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const timetableId = safeTrim(req.body?.timetableId);
+    const date = toInt(req.body?.date, 0);
+    const day = normDay(req.body?.day);
+    const periodNo = toInt(req.body?.periodNo, 0);
+    if (!tenantId || !timetableId || !date || !periodNo) {
+      return res.status(400).json({ status: false, message: 'Missing required fields' });
+    }
+    const tt = await TimeTable.findOne({ _id: timetableId, tenantId, isdeleted: false });
+    if (!tt) return res.status(404).json({ status: false, message: 'Timetable not found' });
+    const existingOverride = (tt.overrides || []).find((o) => o.date === date && o.periodNo === periodNo && (o.action === 'REPLACE_PERIOD' || o.action === 'ADD_PERIOD'));
+    let periodToSave;
+    if (existingOverride && existingOverride.period) {
+      const baseObj = existingOverride.period.toObject?.() ?? existingOverride.period;
+      periodToSave = { ...baseObj };
+    } else {
+      const base = findTemplatePeriod(tt, day, periodNo);
+      if (!base) return res.status(400).json({ status: false, message: 'Template period not found' });
+      periodToSave = { ...(base.toObject?.() ?? base) };
+    }
+    periodToSave.periodType = 'EXAM';
+    periodToSave.examId = safeTrim(req.body?.examId) || null;
+    periodToSave.examDescription = safeTrim(req.body?.examDescription) || null;
+    if (req.body?.facultyId) {
+      periodToSave.facultyId = safeTrim(req.body.facultyId);
+      periodToSave.facultyName = safeTrim(req.body.facultyName) || null;
+    }
+    if (req.body?.venue) {
+      periodToSave.venue = safeTrim(req.body.venue);
+    }
+    if (req.body?.topic) {
+      periodToSave.topic = safeTrim(req.body.topic);
+    }
+    upsertOverride(tt, {
+      date,
+      day,
+      periodNo,
+      action: 'REPLACE_PERIOD',
+      period: periodToSave,
+      reason: 'Converted to Exam'
+    });
+    tt.updatedBy = safeTrim(req.body.userId) || null;
+    await tt.save();
+    return res.json({ status: true, message: 'Period successfully converted to an Exam' });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const bulkUpdateZoomLinks = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = safeTrim(req.body?.userId);
+    const updates = Array.isArray(req.body?.updates) ? req.body.updates : [];
+    if (!tenantId || !updates.length) {
+      return res.status(400).json({ status: false, message: 'tenantId and updates array required' });
+    }
+    const fetchParams = updates
+      .map((u) => ({
+        batchCode: safeTrim(u.batchCode),
+        wkStartOn: getPreviousMonday(toInt(u.date, 0))
+      }))
+      .filter((u) => u.batchCode && u.wkStartOn);
+    const uniqueFetchKeys = [...new Set(fetchParams.map((p) => `${p.batchCode}_${p.wkStartOn}`))];
+    const ops = [];
+    for (const key of uniqueFetchKeys) {
+      const [batchCode, wkStartStr] = key.split('_');
+      const wkStartOn = parseInt(wkStartStr, 10);
+      const tt = await TimeTable.findOne({ tenantId, batchCode, wkStartOn, isdeleted: false });
+      if (!tt) continue;
+      const ttUpdates = updates.filter((u) => safeTrim(u.batchCode) === batchCode && getPreviousMonday(toInt(u.date, 0)) === wkStartOn);
+      let modified = false;
+      for (const u of ttUpdates) {
+        const date = toInt(u.date, 0);
+        const periodNo = toInt(u.periodNo, 0);
+        const zoomUrl = safeTrim(u.zoomUrl);
+        if (!date || !periodNo) continue;
+        const d = new Date(date);
+        const day = DAYS[d.getDay() === 0 ? 6 : d.getDay() - 1];
+        const existingOverride = (tt.overrides || []).find((o) => o.date === date && o.periodNo === periodNo && (o.action === 'REPLACE_PERIOD' || o.action === 'ADD_PERIOD'));
+        let periodToSave;
+        if (existingOverride && existingOverride.period) {
+          const baseObj = existingOverride.period.toObject?.() ?? existingOverride.period;
+          periodToSave = { ...baseObj, zoomUrl, mode: zoomUrl ? 'ONLINE' : baseObj.mode };
+        } else {
+          const base = findTemplatePeriod(tt, day, periodNo);
+          if (!base) continue;
+          const baseObj = base.toObject?.() ?? base;
+          periodToSave = { ...baseObj, zoomUrl, mode: zoomUrl ? 'ONLINE' : baseObj.mode };
+        }
+        upsertOverride(tt, {
+          date,
+          day,
+          periodNo,
+          action: 'REPLACE_PERIOD',
+          period: periodToSave,
+          reason: 'Bulk Zoom link upload'
+        });
+        modified = true;
+      }
+      if (modified) {
+        ops.push({
+          updateOne: {
+            filter: { _id: tt._id },
+            update: { $set: { overrides: tt.overrides, updatedBy: userId || null } }
+          }
+        });
+      }
+    }
+    if (!ops.length) return res.status(400).json({ status: false, message: 'No valid records found to update' });
+    const result = await TimeTable.bulkWrite(ops, { ordered: false });
+    return res.json({
+      status: true,
+      message: 'Bulk zoom links updated successfully',
+      data: { modifiedCount: result.modifiedCount }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const validateSchedule = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const data = Array.isArray(req.body?.data) ? req.body.data : [];
+    if (!tenantId) {
+      return res.status(400).json({ status: false, message: 'tenantId is required' });
+    }
+    if (!data.length) {
+      return res.status(400).json({ status: false, message: 'No schedule data provided for validation' });
+    }
+    const conflicts = [];
+    const proposedAssignments = [];
+    for (let i = 0; i < data.length; i++) {
+      const item = data[i];
+      const batchCode = safeTrim(item.batchCode) || `Row ${i + 1}`;
+      const inputWeekStart = toInt(item.wkStartOn, 0);
+      const weekIn = Array.isArray(item.week) ? item.week : [];
+      const timetableId = safeTrim(item.timetableId) || null;
+      if (!inputWeekStart) {
+        conflicts.push({ batchCode, message: 'wkStartOn is required' });
+        continue;
+      }
+      const correctedMonday = getPreviousMonday(inputWeekStart);
+      for (const d of weekIn) {
+        const day = normDay(d?.day);
+        if (!isValidDay(day)) continue;
+        const exactDate = getOffsetDate(correctedMonday, day);
+        const periodsIn = Array.isArray(d?.periods) ? d.periods : [];
+        for (const p of periodsIn) {
+          const facultyId = safeTrim(p?.facultyId);
+          const facultyName = safeTrim(p?.facultyName);
+          const startMin = toInt(p?.time?.startMin, -1);
+          const endMin = toInt(p?.time?.endMin, -1);
+          if (!facultyId || startMin < 0 || endMin < 0) continue;
+          const dbCheck = await checkStaffConflicts(tenantId, facultyId, exactDate, day, startMin, endMin, timetableId);
+          if (dbCheck.conflict) {
+            conflicts.push({
+              batchCode,
+              day,
+              periodNo: p.periodNo,
+              facultyId,
+              facultyName,
+              message: dbCheck.message
+            });
+          } else {
+            const internalConflict = proposedAssignments.find((pa) => pa.facultyId === facultyId && pa.exactDate === exactDate && startMin < pa.endMin && endMin > pa.startMin);
+            if (internalConflict) {
+              conflicts.push({
+                batchCode,
+                day,
+                periodNo: p.periodNo,
+                facultyId,
+                message: `Internal upload conflict: Faculty is already assigned to batch ${internalConflict.batchCode} in this upload file between ${p.time.startLabel} and ${p.time.endLabel} mins.`
+              });
+            } else {
+              proposedAssignments.push({
+                facultyId,
+                exactDate,
+                startMin,
+                endMin,
+                batchCode
+              });
+            }
+          }
+        }
+      }
+    }
+    if (conflicts.length > 0) {
+      return res.status(400).json({
+        status: false,
+        message: 'Schedule conflicts detected',
+        conflicts
+      });
+    }
+
+    return res.status(200).json({
+      status: true,
+      message: 'All schedules are valid with no conflicts'
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   createTimeTable,
   cancelWholeDay,
@@ -786,5 +1384,9 @@ export default {
   logLateEntry,
   listStudentLateEntries,
   listStaffLateEntries,
-  viewBatchScheduleByDate
+  viewBatchScheduleByDate,
+  updateZoomLink,
+  convertToExam,
+  bulkUpdateZoomLinks,
+  validateSchedule
 };
