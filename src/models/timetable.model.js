@@ -58,7 +58,7 @@ const OverrideSchema = new mongoose.Schema(
     day: { type: String, enum: DAYS, default: null },
     periodNo: { type: Number, default: null, min: 1 },
     action: { type: String, enum: ['CANCEL_DAY', 'CANCEL_PERIOD', 'REPLACE_PERIOD', 'ADD_PERIOD', 'MOVE_PERIOD'], required: true },
-    period: { type: PeriodSchema, default: null },
+    period: { type: mongoose.Schema.Types.Mixed, default: null },
     reason: { type: String, default: null, trim: true }
   },
   { _id: true }

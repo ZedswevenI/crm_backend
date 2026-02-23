@@ -399,6 +399,57 @@ const cancelWholeDay = async (req, res, next) => {
 //   }
 // };
 
+// const editWholeDay = async (req, res, next) => {
+//   try {
+//     const tenantId = pickTenantId(req);
+//     const timetableId = safeTrim(req.body?.timetableId);
+//     const date = toInt(req.body?.date, 0);
+//     const periods = Array.isArray(req.body?.periods) ? req.body.periods : [];
+//     const day = normDay(req.body?.day);
+//     console.log('=== editWholeDay debug ===');
+//     console.log('date received:', date, typeof date);
+//     console.log('day received:', day);
+//     console.log('all overrides:');
+//     if (!tenantId || !timetableId || !date || !day) return res.status(400).json({ status: false, message: 'tenantId, timetableId, date and day are required' });
+//     if (!isValidDay(day)) return res.status(400).json({ status: false, message: `Invalid day: ${day}` });
+//     const tt = await TimeTable.findOne({ _id: timetableId, tenantId, isdeleted: false });
+//     if (!tt) return res.status(404).json({ status: false, message: 'Timetable not found' });
+//     tt.overrides.forEach((o, i) => {
+//       console.log(`  [${i}] date:${o.date} (${typeof o.date}) day:"${o.day}" action:${o.action} periodNo:${o.periodNo}`);
+//       console.log(`       date match: ${toInt(o.date) === date} | day match: ${normDay(o.day) === day}`);
+//     });
+//     const normalizedPeriods = [];
+//     for (const p of periods) {
+//       const np = normalizePeriod({ ...p, day });
+//       if (!np.ok) return res.status(400).json({ status: false, message: np.msg });
+//       const activeFacultyId = np.period.replacementFacultyId || np.period.facultyId;
+//       const conflictStatus = await checkStaffConflicts(tenantId, activeFacultyId, date, day, np.period.time.startMin, np.period.time.endMin, timetableId);
+//       if (conflictStatus.conflict) {
+//         return res.status(400).json({ status: false, message: conflictStatus.message });
+//       }
+//       normalizedPeriods.push(np.period);
+//     }
+//     tt.overrides = tt.overrides.filter((o) => {
+//       if (toInt(o?.date) !== date) return true;
+//       if (normDay(o?.day) !== day) return true;
+//       return false;
+//     });
+//     upsertOverride(tt, {
+//       date,
+//       day,
+//       periodNo: null,
+//       action: 'REPLACE_PERIOD',
+//       period: { periods: normalizedPeriods },
+//       reason: 'Whole day edited'
+//     });
+
+//     await tt.save();
+//     return res.json({ status: true, message: 'Whole day updated successfully' });
+//   } catch (err) {
+//     return next(err);
+//   }
+// };
+
 const editWholeDay = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
@@ -406,35 +457,28 @@ const editWholeDay = async (req, res, next) => {
     const date = toInt(req.body?.date, 0);
     const periods = Array.isArray(req.body?.periods) ? req.body.periods : [];
     const day = normDay(req.body?.day);
-    console.log('=== editWholeDay debug ===');
-    console.log('date received:', date, typeof date);
-    console.log('day received:', day);
-    console.log('all overrides:');
+
     if (!tenantId || !timetableId || !date || !day) return res.status(400).json({ status: false, message: 'tenantId, timetableId, date and day are required' });
     if (!isValidDay(day)) return res.status(400).json({ status: false, message: `Invalid day: ${day}` });
+
     const tt = await TimeTable.findOne({ _id: timetableId, tenantId, isdeleted: false });
     if (!tt) return res.status(404).json({ status: false, message: 'Timetable not found' });
-    tt.overrides.forEach((o, i) => {
-      console.log(`  [${i}] date:${o.date} (${typeof o.date}) day:"${o.day}" action:${o.action} periodNo:${o.periodNo}`);
-      console.log(`       date match: ${toInt(o.date) === date} | day match: ${normDay(o.day) === day}`);
-    });
+
     const normalizedPeriods = [];
     for (const p of periods) {
       const np = normalizePeriod({ ...p, day });
       if (!np.ok) return res.status(400).json({ status: false, message: np.msg });
       const activeFacultyId = np.period.replacementFacultyId || np.period.facultyId;
       const conflictStatus = await checkStaffConflicts(tenantId, activeFacultyId, date, day, np.period.time.startMin, np.period.time.endMin, timetableId);
-      if (conflictStatus.conflict) {
-        return res.status(400).json({ status: false, message: conflictStatus.message });
-      }
+      if (conflictStatus.conflict) return res.status(400).json({ status: false, message: conflictStatus.message });
       normalizedPeriods.push(np.period);
     }
-    tt.overrides = tt.overrides.filter((o) => {
-      if (toInt(o?.date) !== date) return true;
-      if (normDay(o?.day) !== day) return true;
-      return false;
-    });
-    upsertOverride(tt, {
+
+    // Remove ALL existing overrides for this date+day
+    tt.overrides = tt.overrides.filter((o) => !(toInt(o?.date) === date && normDay(o?.day) === day));
+
+    // Push fresh whole-day replacement
+    tt.overrides.push({
       date,
       day,
       periodNo: null,
@@ -442,6 +486,9 @@ const editWholeDay = async (req, res, next) => {
       period: { periods: normalizedPeriods },
       reason: 'Whole day edited'
     });
+
+    // Critical — tells Mongoose the array was mutated
+    tt.markModified('overrides');
 
     await tt.save();
     return res.json({ status: true, message: 'Whole day updated successfully' });
