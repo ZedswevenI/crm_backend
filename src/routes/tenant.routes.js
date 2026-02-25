@@ -130,6 +130,19 @@ routes.post('/exam/subcategory/update', validatetoken, manageCtrl.editExamSubCat
 routes.post('/exam/subcategory/import', validatetoken, manageCtrl.bulkUpsertExamSubCategories);
 routes.post('/exam/subcategory/view', validatetoken, manageCtrl.viewExamSubCategory);
 
+// PTM Routes
+routes.post('/ptm/schedule', validatetoken, programCtrl.schedulePTM);
+routes.post('/ptm/schedule/import', validatetoken, programCtrl.bulkImportSchedule);
+routes.post('/ptm/parent/feedback', validatetoken, programCtrl.submitPrePTMFeedback);
+routes.post('/ptm/staff/feedback', validatetoken, programCtrl.submitStaffFeedback);
+routes.post('/ptm/staff/feedback/import', validatetoken, programCtrl.bulkImportFeedback);
+routes.post('/ptm/list', validatetoken, programCtrl.listPTMs);
+routes.post('/ptm/view', validatetoken, programCtrl.viewPTM);
+routes.post('/ptm/update', validatetoken, programCtrl.editPTM);
+routes.post('/ptm/remove', validatetoken, programCtrl.removePTM);
+routes.post('/ptm/student/add', validatetoken, programCtrl.addStudentsToPTM);
+routes.post('/ptm/student/remove', validatetoken, programCtrl.removeStudentsFromPTM);
+
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Tenant routes' }));
 
 export default routes;

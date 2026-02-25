@@ -20,6 +20,7 @@ routes.post('/library/edit', validatetoken, libraryCtrl.editMaterial);
 routes.post('/library/make-inactive', validatetoken, libraryCtrl.makeInactive);
 routes.post('/library/delete', validatetoken, libraryCtrl.deleteMaterial);
 routes.post('/library/list', validatetoken, libraryCtrl.listMaterials);
+routes.post('/library/view', validatetoken, libraryCtrl.viewMaterial);
 
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Teacher routes' }));
 

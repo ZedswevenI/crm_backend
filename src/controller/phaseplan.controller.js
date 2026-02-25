@@ -1,7 +1,15 @@
 import mongoose from 'mongoose';
+import { v4 as uuid } from 'uuid';
 import constants from '../helpers/constants.js';
 import Phase from '../models/phaseplan.model.js';
 import Topic from '../models/topic.model.js';
+import Activity from '../models/activity.model.js';
+
+const parseDateToEpoch = (dateString) => {
+  if (!dateString) return null;
+  const parsed = new Date(dateString).getTime();
+  return Number.isNaN(parsed) ? null : parsed;
+};
 
 const pickTenantId = (req) => String(req?.body?.tenantId || req?.body?.entiId || '').trim();
 const safeTrim = (v) => (v === undefined || v === null ? '' : String(v).trim());
@@ -122,6 +130,7 @@ const listPhases = async (req, res, next) => {
       isdeleted: false
     })
       .sort({ sortOrder: 1, phaseName: 1 })
+      .populate('subjectId', 'subjectName subjectCode')
       .lean();
     return res.status(200).json({ status: true, data: phases, count: phases.length });
   } catch (err) {
@@ -275,4 +284,211 @@ const bulkUploadPhases = async (req, res, next) => {
   }
 };
 
-export default { createPhase, updatePhase, listPhases, deletePhase, getAvailableTopics, bulkUploadPhases };
+const createActivity = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = safeTrim(req.body?.userId);
+    const { batchCode, centerCode, activityName, sno, startDate, endDate, remarks, status } = req.body;
+    if (!tenantId || !batchCode || !activityName || !startDate || !endDate) {
+      return res.status(400).json({ status: false, message: 'Missing required fields' });
+    }
+    const newActivity = await Activity.create({
+      tenantId,
+      activityId: uuid(),
+      batchCode: safeTrim(batchCode),
+      centerCode: safeTrim(centerCode),
+      activityName: safeTrim(activityName),
+      sno: sno ? Number(sno) : null,
+      startDate: Number(startDate),
+      endDate: Number(endDate),
+      remarks: safeTrim(remarks),
+      status: status || 'PLANNED',
+      createdBy: userId,
+      updatedBy: userId
+    });
+    return res.status(201).json({ status: true, message: 'Activity created successfully', data: newActivity });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const editActivity = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const activityId = safeTrim(req.body?.activityId);
+    const userId = safeTrim(req.body?.userId);
+    if (!tenantId || !activityId) return res.status(400).json({ status: false, message: 'tenantId and activityId required' });
+    const updateData = { updatedBy: userId };
+    const fields = ['activityName', 'batchCode', 'centerCode', 'remarks', 'status'];
+    fields.forEach((f) => {
+      if (req.body[f] !== undefined) updateData[f] = safeTrim(req.body[f]);
+    });
+    if (req.body.sno !== undefined) updateData.sno = Number(req.body.sno);
+    if (req.body.startDate !== undefined) updateData.startDate = Number(req.body.startDate);
+    if (req.body.endDate !== undefined) updateData.endDate = Number(req.body.endDate);
+    if (req.body.actualStartDate !== undefined) updateData.actualStartDate = req.body.actualStartDate ? Number(req.body.actualStartDate) : null;
+    if (req.body.actualEndDate !== undefined) updateData.actualEndDate = req.body.actualEndDate ? Number(req.body.actualEndDate) : null;
+    const updated = await Activity.findOneAndUpdate({ tenantId, activityId, isdeleted: false }, { $set: updateData }, { new: true, runValidators: true }).lean();
+    if (!updated) return res.status(404).json({ status: false, message: 'Activity not found' });
+    return res.status(200).json({ status: true, message: 'Activity updated', data: updated });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const changeStatus = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const activityId = safeTrim(req.body?.activityId);
+    const status = safeTrim(req.body?.status);
+    const userId = safeTrim(req.body?.userId);
+    if (!tenantId || !activityId || !status) return res.status(400).json({ status: false, message: 'Missing required fields' });
+    const validStatuses = ['PLANNED', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'];
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({ status: false, message: `Invalid status. Must be one of: ${validStatuses.join(', ')}` });
+    }
+    const updated = await Activity.findOneAndUpdate({ tenantId, activityId, isdeleted: false }, { $set: { status, updatedBy: userId } }, { new: true }).lean();
+    if (!updated) return res.status(404).json({ status: false, message: 'Activity not found' });
+    return res.status(200).json({ status: true, message: `Activity status updated to ${status}`, data: updated });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const viewActivity = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const activityId = safeTrim(req.body?.activityId || req.query?.activityId);
+    if (!tenantId || !activityId) return res.status(400).json({ status: false, message: 'tenantId and activityId required' });
+    const activity = await Activity.findOne({ tenantId, activityId, isdeleted: false }).lean();
+    if (!activity) return res.status(404).json({ status: false, message: 'Activity not found' });
+    return res.status(200).json({ status: true, message: 'Activity retrieved', data: activity });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const deleteActivity = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const activityId = safeTrim(req.body?.activityId);
+    if (!tenantId || !activityId) return res.status(400).json({ status: false, message: 'tenantId and activityId required' });
+    const deleted = await Activity.findOneAndUpdate({ tenantId, activityId, isdeleted: false }, { $set: { isdeleted: true, status: 'CANCELLED', updatedBy: req.body.userId } }, { new: true }).lean();
+    if (!deleted) return res.status(404).json({ status: false, message: 'Activity not found' });
+    return res.status(200).json({ status: true, message: 'Activity deleted successfully' });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const listActivities = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const page = parseInt(req.query.page, 10) || 1;
+    const limit = parseInt(req.query.limit, 10) || 10;
+    const skip = (page - 1) * limit;
+    const sort = req.query.sort || 'startDate';
+    const search = req.query.search || '';
+    const batchCode = req.query.batchCode;
+    const centerCode = req.query.centerCode;
+    const status = req.query.status;
+    const fromDate = req.query.fromDate;
+    const toDate = req.query.toDate;
+    const query = { tenantId, isdeleted: false };
+    if (batchCode) query.batchCode = safeTrim(batchCode);
+    if (centerCode) query.centerCode = safeTrim(centerCode);
+    if (status) query.status = safeTrim(status);
+    if (fromDate || toDate) {
+      query.startDate = {};
+      if (fromDate) query.startDate.$gte = Number(fromDate);
+      if (toDate) query.startDate.$lte = Number(toDate);
+    }
+    if (search) {
+      const rx = { $regex: safeTrim(search), $options: 'i' };
+      query.$or = [{ activityName: rx }, { remarks: rx }];
+    }
+    const listMode = String(req.query.list || req.body.list || '').toLowerCase();
+    if (listMode === 'full') {
+      const rows = await Activity.find(query).sort(sort).lean();
+      return res.status(constants.HTTPS_SUCCESS).send({ status: true, data: rows, count: rows.length, message: 'Activities retrieved' });
+    }
+    const [rows, count] = await Promise.all([Activity.find(query).sort(sort).skip(skip).limit(limit).lean(), Activity.countDocuments(query)]);
+    return res.status(constants.HTTPS_SUCCESS).send({
+      status: true,
+      data: rows,
+      page,
+      limit,
+      count,
+      pages: Math.ceil(count / limit) || 0,
+      message: 'Activities retrieved'
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const bulkUploadActivities = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = safeTrim(req.body?.userId);
+    const rows = req.body?.rows;
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return res.status(400).json({ status: false, message: 'rows array is required and cannot be empty' });
+    }
+    const report = { successCount: 0, failedCount: 0, errors: [] };
+    const bulkOps = [];
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      const bCode = safeTrim(r.BatchCode);
+      const actName = safeTrim(r.Activity);
+      const startMs = parseDateToEpoch(r.StartDate);
+      const endMs = parseDateToEpoch(r.EndDate);
+      if (!bCode || !actName || !startMs || !endMs) {
+        report.failedCount++;
+        report.errors.push({ row: i + 1, BatchCode: bCode, reason: 'Missing mandatory fields (BatchCode, Activity, StartDate, EndDate)' });
+        continue;
+      }
+      bulkOps.push({
+        updateOne: {
+          filter: {
+            tenantId,
+            batchCode: bCode,
+            activityName: actName,
+            startDate: startMs,
+            isdeleted: false
+          },
+          update: {
+            $setOnInsert: {
+              activityId: uuid(),
+              createdBy: userId
+            },
+            $set: {
+              centerCode: safeTrim(r.CentCode) || null,
+              sno: r.sno ? Number(r.sno) : null,
+              endDate: endMs,
+              remarks: safeTrim(r.Remarks) !== 'NULL' ? safeTrim(r.Remarks) : null,
+              actualStartDate: parseDateToEpoch(r.ActualStartDate),
+              actualEndDate: parseDateToEpoch(r.ActualEndDate),
+              updatedBy: userId
+            }
+          },
+          upsert: true
+        }
+      });
+      report.successCount++;
+    }
+    if (bulkOps.length > 0) {
+      await Activity.bulkWrite(bulkOps, { ordered: false });
+    }
+    return res.status(200).json({
+      status: true,
+      message: `Bulk upload processed. Success: ${report.successCount}, Failed: ${report.failedCount}`,
+      data: report
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+export default { createPhase, updatePhase, listPhases, deletePhase, getAvailableTopics, bulkUploadPhases, createActivity, editActivity, changeStatus, viewActivity, deleteActivity, listActivities, bulkUploadActivities };
