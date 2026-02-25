@@ -28,6 +28,7 @@ routes.post('/phase/update', validatetoken, phaseCtrl.updatePhase);
 routes.post('/phase/delete', validatetoken, phaseCtrl.deletePhase);
 routes.post('/phase/list', validatetoken, phaseCtrl.listPhases);
 routes.post('/phase/available-topics', validatetoken, phaseCtrl.getAvailableTopics);
+routes.post('/phase/bulkupload', validatetoken, phaseCtrl.bulkUploadPhases);
 
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Batch routes' }));
 
