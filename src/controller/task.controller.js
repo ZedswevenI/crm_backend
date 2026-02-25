@@ -13,7 +13,7 @@ const uploadTaskAttachment = async (req, res, next) => {
     if (!req.file) {
       return res.status(400).json({ status: false, message: 'No file provided for upload' });
     }
-    const attachmentUrl = await uploadFileToS3(req.file);
+    const attachmentUrl = await uploadFileToS3(req.file, 'tasks');
     if (!attachmentUrl) {
       return res.status(500).json({ status: false, message: 'Failed to upload to S3' });
     }
