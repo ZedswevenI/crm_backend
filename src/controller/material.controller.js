@@ -162,10 +162,49 @@ const listMaterials = async (req, res, next) => {
     }
     const listMode = String(req.query.list || req.body.list || '').toLowerCase();
     if (listMode === 'full') {
-      const rows = await StudyMaterial.find(query).sort(sort).lean();
+      const rows = await StudyMaterial.find(query)
+        .sort(sort)
+        .populate('subjectId', 'subjectName subjectCode')
+        .populate({
+          path: 'topicId',
+          model: 'topic',
+          localField: 'topicId',
+          foreignField: 'topicId',
+          select: 'topicName topicCode'
+        })
+        .populate({
+          path: 'subTopicId',
+          model: 'subtopic',
+          localField: 'subTopicId',
+          foreignField: 'subTopicId',
+          select: 'subTopicName subTopicCode'
+        })
+        .lean();
       return res.status(constants.HTTPS_SUCCESS).send({ status: true, data: rows, count: rows.length, message: 'Materials retrieved' });
     }
-    const [rows, count] = await Promise.all([StudyMaterial.find(query).sort(sort).skip(skip).limit(limit).lean(), StudyMaterial.countDocuments(query)]);
+    const [rows, count] = await Promise.all([
+      StudyMaterial.find(query)
+        .sort(sort)
+        .skip(skip)
+        .limit(limit)
+        .populate('subjectId', 'subjectName subjectCode')
+        .populate({
+          path: 'topicId',
+          model: 'topic',
+          localField: 'topicId',
+          foreignField: 'topicId',
+          select: 'topicName topicCode'
+        })
+        .populate({
+          path: 'subTopicId',
+          model: 'subtopic',
+          localField: 'subTopicId',
+          foreignField: 'subTopicId',
+          select: 'subTopicName subTopicCode'
+        })
+        .lean(),
+      StudyMaterial.countDocuments(query)
+    ]);
     return res.status(constants.HTTPS_SUCCESS).send({
       status: true,
       data: rows,
@@ -180,11 +219,45 @@ const listMaterials = async (req, res, next) => {
   }
 };
 
+const viewMaterial = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const materialId = safeTrim(req.body?.materialId || req.query?.materialId);
+    if (!tenantId || !materialId) {
+      return res.status(400).json({ status: false, message: 'tenantId and materialId are required' });
+    }
+    const material = await StudyMaterial.findOne({ tenantId, materialId, isdeleted: false })
+      .populate('subjectId', 'subjectName subjectCode')
+      .populate({
+        path: 'topicId',
+        model: 'topic',
+        localField: 'topicId',
+        foreignField: 'topicId',
+        select: 'topicName topicCode'
+      })
+      .populate({
+        path: 'subTopicId',
+        model: 'subtopic',
+        localField: 'subTopicId',
+        foreignField: 'subTopicId',
+        select: 'subTopicName subTopicCode'
+      })
+      .lean();
+    if (!material) {
+      return res.status(404).json({ status: false, message: 'Study material not found' });
+    }
+    return res.status(200).json({ status: true, message: 'Study material retrieved', data: material });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   uploadMaterialFile,
   createMaterial,
   editMaterial,
   makeInactive,
   deleteMaterial,
-  listMaterials
+  listMaterials,
+  viewMaterial
 };

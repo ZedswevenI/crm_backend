@@ -30,6 +30,14 @@ routes.post('/phase/list', validatetoken, phaseCtrl.listPhases);
 routes.post('/phase/available-topics', validatetoken, phaseCtrl.getAvailableTopics);
 routes.post('/phase/bulkupload', validatetoken, phaseCtrl.bulkUploadPhases);
 
+routes.post('/activity/create', validatetoken, phaseCtrl.createActivity);
+routes.post('/activity/update', validatetoken, phaseCtrl.editActivity);
+routes.post('/activity/delete', validatetoken, phaseCtrl.deleteActivity);
+routes.post('/activity/list', validatetoken, phaseCtrl.listActivities);
+routes.post('/activity/view', validatetoken, phaseCtrl.viewActivity);
+routes.post('/activity/bulkupload', validatetoken, phaseCtrl.bulkUploadActivities);
+routes.post('/activity/changeStatus', validatetoken, phaseCtrl.changeStatus);
+
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Batch routes' }));
 
 export default routes;

@@ -1,8 +1,11 @@
-import constants from '../helpers/constants.js';
 import mongoose from 'mongoose';
+import { v4 as uuid } from 'uuid';
+import constants from '../helpers/constants.js';
 import Program from '../models/program.model.js';
 import ExamCategory from '../models/examcategory.model.js';
 import ExamSubCategory from '../models/examsubcategory.model.js';
+import PTM from '../models/ptm.model.js';
+import StudentProfile from '../models/studentProfile.model.js';
 
 const pickTenantId = (req) => (req.body?.entiId || req.body?.tenantId || '').toString().trim();
 const safeTrim = (v) => (v === null || v === undefined ? '' : String(v)).trim();
@@ -21,6 +24,18 @@ const normalizeSubjects = (v) => {
     .split(',')
     .map((x) => String(x || '').trim())
     .filter(Boolean);
+};
+
+const toInt = (v, def = 0) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.trunc(n) : def;
+};
+
+const parseDateTimeToEpoch = (dateStr, timeStr) => {
+  if (!dateStr) return null;
+  const dtString = timeStr && timeStr !== 'NULL' ? `${dateStr} ${timeStr}` : `${dateStr} 00:00:00`;
+  const parsed = new Date(dtString).getTime();
+  return Number.isNaN(parsed) ? null : parsed;
 };
 
 const createProgram = async (req, res, next) => {
@@ -401,6 +416,415 @@ const updateProgramExamMappings = async (req, res, next) => {
   }
 };
 
+const schedulePTM = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = safeTrim(req.body?.userId);
+    const { scope, targetIds, ptmDate, startTime, endTime, durationMins, content, venue, meetingMode } = req.body;
+    if (!tenantId || !scope || !Array.isArray(targetIds) || targetIds.length === 0) {
+      return res.status(400).json({ status: false, message: 'Invalid scope or targetIds' });
+    }
+    if (!ptmDate || !startTime || !endTime) {
+      return res.status(400).json({ status: false, message: 'ptmDate, startTime, and endTime are required (in Epoch ms)' });
+    }
+    const studentQuery = { tenantId, status: 'ACTIVE', isdeleted: false };
+    if (scope === 'CENTER') studentQuery.centerCode = { $in: targetIds };
+    else if (scope === 'PROGRAM') studentQuery.programCode = { $in: targetIds };
+    else if (scope === 'BATCH') studentQuery.batchCode = { $in: targetIds };
+    else if (scope === 'STUDENT') studentQuery.studentId = { $in: targetIds };
+    else return res.status(400).json({ status: false, message: 'Invalid scope' });
+    const students = await StudentProfile.find(studentQuery).lean();
+    if (!students.length) {
+      return res.status(404).json({ status: false, message: 'No active students found for the given scope' });
+    }
+    const bulkOps = students.map((st) => ({
+      updateOne: {
+        filter: { tenantId, admissionNo: st.admissionNo, startTime: Number(startTime), isdeleted: false },
+        update: {
+          $setOnInsert: {
+            ptmId: uuid(),
+            studentId: st.studentId,
+            studentName: st.student?.name || 'Unknown',
+            centerCode: st.centerCode,
+            programCode: st.programCode,
+            batchCode: st.batchCode,
+            createdBy: userId
+          },
+          $set: {
+            ptmDate: Number(ptmDate),
+            endTime: Number(endTime),
+            durationMins: toInt(durationMins, 15),
+            content: safeTrim(content),
+            venue: safeTrim(venue),
+            meetingMode: safeTrim(meetingMode) || 'OFFLINE',
+            status: 'SCHEDULED',
+            updatedBy: userId
+          }
+        },
+        upsert: true
+      }
+    }));
+    await PTM.bulkWrite(bulkOps, { ordered: false });
+    return res.status(201).json({ status: true, message: `Successfully scheduled PTM for ${students.length} student(s).` });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const bulkImportSchedule = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = safeTrim(req.body?.userId);
+    const rows = req.body?.rows;
+    if (!tenantId || !Array.isArray(rows) || rows.length === 0) {
+      return res.status(400).json({ status: false, message: 'tenantId and rows array are required' });
+    }
+    const enos = rows.map((r) => safeTrim(r.Eno)).filter(Boolean);
+    const students = await StudentProfile.find({ tenantId, admissionNo: { $in: enos }, isdeleted: false }).lean();
+    const studentMap = new Map(students.map((st) => [st.admissionNo, st]));
+    const bulkOps = [];
+    const report = { successCount: 0, failedCount: 0, errors: [] };
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      const eno = safeTrim(r.Eno);
+      const st = studentMap.get(eno);
+      if (!st) {
+        report.failedCount++;
+        report.errors.push({ row: i + 1, Eno: eno, reason: 'Student not found or inactive' });
+        continue;
+      }
+      const ptmDateMs = parseDateTimeToEpoch(r['PTM Date'], null) || Number(r['PTM Date']);
+      const startMs = parseDateTimeToEpoch(r['PTM Date'], r['PTM Start Time']) || Number(r['PTM Start Time']);
+      const endMs = parseDateTimeToEpoch(r['PTM Date'], r['PTM End Time']) || Number(r['PTM End Time']);
+      if (!ptmDateMs || !startMs) {
+        report.failedCount++;
+        report.errors.push({ row: i + 1, Eno: eno, reason: 'Invalid Date/Time formats' });
+        continue;
+      }
+      bulkOps.push({
+        updateOne: {
+          filter: { tenantId, admissionNo: eno, startTime: startMs, isdeleted: false },
+          update: {
+            $setOnInsert: {
+              ptmId: uuid(),
+              studentId: st.studentId,
+              studentName: safeTrim(r['Student Name']) || st.student?.name,
+              centerCode: safeTrim(r.CCode) || st.centerCode,
+              batchCode: safeTrim(r['Batch Code']) || st.batchCode,
+              createdBy: userId
+            },
+            $set: {
+              ptmDate: ptmDateMs,
+              endTime: endMs,
+              durationMins: toInt(r.Duration, 15),
+              content: safeTrim(r.Content) !== 'NULL' ? safeTrim(r.Content) : null,
+              venue: safeTrim(r.Venue) !== 'NULL' ? safeTrim(r.Venue) : null,
+              status: 'SCHEDULED',
+              updatedBy: userId
+            }
+          },
+          upsert: true
+        }
+      });
+      report.successCount++;
+    }
+    if (bulkOps.length > 0) await PTM.bulkWrite(bulkOps, { ordered: false });
+    return res.status(200).json({ status: true, message: `Schedule import processed. Success: ${report.successCount}, Failed: ${report.failedCount}`, data: report });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const submitPrePTMFeedback = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const { ptmId, prePtmFeedback } = req.body;
+    if (!tenantId || !ptmId || !prePtmFeedback) {
+      return res.status(400).json({ status: false, message: 'Missing required fields' });
+    }
+    const updated = await PTM.findOneAndUpdate({ tenantId, ptmId, isdeleted: false }, { $set: { prePtmFeedback: safeTrim(prePtmFeedback), prePtmSubmittedAt: Date.now() } }, { new: true }).lean();
+    if (!updated) return res.status(404).json({ status: false, message: 'PTM not found' });
+    return res.status(200).json({ status: true, message: 'Pre-PTM feedback submitted', data: updated });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const submitStaffFeedback = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const staffId = safeTrim(req.body?.userId);
+    const { ptmId, staffRemarks, status } = req.body;
+    if (!tenantId || !ptmId || !status) {
+      return res.status(400).json({ status: false, message: 'tenantId, ptmId, and status are required' });
+    }
+    const updated = await PTM.findOneAndUpdate(
+      { tenantId, ptmId, isdeleted: false },
+      {
+        $set: {
+          staffRemarks: safeTrim(staffRemarks),
+          status: safeTrim(status),
+          staffId,
+          staffFeedbackSubmittedAt: Date.now(),
+          updatedBy: staffId
+        }
+      },
+      { new: true }
+    ).lean();
+    if (!updated) return res.status(404).json({ status: false, message: 'PTM not found' });
+    return res.status(200).json({ status: true, message: 'Staff feedback saved', data: updated });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const bulkImportFeedback = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const staffId = safeTrim(req.body?.userId);
+    const rows = req.body?.rows;
+    if (!tenantId || !Array.isArray(rows) || rows.length === 0) {
+      return res.status(400).json({ status: false, message: 'tenantId and rows array are required' });
+    }
+    const bulkOps = [];
+    const report = { successCount: 0, failedCount: 0, errors: [] };
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      const eno = safeTrim(r.Eno);
+      const ptmDateMs = parseDateTimeToEpoch(r['PTM Date'], null) || Number(r['PTM Date']);
+      if (!eno || !ptmDateMs) {
+        report.failedCount++;
+        report.errors.push({ row: i + 1, reason: 'Missing Eno or PTM Date' });
+        continue;
+      }
+      bulkOps.push({
+        updateOne: {
+          filter: { tenantId, admissionNo: eno, ptmDate: ptmDateMs, isdeleted: false },
+          update: {
+            $set: {
+              staffRemarks: safeTrim(r['Staff Remarks']),
+              status: safeTrim(r.Status) || 'COMPLETED',
+              staffId,
+              staffFeedbackSubmittedAt: Date.now(),
+              updatedBy: staffId
+            }
+          }
+        }
+      });
+      report.successCount++;
+    }
+    if (bulkOps.length > 0) await PTM.bulkWrite(bulkOps, { ordered: false });
+    return res.status(200).json({
+      status: true,
+      message: `Feedback import processed. Sent ${report.successCount} updates.`,
+      data: report
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const listPTMs = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const page = parseInt(req.query.page || req.body.page, 10) || 1;
+    const limit = parseInt(req.query.limit || req.body.limit, 10) || 10;
+    const skip = (page - 1) * limit;
+    const sort = req.query.sort || req.body.sort || '-ptmDate';
+    const { centerCode, batchCode, admissionNo, studentId, status, fromDate, toDate } = req.body;
+    const query = { tenantId, isdeleted: false };
+    if (centerCode) query.centerCode = safeTrim(centerCode);
+    if (batchCode) query.batchCode = safeTrim(batchCode);
+    if (admissionNo) query.admissionNo = safeTrim(admissionNo);
+    if (studentId) query.studentId = safeTrim(studentId);
+    if (status) query.status = safeTrim(status);
+    if (fromDate || toDate) {
+      query.ptmDate = {};
+      if (fromDate) query.ptmDate.$gte = Number(fromDate);
+      if (toDate) query.ptmDate.$lte = Number(toDate);
+    }
+    const [rows, count] = await Promise.all([PTM.find(query).sort(sort).skip(skip).limit(limit).populate('studentId', 'student.name student.phone parentName parentPhone').lean(), PTM.countDocuments(query)]);
+    return res.status(200).json({
+      status: true,
+      data: rows,
+      page,
+      limit,
+      count,
+      pages: Math.ceil(count / limit) || 0,
+      message: 'PTMs retrieved'
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const viewPTM = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const ptmId = safeTrim(req.body?.ptmId || req.query?.ptmId);
+    if (!tenantId || !ptmId) {
+      return res.status(400).json({ status: false, message: 'tenantId and ptmId are required' });
+    }
+    const ptmRecord = await PTM.findOne({ tenantId, ptmId, isdeleted: false }).populate('studentId', 'student.name student.phone parentName parentPhone').populate('studentId', 'student.name student.phone parentName parentPhone').lean();
+    if (!ptmRecord) {
+      return res.status(404).json({ status: false, message: 'PTM record not found' });
+    }
+    return res.status(200).json({ status: true, message: 'PTM retrieved successfully', data: ptmRecord });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const editPTM = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const ptmId = safeTrim(req.body?.ptmId);
+    const userId = safeTrim(req.body?.userId);
+    if (!tenantId || !ptmId) {
+      return res.status(400).json({ status: false, message: 'tenantId and ptmId are required' });
+    }
+    const updateData = { updatedBy: userId };
+    if (req.body.ptmDate !== undefined) updateData.ptmDate = Number(req.body.ptmDate);
+    if (req.body.startTime !== undefined) updateData.startTime = Number(req.body.startTime);
+    if (req.body.endTime !== undefined) updateData.endTime = Number(req.body.endTime);
+    if (req.body.durationMins !== undefined) updateData.durationMins = toInt(req.body.durationMins);
+    if (req.body.content !== undefined) updateData.content = safeTrim(req.body.content);
+    if (req.body.venue !== undefined) updateData.venue = safeTrim(req.body.venue);
+    if (req.body.meetingMode !== undefined) updateData.meetingMode = safeTrim(req.body.meetingMode);
+    if (req.body.status !== undefined) updateData.status = safeTrim(req.body.status);
+    const updatedPTM = await PTM.findOneAndUpdate({ tenantId, ptmId, isdeleted: false }, { $set: updateData }, { new: true, runValidators: true }).lean();
+    if (!updatedPTM) {
+      return res.status(404).json({ status: false, message: 'PTM record not found' });
+    }
+    return res.status(200).json({ status: true, message: 'PTM updated successfully', data: updatedPTM });
+  } catch (err) {
+    if (err.code === 11000) {
+      return res.status(409).json({ status: false, message: 'Student already has a PTM scheduled at this exact time.' });
+    }
+    return next(err);
+  }
+};
+
+const removePTM = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const ptmId = safeTrim(req.body?.ptmId);
+    const userId = safeTrim(req.body?.userId);
+    if (!tenantId || !ptmId) {
+      return res.status(400).json({ status: false, message: 'tenantId and ptmId are required' });
+    }
+    const deletedPTM = await PTM.findOneAndUpdate(
+      { tenantId, ptmId, isdeleted: false },
+      {
+        $set: {
+          isdeleted: true,
+          status: 'CANCELLED',
+          updatedBy: userId
+        }
+      },
+      { new: true }
+    ).lean();
+    if (!deletedPTM) {
+      return res.status(404).json({ status: false, message: 'PTM record not found' });
+    }
+    return res.status(200).json({ status: true, message: 'PTM removed successfully' });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const addStudentsToPTM = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = safeTrim(req.body?.userId);
+    const { referencePtmId, studentIds } = req.body;
+    if (!tenantId || !referencePtmId || !Array.isArray(studentIds) || studentIds.length === 0) {
+      return res.status(400).json({ status: false, message: 'tenantId, referencePtmId, and studentIds array are required' });
+    }
+    const refPtm = await PTM.findOne({ tenantId, ptmId: referencePtmId, isdeleted: false }).lean();
+    if (!refPtm) {
+      return res.status(404).json({ status: false, message: 'Reference PTM not found' });
+    }
+    const students = await StudentProfile.find({
+      tenantId,
+      studentId: { $in: studentIds },
+      status: 'ACTIVE',
+      isdeleted: false
+    }).lean();
+    if (!students.length) {
+      return res.status(404).json({ status: false, message: 'No valid active students found from the provided IDs' });
+    }
+    const bulkOps = students.map((st) => ({
+      updateOne: {
+        filter: {
+          tenantId,
+          admissionNo: st.admissionNo,
+          startTime: refPtm.startTime,
+          isdeleted: false
+        },
+        update: {
+          $setOnInsert: {
+            ptmId: uuid(),
+            studentId: st.studentId,
+            studentName: st.student?.name || 'Unknown',
+            centerCode: st.centerCode,
+            programCode: st.programCode,
+            batchCode: st.batchCode,
+            createdBy: userId
+          },
+          $set: {
+            ptmDate: refPtm.ptmDate,
+            endTime: refPtm.endTime,
+            durationMins: refPtm.durationMins,
+            content: refPtm.content,
+            venue: refPtm.venue,
+            meetingMode: refPtm.meetingMode,
+            status: 'SCHEDULED',
+            updatedBy: userId
+          }
+        },
+        upsert: true
+      }
+    }));
+    const result = await PTM.bulkWrite(bulkOps, { ordered: false });
+    return res.status(201).json({
+      status: true,
+      message: `Successfully added ${result.upsertedCount || students.length} student(s) to the PTM session.`,
+      data: { addedCount: result.upsertedCount || students.length }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const removeStudentsFromPTM = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = safeTrim(req.body?.userId);
+    const { ptmIds } = req.body;
+    if (!tenantId || !Array.isArray(ptmIds) || ptmIds.length === 0) {
+      return res.status(400).json({ status: false, message: 'tenantId and ptmIds array are required' });
+    }
+    const result = await PTM.updateMany(
+      { tenantId, ptmId: { $in: ptmIds }, isdeleted: false },
+      {
+        $set: {
+          isdeleted: true,
+          status: 'CANCELLED',
+          updatedBy: userId
+        }
+      }
+    );
+    return res.status(200).json({
+      status: true,
+      message: `Successfully removed ${result.modifiedCount} student(s) from the PTM.`,
+      data: { removedCount: result.modifiedCount }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   createProgram,
   viewProgram,
@@ -409,5 +833,16 @@ export default {
   listPrograms,
   importPrograms,
   addProgramSubjects,
-  updateProgramExamMappings
+  updateProgramExamMappings,
+  schedulePTM,
+  bulkImportSchedule,
+  submitPrePTMFeedback,
+  submitStaffFeedback,
+  bulkImportFeedback,
+  listPTMs,
+  viewPTM,
+  editPTM,
+  removePTM,
+  addStudentsToPTM,
+  removeStudentsFromPTM
 };
