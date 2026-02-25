@@ -15,6 +15,9 @@ import SubTopic from '../models/subtopic.model.js';
 import BatchAssignEnable from '../models/batchenabledAssignment.model.js';
 import AssignmentResult from '../models/assignmentResult.model.js';
 import Phase from '../models/phaseplan.model.js';
+import TimeTable from '../models/timetable.model.js';
+import Attendance from '../models/attandence.model.js';
+import StudyMaterial from '../models/studymaterial.model.js';
 
 const pickTenantId = (req) => String(req?.body?.tenantId || req?.body?.entiId || '').trim();
 const safeTrim = (v) => (v === undefined || v === null ? '' : String(v).trim());
@@ -28,6 +31,47 @@ const toNum = (v) => {
   return Number.isFinite(n) ? n : 0;
 };
 
+const toInt = (v, def = 0) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.trunc(n) : def;
+};
+
+const DAYS = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
+
+const getEffectivePeriods = (tt, dateMs) => {
+  if (!tt || !Array.isArray(tt.week)) return [];
+  const targetDateMs = Number(dateMs);
+  if (isNaN(targetDateMs)) return [];
+  const targetDate = new Date(targetDateMs);
+  const JS_DAYS = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
+  const dayStr = JS_DAYS[targetDate.getDay()];
+  const baseDay = tt.week.find((w) => w.day === dayStr);
+  let periods = baseDay && Array.isArray(baseDay.periods) ? JSON.parse(JSON.stringify(baseDay.periods)) : [];
+  const targetStartOfDay = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate()).getTime();
+  const dayOverrides = (tt.overrides || []).filter((o) => {
+    const oDate = new Date(Number(o.date));
+    const overrideStartOfDay = new Date(oDate.getFullYear(), oDate.getMonth(), oDate.getDate()).getTime();
+    return overrideStartOfDay === targetStartOfDay;
+  });
+  for (const ov of dayOverrides) {
+    if (ov.action === 'CANCEL_DAY') {
+      return [];
+    }
+    if (['CANCEL_PERIOD', 'REPLACE_PERIOD', 'MOVE_PERIOD'].includes(ov.action)) {
+      periods = periods.filter((p) => p.periodNo !== ov.periodNo);
+      if (ov.period) {
+        periods.push(ov.period);
+      }
+    }
+    if (ov.action === 'ADD_PERIOD') {
+      if (ov.period) {
+        periods.push(ov.period);
+      }
+    }
+  }
+  return periods.sort((a, b) => (a.periodNo || 0) - (b.periodNo || 0));
+};
+
 const listStudents = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
@@ -36,12 +80,14 @@ const listStudents = async (req, res, next) => {
     const search = safeTrim(q.search);
     const programId = safeTrim(q.programId);
     const batchId = safeTrim(q.batchId);
+    const batchCode = safeTrim(q.batchCode);
     const centerId = safeTrim(q.centerId);
     const academicYear = safeTrim(q.academicYear);
     const status = safeTrim(q.status);
     const query = { tenantId, isdeleted: false };
     if (programId) query.programId = programId;
     if (batchId) query.batchId = batchId;
+    if (batchCode) query.batchCode = batchCode;
     if (centerId) query.centerId = centerId;
     if (academicYear) query.academicYear = academicYear;
     if (status && status !== 'ALL') query.status = status;
@@ -196,8 +242,6 @@ const viewAcademicSummary = async (req, res, next) => {
     return next(err);
   }
 };
-
-// 9051642680002
 
 const studentLogin = async (req, res, next) => {
   try {
@@ -672,6 +716,206 @@ const getStudentTopicsTests = async (req, res, next) => {
   }
 };
 
+// const getStudentTimetable = async (req, res, next) => {
+//   try {
+//     const tenantId = pickTenantId(req);
+//     const identifier = safeTrim(req.body?.studentNo || req.body?.studentId);
+//     const targetDate = req.body?.date ? Number(req.body.date) : new Date().setHours(0, 0, 0, 0);
+//     if (!tenantId || !identifier) {
+//       return res.status(400).json({ status: false, message: 'tenantId and studentNo are required' });
+//     }
+//     const student = await StudentProfile.findOne({
+//       tenantId,
+//       status: 'ACTIVE',
+//       isdeleted: false,
+//       $or: [{ studentId: identifier }, { admissionNo: identifier }, { registrationNumber: identifier }]
+//     }).lean();
+//     if (!student) return res.status(404).json({ status: false, message: 'Student profile not found' });
+//     const timetableDoc = await TimeTable.findOne({ tenantId, batchCode: student.batchCode, isdeleted: false }).lean();
+//     const todaysPeriods = getEffectivePeriods(timetableDoc, targetDate);
+//     return res.status(200).json({
+//       status: true,
+//       message: 'Timetable retrieved successfully',
+//       data: {
+//         date: targetDate,
+//         batchCode: student.batchCode,
+//         periods: todaysPeriods
+//       }
+//     });
+//   } catch (err) {
+//     return next(err);
+//   }
+// };
+
+// Keep your existing getEffectivePeriods helper that works for you!
+
+const getStudentTimetable = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const identifier = safeTrim(req.body?.studentNo || req.body?.studentId);
+    const targetDateMs = req.body?.date ? Number(req.body.date) : Date.now();
+
+    if (!tenantId || !identifier) {
+      return res.status(400).json({ status: false, message: 'tenantId and studentNo are required' });
+    }
+
+    // 1. Fetch Student Profile
+    const student = await StudentProfile.findOne({
+      tenantId,
+      status: 'ACTIVE',
+      isdeleted: false,
+      $or: [{ studentId: identifier }, { admissionNo: identifier }, { registrationNumber: identifier }]
+    }).lean();
+
+    if (!student) {
+      return res.status(404).json({ status: false, message: 'Student profile not found' });
+    }
+
+    // 2. Calculate the EXACT Monday for the requested date (wkStartOn)
+    const d = new Date(targetDateMs);
+    const diff = d.getDay() === 0 ? -6 : 1 - d.getDay();
+    const mondayMs = new Date(d.setDate(d.getDate() + diff)).setHours(0, 0, 0, 0);
+
+    // 3. Fetch the Timetable strictly for THAT week
+    const timetableDoc = await TimeTable.findOne({
+      tenantId,
+      batchCode: student.batchCode,
+      wkStartOn: mondayMs, // <--- This was the missing magic key!
+      isdeleted: false
+    }).lean();
+
+    // 4. Extract periods using your working helper
+    const todaysPeriods = getEffectivePeriods(timetableDoc, targetDateMs);
+
+    return res.status(200).json({
+      status: true,
+      message: 'Timetable retrieved successfully',
+      data: {
+        date: targetDateMs,
+        batchCode: student.batchCode,
+        wkStartOn: mondayMs,
+        periods: todaysPeriods
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const getStudentAttendance = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const identifier = safeTrim(req.body?.studentNo || req.body?.studentId);
+    const targetDate = req.body?.date ? Number(req.body.date) : new Date().setHours(0, 0, 0, 0);
+    if (!tenantId || !identifier || !req.body?.date) {
+      return res.status(400).json({ status: false, message: 'tenantId, studentNo, and date are required' });
+    }
+    const student = await StudentProfile.findOne({
+      tenantId,
+      status: 'ACTIVE',
+      isdeleted: false,
+      $or: [{ studentId: identifier }, { admissionNo: identifier }, { registrationNumber: identifier }]
+    }).lean();
+    if (!student) return res.status(404).json({ status: false, message: 'Student profile not found' });
+    const attendanceRecords = await Attendance.find({
+      tenantId,
+      batchCode: student.batchCode,
+      date: targetDate,
+      isdeleted: false
+    }).lean();
+    const studentAttendance = attendanceRecords
+      .map((record) => {
+        const studentData = record.students.find((s) => s.studentId === student.studentId);
+        return {
+          periodNo: record.periodNo,
+          topicTaught: record.topicTaught || null,
+          status: studentData ? studentData.status : 'NOT_MARKED',
+          remarks: studentData ? studentData.remarks : null
+        };
+      })
+      .sort((a, b) => a.periodNo - b.periodNo);
+    return res.status(200).json({
+      status: true,
+      message: 'Attendance retrieved successfully',
+      data: {
+        date: targetDate,
+        studentId: student.studentId,
+        attendance: studentAttendance
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const getStudentProfileView = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const identifier = safeTrim(req.body?.studentNo || req.body?.studentId);
+    if (!tenantId || !identifier) {
+      return res.status(400).json({ status: false, message: 'tenantId and studentNo are required' });
+    }
+    const student = await StudentProfile.findOne({
+      tenantId,
+      status: 'ACTIVE',
+      isdeleted: false,
+      $or: [{ studentId: identifier }, { admissionNo: identifier }, { registrationNumber: identifier }]
+    }).lean();
+    if (!student) {
+      return res.status(404).json({ status: false, message: 'Student profile not found' });
+    }
+    return res.status(200).json({
+      status: true,
+      message: 'Student profile retrieved successfully',
+      data: student
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const getStudentMaterials = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const identifier = safeTrim(req.body?.studentNo || req.body?.studentId);
+    if (!tenantId || !identifier) {
+      return res.status(400).json({ status: false, message: 'tenantId and studentNo are required' });
+    }
+    const student = await StudentProfile.findOne({
+      tenantId,
+      status: 'ACTIVE',
+      isdeleted: false,
+      $or: [{ studentId: identifier }, { admissionNo: identifier }, { registrationNumber: identifier }]
+    }).lean();
+    if (!student) {
+      return res.status(404).json({ status: false, message: 'Student profile not found' });
+    }
+    const batchCode = safeTrim(student.batchCode);
+    const batchId = safeTrim(student.batchId);
+    const studentId = safeTrim(student.studentId);
+    const now = Date.now();
+    const materialQuery = {
+      tenantId,
+      status: 'Active',
+      isdeleted: false,
+      $and: [{ $or: [{ availableFrom: null }, { availableFrom: { $lte: now } }] }, { $or: [{ availableUntil: null }, { availableUntil: { $gte: now } }] }],
+      $or: [{ batchIds: batchCode }, { batchIds: batchId }, { studentIds: studentId }]
+    };
+    const materials = await StudyMaterial.find(materialQuery).populate('subjectId', 'subjectName subjectCode').sort({ createdAt: -1 }).lean();
+    return res.status(200).json({
+      status: true,
+      message: 'Study materials retrieved successfully',
+      data: {
+        studentId: student.studentId,
+        materialsCount: materials.length,
+        materials: materials
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   listStudents,
   viewProfile,
@@ -680,5 +924,9 @@ export default {
   studentLogin,
   getStudentSubjects,
   getAllClassSubjectTopics,
-  getStudentTopicsTests
+  getStudentTopicsTests,
+  getStudentTimetable,
+  getStudentAttendance,
+  getStudentProfileView,
+  getStudentMaterials
 };

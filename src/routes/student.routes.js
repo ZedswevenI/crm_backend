@@ -14,6 +14,11 @@ routes.post('/get/assnsubjects', studentCtrl.getStudentSubjects);
 routes.post('/get/assignments', studentCtrl.getAllClassSubjectTopics);
 routes.post('/download/assignments', studentCtrl.getStudentTopicsTests);
 
+routes.post('/getimetable', studentCtrl.getStudentTimetable);
+routes.post('/getattendance', studentCtrl.getStudentAttendance);
+routes.post('/getmyprofile', studentCtrl.getStudentProfileView);
+routes.post('/getmymaterials', studentCtrl.getStudentMaterials);
+
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Student routes' }));
 
 export default routes;
