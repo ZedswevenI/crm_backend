@@ -631,7 +631,13 @@ const listPTMs = async (req, res, next) => {
     const limit = parseInt(req.query.limit || req.body.limit, 10) || 10;
     const skip = (page - 1) * limit;
     const sort = req.query.sort || req.body.sort || '-ptmDate';
-    const { centerCode, batchCode, admissionNo, studentId, status, fromDate, toDate } = req.body;
+    const centerCode = req.query.centerCode;
+    const batchCode = req.query.batchCode;
+    const admissionNo = req.query.admissionNo;
+    const studentId = req.query.studentId;
+    const status = req.query.status;
+    const fromDate = req.query.fromDate;
+    const toDate = req.query.toDate;
     const query = { tenantId, isdeleted: false };
     if (centerCode) query.centerCode = safeTrim(centerCode);
     if (batchCode) query.batchCode = safeTrim(batchCode);
@@ -643,7 +649,21 @@ const listPTMs = async (req, res, next) => {
       if (fromDate) query.ptmDate.$gte = Number(fromDate);
       if (toDate) query.ptmDate.$lte = Number(toDate);
     }
-    const [rows, count] = await Promise.all([PTM.find(query).sort(sort).skip(skip).limit(limit).populate('studentId', 'student.name student.phone parentName parentPhone').lean(), PTM.countDocuments(query)]);
+    const [rows, count] = await Promise.all([
+      PTM.find(query)
+        .sort(sort)
+        .skip(skip)
+        .limit(limit)
+        .populate({
+          path: 'studentId',
+          model: 'studentprofile',
+          localField: 'studentId',
+          foreignField: 'studentId',
+          select: 'admissionNo student.name student.phone parentName parentPhone'
+        })
+        .lean(),
+      PTM.countDocuments(query)
+    ]);
     return res.status(200).json({
       status: true,
       data: rows,
