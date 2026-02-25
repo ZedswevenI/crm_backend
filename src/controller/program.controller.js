@@ -685,7 +685,15 @@ const viewPTM = async (req, res, next) => {
     if (!tenantId || !ptmId) {
       return res.status(400).json({ status: false, message: 'tenantId and ptmId are required' });
     }
-    const ptmRecord = await PTM.findOne({ tenantId, ptmId, isdeleted: false }).populate('studentId', 'student.name student.phone parentName parentPhone').populate('studentId', 'student.name student.phone parentName parentPhone').lean();
+    const ptmRecord = await PTM.findOne({ tenantId, ptmId, isdeleted: false })
+      .populate({
+        path: 'studentId',
+        model: 'studentprofile',
+        localField: 'studentId',
+        foreignField: 'studentId',
+        select: 'admissionNo student.name student.phone parentName parentPhone'
+      })
+      .lean();
     if (!ptmRecord) {
       return res.status(404).json({ status: false, message: 'PTM record not found' });
     }
