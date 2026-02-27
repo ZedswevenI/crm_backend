@@ -12,6 +12,7 @@ import studentRoute from './student.routes.js';
 import assignmentRoute from './assignment.routes.js';
 import attendanceRoute from './attendance.routes.js';
 import teacherRoute from './teacher.routes.js';
+import manageRoute from './manage.routes.js';
 
 routes.post('/healthcheck', (req, res) => {
   try {
@@ -22,6 +23,7 @@ routes.post('/healthcheck', (req, res) => {
 });
 
 routes.use('/ims', tenantRoute);
+routes.use('/institue', manageRoute);
 routes.use('/admi', admissionRoute);
 routes.use('/accounts', accountsRoute);
 routes.use('/batch', batchRoute);
