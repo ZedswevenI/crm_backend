@@ -661,6 +661,13 @@ const listPTMs = async (req, res, next) => {
           foreignField: 'studentId',
           select: 'admissionNo student.name student.phone parentName parentPhone'
         })
+        .populate({
+          path: 'studentId',
+          model: 'studentprofile',
+          localField: 'studentId',
+          foreignField: 'studentId',
+          select: 'admissionNo student.name student.phone parentName parentPhone'
+        })
         .lean(),
       PTM.countDocuments(query)
     ]);
@@ -692,6 +699,14 @@ const viewPTM = async (req, res, next) => {
         localField: 'studentId',
         foreignField: 'studentId',
         select: 'admissionNo student.name student.phone parentName parentPhone'
+      })
+      .populate({
+        path: 'staffId',
+        localField: 'staffId',
+        foreignField: 'staffId',
+        model: 'staff',
+        justOne: true,
+        select: 'staffName staffCode facultyType _id'
       })
       .lean();
     if (!ptmRecord) {
