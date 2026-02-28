@@ -5,7 +5,6 @@ import validate from '../middlewares/validation.js';
 import constants from '../helpers/constants.js';
 import validatetoken from '../middlewares/auth.js';
 import batchCtrl from '../controller/batch.controller.js';
-import phaseCtrl from '../controller/phaseplan.controller.js';
 
 routes.post('/create', validatetoken, batchCtrl.createBatch);
 routes.post('/close', validatetoken, batchCtrl.closeBatch);
@@ -22,21 +21,6 @@ routes.post('/students/shuffle', validatetoken, batchCtrl.shuffleStudentsBetween
 routes.post('/recalc', validatetoken, batchCtrl.recalcBatchStudentCount);
 routes.post('/subjects', validatetoken, batchCtrl.getBatchSubjects);
 routes.post('/ayinfo', validatetoken, batchCtrl.getBatchAyInfo);
-
-routes.post('/phase/create', validatetoken, phaseCtrl.createPhase);
-routes.post('/phase/update', validatetoken, phaseCtrl.updatePhase);
-routes.post('/phase/delete', validatetoken, phaseCtrl.deletePhase);
-routes.post('/phase/list', validatetoken, phaseCtrl.listPhases);
-routes.post('/phase/available-topics', validatetoken, phaseCtrl.getAvailableTopics);
-routes.post('/phase/bulkupload', validatetoken, phaseCtrl.bulkUploadPhases);
-
-routes.post('/activity/create', validatetoken, phaseCtrl.createActivity);
-routes.post('/activity/update', validatetoken, phaseCtrl.editActivity);
-routes.post('/activity/delete', validatetoken, phaseCtrl.deleteActivity);
-routes.post('/activity/list', validatetoken, phaseCtrl.listActivities);
-routes.post('/activity/view', validatetoken, phaseCtrl.viewActivity);
-routes.post('/activity/bulkupload', validatetoken, phaseCtrl.bulkUploadActivities);
-routes.post('/activity/changeStatus', validatetoken, phaseCtrl.changeStatus);
 
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Batch routes' }));
 
