@@ -109,7 +109,17 @@ const listTasks = async (req, res, next) => {
       query.$or = [{ taskName: rx }, { taskId: rx }, { description: rx }];
     }
     if (String(list).toLowerCase() === 'full') {
-      const rows = await Task.find(query).sort(sort).lean();
+      const rows = await Task.find(query)
+        .sort(sort)
+        .populate({
+          path: 'staffId',
+          localField: 'staffId',
+          foreignField: 'staffId',
+          model: 'staff',
+          justOne: true,
+          select: 'staffName staffCode facultyType _id'
+        })
+        .lean();
       return res.status(constants.HTTPS_SUCCESS).send({
         status: true,
         data: rows,
@@ -118,7 +128,19 @@ const listTasks = async (req, res, next) => {
       });
     }
     const count = await Task.countDocuments(query);
-    const rows = await Task.find(query).sort(sort).skip(skip).limit(limit).lean();
+    const rows = await Task.find(query)
+      .sort(sort)
+      .skip(skip)
+      .limit(limit)
+      .populate({
+        path: 'staffId',
+        localField: 'staffId',
+        foreignField: 'staffId',
+        model: 'staff',
+        justOne: true,
+        select: 'staffName staffCode facultyType _id'
+      })
+      .lean();
     return res.status(constants.HTTPS_SUCCESS).send({
       status: true,
       data: rows,

@@ -716,77 +716,42 @@ const getStudentTopicsTests = async (req, res, next) => {
   }
 };
 
-// const getStudentTimetable = async (req, res, next) => {
-//   try {
-//     const tenantId = pickTenantId(req);
-//     const identifier = safeTrim(req.body?.studentNo || req.body?.studentId);
-//     const targetDate = req.body?.date ? Number(req.body.date) : new Date().setHours(0, 0, 0, 0);
-//     if (!tenantId || !identifier) {
-//       return res.status(400).json({ status: false, message: 'tenantId and studentNo are required' });
-//     }
-//     const student = await StudentProfile.findOne({
-//       tenantId,
-//       status: 'ACTIVE',
-//       isdeleted: false,
-//       $or: [{ studentId: identifier }, { admissionNo: identifier }, { registrationNumber: identifier }]
-//     }).lean();
-//     if (!student) return res.status(404).json({ status: false, message: 'Student profile not found' });
-//     const timetableDoc = await TimeTable.findOne({ tenantId, batchCode: student.batchCode, isdeleted: false }).lean();
-//     const todaysPeriods = getEffectivePeriods(timetableDoc, targetDate);
-//     return res.status(200).json({
-//       status: true,
-//       message: 'Timetable retrieved successfully',
-//       data: {
-//         date: targetDate,
-//         batchCode: student.batchCode,
-//         periods: todaysPeriods
-//       }
-//     });
-//   } catch (err) {
-//     return next(err);
-//   }
-// };
-
-// Keep your existing getEffectivePeriods helper that works for you!
-
 const getStudentTimetable = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     const identifier = safeTrim(req.body?.studentNo || req.body?.studentId);
     const targetDateMs = req.body?.date ? Number(req.body.date) : Date.now();
-
     if (!tenantId || !identifier) {
       return res.status(400).json({ status: false, message: 'tenantId and studentNo are required' });
     }
-
-    // 1. Fetch Student Profile
     const student = await StudentProfile.findOne({
       tenantId,
       status: 'ACTIVE',
       isdeleted: false,
       $or: [{ studentId: identifier }, { admissionNo: identifier }, { registrationNumber: identifier }]
     }).lean();
-
     if (!student) {
       return res.status(404).json({ status: false, message: 'Student profile not found' });
     }
-
-    // 2. Calculate the EXACT Monday for the requested date (wkStartOn)
     const d = new Date(targetDateMs);
     const diff = d.getDay() === 0 ? -6 : 1 - d.getDay();
     const mondayMs = new Date(d.setDate(d.getDate() + diff)).setHours(0, 0, 0, 0);
-
-    // 3. Fetch the Timetable strictly for THAT week
     const timetableDoc = await TimeTable.findOne({
       tenantId,
       batchCode: student.batchCode,
-      wkStartOn: mondayMs, // <--- This was the missing magic key!
+      wkStartOn: mondayMs,
       isdeleted: false
-    }).lean();
-
-    // 4. Extract periods using your working helper
+    })
+      .populate({
+        path: 'topicId',
+        localField: 'topicId',
+        foreignField: 'topicId',
+        model: 'topic',
+        justOne: true,
+        select: 'topicId topicName topicCode _id'
+      })
+      .lean();
     const todaysPeriods = getEffectivePeriods(timetableDoc, targetDateMs);
-
     return res.status(200).json({
       status: true,
       message: 'Timetable retrieved successfully',
@@ -822,11 +787,30 @@ const getStudentAttendance = async (req, res, next) => {
       batchCode: student.batchCode,
       date: targetDate,
       isdeleted: false
-    }).lean();
+    })
+      .populate({
+        path: 'facultyId',
+        localField: 'facultyId',
+        foreignField: 'staffId',
+        model: 'staff',
+        justOne: true,
+        select: 'staffName staffCode facultyType _id'
+      })
+      .populate({
+        path: 'updatedBy',
+        localField: 'updatedBy',
+        foreignField: 'userId',
+        model: 'user',
+        justOne: true,
+        select: 'name userId  _id'
+      })
+      .lean();
     const studentAttendance = attendanceRecords
       .map((record) => {
         const studentData = record.students.find((s) => s.studentId === student.studentId);
         return {
+          facultyId: record.facultyId,
+          updatedBy: record.updatedBy,
           periodNo: record.periodNo,
           topicTaught: record.topicTaught || null,
           status: studentData ? studentData.status : 'NOT_MARKED',
@@ -901,7 +885,26 @@ const getStudentMaterials = async (req, res, next) => {
       $and: [{ $or: [{ availableFrom: null }, { availableFrom: { $lte: now } }] }, { $or: [{ availableUntil: null }, { availableUntil: { $gte: now } }] }],
       $or: [{ batchIds: batchCode }, { batchIds: batchId }, { studentIds: studentId }]
     };
-    const materials = await StudyMaterial.find(materialQuery).populate('subjectId', 'subjectName subjectCode').sort({ createdAt: -1 }).lean();
+    const materials = await StudyMaterial.find(materialQuery)
+      .sort({ createdAt: -1 })
+      .populate('subjectId', 'subjectName subjectCode')
+      .populate({
+        path: 'topicId',
+        localField: 'topicId',
+        foreignField: 'topicId',
+        model: 'topic',
+        justOne: true,
+        select: 'topicId topicName topicCode _id'
+      })
+      .populate({
+        path: 'subTopicId',
+        localField: 'subTopicId',
+        foreignField: 'subTopicId',
+        model: 'subtopic',
+        justOne: true,
+        select: 'subTopicName subTopicCode subTopicId _id'
+      })
+      .lean();
     return res.status(200).json({
       status: true,
       message: 'Study materials retrieved successfully',
