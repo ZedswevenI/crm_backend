@@ -51,6 +51,7 @@ const QuestionSchema = new mongoose.Schema(
     enableSolution: { type: Boolean, default: false },
     correctAnswer: { type: String, default: true },
     tags: { type: [String], default: [] },
+    sortOrder: { type: Number, default: 0 },
     status: { type: String, default: 'active' },
     createdBy: { type: String, default: null },
     updatedBy: { type: String, default: null },

@@ -3,7 +3,7 @@ import constants from '../helpers/constants.js';
 import Batch from '../models/batch.model.js';
 import StudentProfile from '../models/studentProfile.model.js';
 import Program from '../models/program.model.js';
-import AcademicYear from '../models/academicYear.model.js';
+import AcademicYearConfig from '../models/academicYear.model.js';
 import BatchAssignEnable from '../models/batchenabledAssignment.model.js';
 
 const pickTenantId = (req) => String(req?.body?.tenantId || req?.body?.entiId || '').trim();
@@ -38,6 +38,62 @@ const refreshStudentCount = async (tenantId, batchId, session) => {
   if (session) await Batch.updateOne({ tenantId, batchId: safeTrim(batchId), isdeleted: false }, upd, { session });
   else await Batch.updateOne({ tenantId, batchId: safeTrim(batchId), isdeleted: false }, upd);
   return cnt;
+};
+
+const toIntYear = (v) => {
+  const n = parseInt(String(v ?? '').trim(), 10);
+  return Number.isFinite(n) ? n : 0;
+};
+
+const buildCohortAndRunningYears = ({ startYear, duration }) => {
+  const sy = toIntYear(startYear);
+  const dur = toIntYear(duration);
+  if (!sy || sy < 2000) return null;
+  if (!dur || dur < 1 || dur > 6) return null;
+  const endYear = sy + dur;
+  const cohortAy = `${sy} - ${endYear}`;
+  const runningYears = [];
+  for (let i = 0; i < dur; i++) {
+    const y1 = sy + i;
+    const y2 = y1 + 1;
+    runningYears.push(`${y1}-${y2}`);
+  }
+  return { startYear: sy, endYear, cohortAy, runningYears, currentAy: runningYears[0] || null };
+};
+const startOfAcademicYearEpoch = (year) => new Date(Number(year), 3, 1, 0, 0, 0, 0).getTime();
+const endOfAcademicYearEpoch = (year) => new Date(Number(year), 2, 31, 23, 59, 59, 999).getTime();
+
+const upsertAcademicYearConfigIfMissing = async ({ tenantId, programId, cohortAy, duration, runningYears, userId }) => {
+  if (!tenantId || !programId || !cohortAy || !duration || !Array.isArray(runningYears) || !runningYears.length) return;
+  const exists = await AcademicYearConfig.findOne({ tenantId, programId, cohortAy, isdeleted: false }, { _id: 1 }).lean();
+  if (exists) return;
+  const years = runningYears.map((ay) => {
+    const m = String(ay).match(/^(\d{4})-(\d{4})$/);
+    const y1 = m ? Number(m[1]) : 0;
+    const y2 = m ? Number(m[2]) : 0;
+    return {
+      academicYear: ay,
+      startOn: y1 ? startOfAcademicYearEpoch(y1) : null,
+      endOn: y2 ? endOfAcademicYearEpoch(y2) : null
+    };
+  });
+  await AcademicYearConfig.updateOne(
+    { tenantId, programId, cohortAy, isdeleted: false },
+    {
+      $set: {
+        tenantId,
+        programId,
+        cohortAy,
+        duration: toIntYear(duration),
+        years,
+        status: 'Active',
+        isdeleted: false,
+        updatedBy: userId || null
+      },
+      $setOnInsert: { createdBy: userId || null }
+    },
+    { upsert: true }
+  );
 };
 
 const backfillStudentsIntoEnabledTests = async (tenantId, batchId, studentIds, session) => {
@@ -98,37 +154,43 @@ const validateStudentsForBatch = async (tenantId, batch, studentIds, mode) => {
       studentId: 1,
       admissionNo: 1,
       academicYear: 1,
+      currentAcademicYear: 1,
       programId: 1,
       centerId: 1,
       batchId: 1
     }
   ).lean();
-
   const byId = new Map((students || []).map((s) => [String(s.studentId), s]));
   const missing = studentIds.filter((id) => !byId.has(id));
   if (missing.length) return { ok: false, msg: `Some students not found/inactive: ${missing.join(', ')}` };
-
   const badProgram = studentIds.filter((id) => String(byId.get(id)?.programId || '') !== String(batch.programId || ''));
   if (badProgram.length) return { ok: false, msg: `Program mismatch for students: ${badProgram.join(', ')}` };
-
-  const badYear = studentIds.filter((id) => String(byId.get(id)?.academicYear || '') !== String(batch.academicYear || ''));
-  if (badYear.length) return { ok: false, msg: `Academic year mismatch for students: ${badYear.join(', ')}` };
-
+  const normalizeAyStrict = (s) =>
+    safeTrim(s)
+      .replace(/\s+/g, '')
+      .replace(/–/g, '-')
+      .replace(/—/g, '-')
+      .replace(/\u2013/g, '-')
+      .replace(/\u2014/g, '-')
+      .toLowerCase();
+  const bAy = normalizeAyStrict(batch?.academicYear);
+  const badYear = studentIds.filter((id) => normalizeAyStrict(byId.get(id)?.currentAcademicYear) !== bAy);
+  if (badYear.length) {
+    return { ok: false, msg: `Academic year mismatch for students: ${badYear.join(', ')}` };
+  }
   const badCenter = studentIds.filter((id) => String(byId.get(id)?.centerId || '') !== String(batch.centerId || ''));
   if (badCenter.length) return { ok: false, msg: `Center mismatch for students: ${badCenter.join(', ')}` };
-
   if (mode === 'ASSIGN_ONLY_UNASSIGNED') {
     const alreadyAssigned = studentIds.filter((id) => !!safeTrim(byId.get(id)?.batchId));
     if (alreadyAssigned.length) {
       return { ok: false, msg: `These students are already assigned to a batch: ${alreadyAssigned.join(', ')}` };
     }
   }
-
   return { ok: true, msg: 'OK', students };
 };
 
 const getAcademicYearOrderMap = async (tenantId, programId) => {
-  const docs = await AcademicYear.find({ tenantId, programId, isdeleted: false, status: 'Active' }, { _id: 0, years: 1 }).sort({ startOn: 1 }).lean();
+  const docs = await AcademicYearConfig.find({ tenantId, programId, isdeleted: false, status: 'Active' }, { _id: 0, years: 1 }).sort({ startOn: 1 }).lean();
   console.log('years ', docs);
   const flatYears = [];
   for (const d of docs || []) {
@@ -174,7 +236,6 @@ const resolveBatchYearAndClass = async (tenantId, programId, academicYear, progr
   return { ok: true, yearNo, classNo, startingClass: prog.startingClass, duration: prog.duration };
 };
 
-// ---------- controllers ----------
 const createBatch = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
@@ -188,15 +249,32 @@ const createBatch = async (req, res, next) => {
     const startDate = toEpoch(payload.startDate);
     const endDate = toEpoch(payload.endDate);
     const programStartAy = safeTrim(payload.programStartAy) || academicYear;
-    const yr = await resolveBatchYearAndClass(tenantId, programId, academicYear, programStartAy);
-    console.log(yr);
-    if (!yr.ok) return res.status(400).json({ status: false, message: yr.msg });
+    const userId = safeTrim(payload.userId);
     if (!batchName || !batchCode || !academicYear || !programId || !centerId || !startDate || !endDate) {
       return res.status(400).json({
         status: false,
         message: 'batchName, batchCode, academicYear, programId, centerId, startDate, endDate are required'
       });
     }
+    const program = await Program.findOne({ tenantId, programId, isdeleted: false }, { duration: 1, startingClass: 1 }).lean();
+    if (!program) return res.status(400).json({ status: false, message: 'Program not found' });
+    const startAyMatch = String(programStartAy).match(/^(\d{4})/);
+    const startYear = startAyMatch ? toIntYear(startAyMatch[1]) : 0;
+    if (startYear > 0 && program.duration) {
+      const calc = buildCohortAndRunningYears({ startYear, duration: program.duration });
+      if (calc) {
+        await upsertAcademicYearConfigIfMissing({
+          tenantId,
+          programId,
+          cohortAy: calc.cohortAy,
+          duration: program.duration,
+          runningYears: calc.runningYears,
+          userId
+        });
+      }
+    }
+    const yr = await resolveBatchYearAndClass(tenantId, programId, academicYear, programStartAy);
+    if (!yr.ok) return res.status(400).json({ status: false, message: yr.msg });
     const doc = await Batch.create({
       tenantId,
       batchName,
@@ -218,8 +296,8 @@ const createBatch = async (req, res, next) => {
       studentCount: 0,
       remarks: safeTrim(payload.remarks) || null,
       isdeleted: false,
-      createdBy: payload.userId || null,
-      updatedBy: payload.userId || null
+      createdBy: userId || null,
+      updatedBy: userId || null
     });
     return res.status(constants.HTTPS_SUCCESS).json({ status: true, message: 'Batch created', data: doc });
   } catch (err) {
@@ -309,10 +387,13 @@ const updateBatch = async (req, res, next) => {
     const payload = req.body || {};
     const batchId = safeTrim(payload.batchId);
     if (!batchId) return res.status(400).json({ status: false, message: 'batchId is required' });
+
     const cur = await Batch.findOne({ tenantId, batchId, isdeleted: false });
     if (!cur) return res.status(404).json({ status: false, message: 'Batch not found' });
+
     const guard = ensureBatchEditable(cur);
     if (!guard.ok) return res.status(400).json({ status: false, message: guard.msg });
+
     const patch = {};
     if (payload.batchName !== undefined) patch.batchName = safeTrim(payload.batchName);
     if (payload.batchCode !== undefined) patch.batchCode = safeTrim(payload.batchCode);
@@ -329,6 +410,7 @@ const updateBatch = async (req, res, next) => {
     if (payload.startDate !== undefined) patch.startDate = toEpoch(payload.startDate);
     if (payload.endDate !== undefined) patch.endDate = toEpoch(payload.endDate);
     if (payload.programStartAy !== undefined) patch.programStartAy = safeTrim(payload.programStartAy);
+
     const effStart = patch.startDate !== undefined ? patch.startDate : cur.startDate;
     const effEnd = patch.endDate !== undefined ? patch.endDate : cur.endDate;
     if (effStart && effEnd && effStart >= effEnd) {
@@ -340,7 +422,9 @@ const updateBatch = async (req, res, next) => {
     if (patch.batchCode !== undefined && !patch.batchCode) {
       return res.status(400).json({ status: false, message: 'batchCode cannot be empty' });
     }
+
     const changingCore = (patch.programId !== undefined && String(patch.programId) !== String(cur.programId)) || (patch.academicYear !== undefined && String(patch.academicYear) !== String(cur.academicYear)) || (patch.centerId !== undefined && String(patch.centerId) !== String(cur.centerId));
+
     if (changingCore) {
       const hasStudents = await StudentProfile.countDocuments({ tenantId, isdeleted: false, status: 'ACTIVE', batchId });
       if (hasStudents > 0) {
@@ -349,9 +433,30 @@ const updateBatch = async (req, res, next) => {
           message: 'Cannot change program/center/academicYear while students are assigned. Remove/shift students first.'
         });
       }
+
       const effAcademicYear = patch.academicYear !== undefined ? patch.academicYear : cur.academicYear;
       const effProgramId = patch.programId !== undefined ? patch.programId : cur.programId;
       const effStartAy = patch.programStartAy !== undefined ? patch.programStartAy : cur.programStartAy || cur.academicYear;
+
+      // ⚡ NEW: AUTO-CREATE CONFIG ON UPDATE
+      const effProgram = await Program.findOne({ tenantId, programId: effProgramId, isdeleted: false }, { duration: 1 }).lean();
+      const startAyMatch = String(effStartAy).match(/^(\d{4})/);
+      const startYear = startAyMatch ? toIntYear(startAyMatch[1]) : 0;
+
+      if (startYear > 0 && effProgram?.duration) {
+        const calc = buildCohortAndRunningYears({ startYear, duration: effProgram.duration });
+        if (calc) {
+          await upsertAcademicYearConfigIfMissing({
+            tenantId,
+            programId: effProgramId,
+            cohortAy: calc.cohortAy,
+            duration: effProgram.duration,
+            runningYears: calc.runningYears,
+            userId: payload.userId
+          });
+        }
+      }
+
       const yr = await resolveBatchYearAndClass(tenantId, effProgramId, effAcademicYear, effStartAy);
       if (!yr.ok) return res.status(400).json({ status: false, message: yr.msg });
       patch.programStartAy = effStartAy;
@@ -412,14 +517,10 @@ const closeBatch = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-
     const batchId = safeTrim(req.body.batchId);
     if (!batchId) return res.status(400).json({ status: false, message: 'batchId is required' });
-
     const updatedBy = req.body.userId || null;
-
     session.startTransaction();
-
     const b = await Batch.findOne({ tenantId, batchId, isdeleted: false }).session(session);
     if (!b) {
       await session.abortTransaction();
@@ -431,18 +532,16 @@ const closeBatch = async (req, res, next) => {
       session.endSession();
       return res.status(400).json({ status: false, message: 'Batch already closed' });
     }
-
-    // release all students
+    if (!safeTrim(b.programStartAy)) {
+      b.programStartAy = safeTrim(b.academicYear) || safeTrim(b.cohortAy) || safeTrim(b.batchStartAy) || safeTrim(b.startingAy) || safeTrim(b.academicYear);
+    }
     await StudentProfile.updateMany({ tenantId, isdeleted: false, status: 'ACTIVE', batchId }, { $set: { batchId: null, batchCode: null, updatedBy } }, { session });
-
     b.status = 'CLOSED';
     b.studentCount = 0;
     b.updatedBy = updatedBy;
     await b.save({ session });
-
     await session.commitTransaction();
     session.endSession();
-
     return res.status(constants.HTTPS_SUCCESS).json({ status: true, message: 'Batch closed and students released' });
   } catch (err) {
     try {
@@ -453,7 +552,6 @@ const closeBatch = async (req, res, next) => {
   }
 };
 
-// -------- Staff Map (overwrite / change / remove) ----------
 const saveBatchStaffMap = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
@@ -498,24 +596,18 @@ const saveBatchStaffMap = async (req, res, next) => {
   }
 };
 
-// -------- Student Eligibility / Assign / Move / Remove / Shuffle ----------
 const listEligibleStudentsForBatch = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-
     const batchId = safeTrim(req.body.batchId);
     if (!batchId) return res.status(400).json({ status: false, message: 'batchId is required' });
-
     const b = await fetchBatchById(tenantId, batchId);
     if (!b) return res.status(404).json({ status: false, message: 'Batch not found' });
-
     const page = Math.max(parseInt(req.query.page || '1', 10), 1);
     const limit = Math.min(Math.max(parseInt(req.query.limit || '20', 10), 1), 200);
     const skip = (page - 1) * limit;
-    console.log('b ', b);
     const search = safeTrim(req.query.search);
-
     const query = {
       tenantId,
       isdeleted: false,
@@ -524,14 +616,11 @@ const listEligibleStudentsForBatch = async (req, res, next) => {
       centerId: b.centerId,
       batchId: null
     };
-
     if (search) {
       const rx = new RegExp(escapeRegex(search), 'i');
       query.$or = [{ admissionNo: rx }, { registrationNumber: rx }, { 'student.name': rx }, { 'student.phone': rx }, { 'student.parentPhone': rx }];
     }
-
     const [rows, count] = await Promise.all([StudentProfile.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(), StudentProfile.countDocuments(query)]);
-
     return res.status(constants.HTTPS_SUCCESS).json({ status: true, message: 'Request success', data: rows, count });
   } catch (err) {
     return next(err);
@@ -761,6 +850,246 @@ const getBatchSubjects = async (req, res, next) => {
   }
 };
 
+const normalizeAy = (s) => safeTrim(s).replace(/\s+/g, '').replace(/–/g, '-');
+const makeCohortAy = (courseStartYear) => {
+  const y = Number(courseStartYear);
+  if (!Number.isFinite(y) || y <= 0) return '';
+  return `${y}-${y + 1}`;
+};
+
+const pickActiveAcademicYearFromCfg = (yearsArr) => {
+  const now = Date.now();
+  const arr = Array.isArray(yearsArr) ? yearsArr : [];
+  const hit = arr.find((y) => {
+    const s = y?.startOn ?? null;
+    const e = y?.endOn ?? null;
+    if (!s || !e) return false;
+    return Number(s) <= now && now < Number(e);
+  });
+  if (hit?.academicYear) return hit;
+  const sorted = [...arr].sort((a, b) => {
+    const as = a?.startOn ?? Number.MAX_SAFE_INTEGER;
+    const bs = b?.startOn ?? Number.MAX_SAFE_INTEGER;
+    return Number(as) - Number(bs);
+  });
+  return sorted[0] || null;
+};
+
+const getBatchAyInfo = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    const programId = safeTrim(req.body?.programId);
+    const courseStartYear = String(req.body?.courseStartYear);
+    const userId = safeTrim(req.body?.userId);
+    if (!programId) return res.status(400).json({ status: false, message: 'programId is required' });
+    if (courseStartYear === undefined || courseStartYear === null || courseStartYear === '') {
+      return res.status(400).json({ status: false, message: 'courseStartYear is required' });
+    }
+    const cohortAy = String(req.body?.cohortAy);
+    if (!cohortAy) return res.status(400).json({ status: false, message: 'Invalid cohortAy' });
+    let cfgs = await AcademicYearConfig.find({ tenantId, programId, isdeleted: false, status: 'Active' }, { _id: 0, cohortAy: 1, years: 1, duration: 1 }).lean();
+    let cfg = (cfgs || []).find((c) => normalizeAy(c?.cohortAy) === normalizeAy(cohortAy));
+    if (!cfg) {
+      const program = await Program.findOne({ tenantId, programId, isdeleted: false }, { duration: 1 }).lean();
+      if (program && program.duration) {
+        const startYear = toIntYear(courseStartYear);
+        if (startYear > 0) {
+          const calc = buildCohortAndRunningYears({ startYear, duration: program.duration });
+          if (calc) {
+            await upsertAcademicYearConfigIfMissing({
+              tenantId,
+              programId,
+              cohortAy: calc.cohortAy,
+              duration: program.duration,
+              runningYears: calc.runningYears,
+              userId
+            });
+            cfgs = await AcademicYearConfig.find({ tenantId, programId, isdeleted: false, status: 'Active' }, { _id: 0, cohortAy: 1, years: 1, duration: 1 }).lean();
+            cfg = (cfgs || []).find((c) => normalizeAy(c?.cohortAy) === normalizeAy(calc.cohortAy));
+          }
+        }
+      }
+      if (!cfg) {
+        return res.status(404).json({
+          status: false,
+          message: `AcademicYear config not found and auto-creation failed for programId=${programId} cohortAy=${cohortAy}`
+        });
+      }
+    }
+    const requestedAy = safeTrim(req.body?.academicYear);
+    let yearRow = null;
+    if (requestedAy) {
+      yearRow = (cfg.years || []).find((y) => normalizeAy(y?.academicYear) === normalizeAy(requestedAy)) || null;
+      if (!yearRow) {
+        return res.status(400).json({
+          status: false,
+          message: `academicYear not found under cohortAy=${cfg.cohortAy}: ${requestedAy}`
+        });
+      }
+    } else {
+      yearRow = pickActiveAcademicYearFromCfg(cfg.years);
+      if (!yearRow) {
+        return res.status(400).json({
+          status: false,
+          message: `No years configured under cohortAy=${cfg.cohortAy}`
+        });
+      }
+    }
+    return res.status(constants.HTTPS_SUCCESS).json({
+      status: true,
+      message: 'Request success',
+      data: {
+        programId,
+        courseStartYear: Number(courseStartYear),
+        programStartAy: cfg.cohortAy,
+        academicYear: yearRow.academicYear,
+        startDate: yearRow.startOn ?? null,
+        endDate: yearRow.endOn ?? null,
+        years: cfg.years || []
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const listBatchesForEnablement = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const classNo = toNum(req.body?.classNo);
+    const subjectId = safeTrim(req.body?.subjectId);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    if (!ensureClassNo(classNo)) return res.status(400).json({ status: false, message: 'Invalid classNo (6..13)' });
+    if (!subjectId) return res.status(400).json({ status: false, message: 'subjectId is required' });
+    const q = {
+      tenantId,
+      isdeleted: false,
+      classNo,
+      status: { $in: ['ACTIVE', 'DRAFT'] },
+      staffMap: { $elemMatch: { subjectId } }
+    };
+    const rows = await Batch.find(q, {
+      _id: 0,
+      batchId: 1,
+      batchName: 1,
+      batchCode: 1,
+      academicYear: 1,
+      programId: 1,
+      centerId: 1,
+      centerName: 1,
+      studentCount: 1,
+      status: 1
+    })
+      .sort({ batchName: 1 })
+      .lean();
+    return res.status(constants.HTTPS_SUCCESS).json({
+      status: true,
+      message: 'Batches loaded',
+      data: rows
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const listTopicsForEnablement = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const classNo = toNum(req.body?.classNo);
+    const subjectIdRaw = req.body?.subjectId;
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    if (!ensureClassNo(classNo)) return res.status(400).json({ status: false, message: 'Invalid classNo (6..13)' });
+    if (!subjectIdRaw || !mustObjectId(subjectIdRaw)) return res.status(400).json({ status: false, message: 'Invalid subjectId' });
+    const subjectId = new mongoose.Types.ObjectId(String(subjectIdRaw));
+    const rows = await Topic.find({ tenantId, isdeleted: false, status: 'Active', classNo, subjectId }, { _id: 0, topicId: 1, topicName: 1, topicCode: 1, sortOrder: 1 }).sort({ sortOrder: 1, topicName: 1 }).lean();
+    return res.status(constants.HTTPS_SUCCESS).json({
+      status: true,
+      message: 'Topics loaded',
+      data: rows
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const listTestsForEnablement = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const classNo = toNum(req.body?.classNo);
+    const subjectIdRaw = req.body?.subjectId;
+    const subjectIdStr = safeTrim(req.body?.subjectId);
+    const topicId = safeTrim(req.body?.topicId);
+    const batchId = safeTrim(req.body?.batchId);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    if (!ensureClassNo(classNo)) return res.status(400).json({ status: false, message: 'Invalid classNo (6..13)' });
+    if (!subjectIdRaw || !mustObjectId(subjectIdRaw)) return res.status(400).json({ status: false, message: 'Invalid subjectId' });
+    if (!topicId) return res.status(400).json({ status: false, message: 'topicId is required' });
+    if (!batchId) return res.status(400).json({ status: false, message: 'batchId is required' });
+    const subjectIdObj = new mongoose.Types.ObjectId(String(subjectIdRaw));
+    const rows = await Assignment.aggregate([
+      {
+        $match: {
+          tenantId,
+          isdeleted: false,
+          classNo,
+          subjectId: subjectIdObj,
+          topicId
+        }
+      },
+      {
+        $lookup: {
+          from: BatchAssignEnable.collection.name,
+          let: { tId: '$testId' },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [{ $eq: ['$tenantId', tenantId] }, { $eq: ['$batchId', batchId] }, { $eq: ['$subjectId', subjectIdStr] }, { $eq: ['$testId', '$$tId'] }, { $eq: ['$isdeleted', false] }, { $eq: ['$status', 'enabled'] }]
+                }
+              }
+            },
+            { $project: { _id: 0, enabledAt: 1, enabledBy: 1 } }
+          ],
+          as: 'en'
+        }
+      },
+      {
+        $addFields: {
+          enabled: { $gt: [{ $size: '$en' }, 0] },
+          enabledAt: { $ifNull: [{ $arrayElemAt: ['$en.enabledAt', 0] }, null] },
+          enabledBy: { $ifNull: [{ $arrayElemAt: ['$en.enabledBy', 0] }, null] }
+        }
+      },
+      {
+        $project: {
+          _id: 0,
+          testId: 1,
+          testNo: 1,
+          testCode: 1,
+          numberOfQuestions: 1,
+          status: 1,
+          classNo: 1,
+          topicId: 1,
+          subTopicId: 1,
+          categoryId: 1,
+          subCategoryId: 1,
+          enabled: 1,
+          enabledAt: 1
+        }
+      },
+      { $sort: { testNo: 1, testCode: 1 } }
+    ]);
+    return res.status(constants.HTTPS_SUCCESS).json({
+      status: true,
+      message: 'Tests loaded',
+      data: rows
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   createBatch,
   listBatches,
@@ -775,5 +1104,9 @@ export default {
   removeStudentsFromBatch,
   shuffleStudentsBetweenBatches,
   recalcBatchStudentCount,
-  getBatchSubjects
+  getBatchSubjects,
+  getBatchAyInfo,
+  listBatchesForEnablement,
+  listTopicsForEnablement,
+  listTestsForEnablement
 };

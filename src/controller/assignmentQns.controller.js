@@ -7,6 +7,13 @@ import crypto from 'crypto';
 import { PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import s3Client from '../middlewares/s3config.js';
+import StudentBookmark from '../models/studentBookmark.model.js';
+import QuestionReport from '../models/questionReport.model.js';
+import Assignment from '../models/assignment.model.js';
+import ExamCategory from '../models/examcategory.model.js';
+import ExamSubCategory from '../models/examsubcategory.model.js';
+import Topic from '../models/topic.model.js';
+import SubTopic from '../models/subtopic.model.js';
 
 const { ObjectId } = mongoose.Types;
 const QUESTION_BUCKET = process.env.AWS_S3_QUESTION_BUCKET;
@@ -177,6 +184,7 @@ const getQuestionImage = async (req, res) => {
 
 const createQuestionsBulk = async (req, res, next) => {
   try {
+    console.log('method called');
     const tenantId = req.body.entiId;
     const userId = req.user?.userId || req.body?.userId || null;
     const testId = req.body.testId;
@@ -370,8 +378,8 @@ const listQuestionsByTestId = async (req, res) => {
     if (questionType) query.questionType = safeTrim(questionType).toLowerCase();
     if (status) query.status = safeTrim(status);
     const questions = await AssignmentQns.find(query)
-      .select('tenantId testId questionId questionType difficulty images positiveMarks negativeMarks questionHtml passageHtml instructionHtml questionOptions solutionHtml enablePassage enableInstruction enableSolution correctAnswer tags status createdBy updatedBy createdAt updatedAt')
-      .sort({ _id: 1 })
+      .select('tenantId testId questionId questionType difficulty images positiveMarks negativeMarks questionHtml passageHtml instructionHtml questionOptions solutionHtml enablePassage enableInstruction enableSolution correctAnswer sortOrder tags status createdBy updatedBy createdAt updatedAt')
+      .sort({ sortOrder: 1 })
       .lean();
     if (!questions.length) {
       return res.status(200).json({
@@ -379,17 +387,44 @@ const listQuestionsByTestId = async (req, res) => {
         data: []
       });
     }
+    const assignment = await Assignment.findOne({ tenantId, testId: safeTrim(testId), isdeleted: false })
+      .populate({ path: 'subjectId', model: 'subject', select: 'subjectName subjectCode' })
+      .lean();
+    let meta = { testId: safeTrim(testId) };
+    if (assignment) {
+      const [topic, subtopic, category, subcategory] = await Promise.all([
+        Topic.findOne({ tenantId, topicId: assignment.topicId }, 'topicName').lean(),
+        SubTopic.findOne({ tenantId, subTopicId: assignment.subTopicId }, 'subTopicName').lean(),
+        ExamCategory.findOne({ tenantId, categoryId: assignment.categoryId }, 'categoryName').lean(),
+        ExamSubCategory.findOne({ tenantId, subCategoryId: assignment.subCategoryId }, 'subCategoryName').lean()
+      ]);
+      meta = {
+        ...meta,
+        testNo: assignment.testNo,
+        testCode: assignment.testCode,
+        subjectId: assignment.subjectId?._id || assignment.subjectId,
+        subjectName: assignment.subjectId?.subjectName || null,
+        classNo: assignment.classNo,
+        topicId: assignment.topicId,
+        topicName: topic?.topicName || null,
+        subTopicId: assignment.subTopicId,
+        subTopicName: subtopic?.subTopicName || null,
+        categoryId: assignment.categoryId,
+        categoryName: category?.categoryName || null,
+        subCategoryId: assignment.subCategoryId,
+        subCategoryName: subcategory?.subCategoryName || null
+      };
+    }
     return res.status(200).json({
       status: true,
       data: [
         {
-          testId: safeTrim(testId),
+          ...meta,
           questions
         }
       ]
     });
   } catch (err) {
-    logger.error('listQuestionsByTestId error:', err);
     return res.status(500).json({
       status: false,
       message: err.message || 'Failed to fetch questions by testId.'
@@ -826,6 +861,174 @@ const createQuestion = async (req, res, next) => {
   }
 };
 
+const createBookmark = async (req, res, next) => {
+  try {
+    const tenantId = req.body.entiId;
+    const { studentId, questionId, assignmentId, subjectId, note } = req.body;
+    const existing = await StudentBookmark.findOne({
+      tenantId,
+      studentId,
+      questionId,
+      isdeleted: false
+    });
+    if (existing) {
+      return res.status(400).json({ message: 'Question already bookmarked' });
+    }
+    const bookmark = new StudentBookmark({
+      tenantId,
+      studentId,
+      questionId,
+      assignmentId,
+      subjectId,
+      note,
+      createdBy: studentId
+    });
+    await bookmark.save();
+    return res.status(201).json({ message: 'Bookmark added', data: bookmark });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const removeBookmark = async (req, res, next) => {
+  try {
+    const tenantId = req.body.entiId;
+    const { bookmarkId } = req.body;
+    const updated = await StudentBookmark.findOneAndUpdate({ tenantId, bookmarkId, isdeleted: false }, { isdeleted: true, updatedBy: req.user?.userId || 'SYSTEM' }, { new: true });
+    if (!updated) return res.status(404).json({ message: 'Bookmark not found' });
+    return res.status(200).json({ message: 'Bookmark removed' });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const listBookmarks = async (req, res, next) => {
+  try {
+    const tenantId = req.body.entiId;
+    const studentId = req.query.studentId;
+    const subjectId = req.query.subjectId;
+    const filter = { tenantId, studentId, isdeleted: false };
+    if (subjectId) filter.subjectId = subjectId;
+    const list = await StudentBookmark.find(filter).sort({ createdAt: -1 }).populate({
+      path: 'questionId',
+      localField: 'questionId',
+      foreignField: 'questionId',
+      model: 'assignmentqns',
+      justOne: true,
+      select: ''
+    });
+    return res.status(200).json({ status: true, data: list });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const createReport = async (req, res, next) => {
+  try {
+    const tenantId = req.body.entiId;
+    const { studentId, studentName, questionId, assignmentId, issueType, description } = req.body;
+    const report = new QuestionReport({
+      tenantId,
+      studentId,
+      studentName,
+      questionId,
+      assignmentId,
+      issueType,
+      description,
+      createdBy: studentId
+    });
+    await report.save();
+    return res.status(201).json({ message: 'Report submitted successfully', data: report });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const listReports = async (req, res, next) => {
+  try {
+    const { tenantId, studentId, status, issueType, assignmentId, page = 1, limit = 10, search = '' } = req.query;
+    if (!tenantId) {
+      return res.status(400).json({ message: 'Tenant ID is required' });
+    }
+    const query = { tenantId, isdeleted: false };
+    if (studentId) query.studentId = studentId;
+    if (status) query.status = status;
+    if (issueType) query.issueType = issueType;
+    if (assignmentId) query.assignmentId = assignmentId;
+    if (search) {
+      const searchRegex = new RegExp(search, 'i');
+      query.$or = [{ studentName: searchRegex }, { description: searchRegex }, { reportId: searchRegex }];
+    }
+    const pageNum = Math.max(1, parseInt(page));
+    const limitNum = Math.max(1, parseInt(limit));
+    const skip = (pageNum - 1) * limitNum;
+    const [reports, total] = await Promise.all([QuestionReport.find(query).sort({ createdAt: -1 }).skip(skip).limit(limitNum).populate('questionId', 'questionType difficulty').lean(), QuestionReport.countDocuments(query)]);
+    return res.status(200).json({
+      data: reports,
+      meta: {
+        total,
+        page: pageNum,
+        limit: limitNum,
+        totalPages: Math.ceil(total / limitNum)
+      }
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const updateReportStatus = async (req, res, next) => {
+  try {
+    const { tenantId, reportId, status, adminRemark } = req.body;
+    const report = await QuestionReport.findOne({ tenantId, reportId, isdeleted: false });
+    if (!report) return res.status(404).json({ message: 'Report not found' });
+    report.status = status;
+    if (adminRemark) report.adminRemark = adminRemark;
+    report.resolvedBy = req.user?.userId || 'ADMIN';
+    if (status === 'FIXED' || status === 'REJECTED') {
+      report.resolvedAt = Date.now();
+    }
+    report.updatedBy = req.user?.userId;
+    await report.save();
+    return res.status(200).json({ message: 'Report status updated', data: report });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const updateQuestionSortOrder = async (req, res, next) => {
+  try {
+    const tenantId = safeTrim(req.body?.entiId || req.body?.tenantId);
+    const testId = safeTrim(req.body?.testId);
+    const questions = req.body?.questions;
+    if (!tenantId || !testId) {
+      return res.status(400).json({ status: false, message: 'entiId and testId are required.' });
+    }
+    if (!Array.isArray(questions) || questions.length === 0) {
+      return res.status(400).json({ status: false, message: 'questions array is required.' });
+    }
+    const bulkOps = questions.map((q) => {
+      return {
+        updateOne: {
+          filter: { _id: safeTrim(q.qId), tenantId, testId, isdeleted: false },
+          update: {
+            $set: { sortOrder: Number(q.sortOrder) || 0 }
+          }
+        }
+      };
+    });
+    if (bulkOps.length > 0) {
+      await AssignmentQns.bulkWrite(bulkOps, { ordered: false });
+    }
+    return res.status(200).json({
+      status: true,
+      message: 'Question sort order updated successfully'
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   uploadSingleQuestionImage,
   getQuestionImage,
@@ -838,5 +1041,12 @@ export default {
   viewQuestion,
   updateQuestion,
   deleteQuestion,
-  createQuestion
+  createQuestion,
+  createBookmark,
+  removeBookmark,
+  listBookmarks,
+  createReport,
+  listReports,
+  updateReportStatus,
+  updateQuestionSortOrder
 };
