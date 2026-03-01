@@ -1,6 +1,8 @@
 import { Router } from 'express';
 
 const routes = Router();
+import multer from 'multer';
+const upload = multer({ dest: 'uploads/' });
 import validate from '../middlewares/validation.js';
 import constants from '../helpers/constants.js';
 import validatetoken from '../middlewares/auth.js';
@@ -8,6 +10,7 @@ import tenantCtrl from '../controller/institute.controller.js';
 import manageCtrl from '../controller/insorg.controller.js';
 import programCtrl from '../controller/program.controller.js';
 import academicYearCtrl from '../controller/academicyear.controller.js';
+import packageCtrl from '../controller/package.controller.js';
 
 routes.post('/register', tenantCtrl.createInstitute);
 routes.post('/view', validatetoken, tenantCtrl.viewInstitute);
@@ -129,6 +132,30 @@ routes.post('/exam/subcategory/delete', validatetoken, manageCtrl.deleteExamSubC
 routes.post('/exam/subcategory/update', validatetoken, manageCtrl.editExamSubCategory);
 routes.post('/exam/subcategory/import', validatetoken, manageCtrl.bulkUpsertExamSubCategories);
 routes.post('/exam/subcategory/view', validatetoken, manageCtrl.viewExamSubCategory);
+
+// PTM Routes
+routes.post('/ptm/schedule', validatetoken, programCtrl.schedulePTM);
+routes.post('/ptm/schedule/import', validatetoken, programCtrl.bulkImportSchedule);
+routes.post('/ptm/parent/feedback', validatetoken, programCtrl.submitPrePTMFeedback);
+routes.post('/ptm/staff/feedback', validatetoken, programCtrl.submitStaffFeedback);
+routes.post('/ptm/staff/feedback/import', validatetoken, programCtrl.bulkImportFeedback);
+routes.post('/ptm/list', validatetoken, programCtrl.listPTMs);
+routes.post('/ptm/view', validatetoken, programCtrl.viewPTM);
+routes.post('/ptm/update', validatetoken, programCtrl.editPTM);
+routes.post('/ptm/remove', validatetoken, programCtrl.removePTM);
+routes.post('/ptm/student/add', validatetoken, programCtrl.addStudentsToPTM);
+routes.post('/ptm/student/remove', validatetoken, programCtrl.removeStudentsFromPTM);
+
+// Package Reports
+routes.post('/package/upload', validatetoken, upload.single('file'), packageCtrl.uploadPackageFile);
+routes.post('/package/create', validatetoken, packageCtrl.createPackage);
+routes.post('/package/update', validatetoken, packageCtrl.editPackage);
+routes.post('/package/delete', validatetoken, packageCtrl.deletePackage);
+routes.post('/package/list', validatetoken, packageCtrl.listPackages);
+routes.post('/package/enable', validatetoken, packageCtrl.assignPackage);
+routes.post('/package/disable', validatetoken, packageCtrl.revokeEnablement);
+routes.post('/package/enable/report', validatetoken, packageCtrl.reportPackageEnablement);
+routes.post('/package/students', validatetoken, packageCtrl.getStudentPackages);
 
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Tenant routes' }));
 

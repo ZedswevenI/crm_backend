@@ -231,7 +231,7 @@ const listAssignments = async (req, res, next) => {
     if (req.query.classNo) query.classNo = toNum(req.query.classNo);
     if (req.query.subjectId && mustObjectId(req.query.subjectId)) query.subjectId = new mongoose.Types.ObjectId(String(req.query.subjectId));
     if (req.query.topicId) query.topicId = safeTrim(req.query.topicId);
-    if (req.query.subTopicId) query.subTopicId = safeTrim(req.query.subTopicId);
+    if (req.query.subTopicId || req.query.subtopicId) query.subTopicId = safeTrim(req.query.subtopicId || req.query.subtopicId);
     if (req.query.categoryId) query.categoryId = safeTrim(req.query.categoryId);
     if (req.query.subCategoryId) query.subCategoryId = safeTrim(req.query.subCategoryId);
     if (search) {
@@ -268,7 +268,8 @@ const listAssignments = async (req, res, next) => {
       topicName: topicMap.get(r.topicId) || null,
       subTopicName: subTopicMap.get(r.subTopicId) || null,
       categoryName: catMap.get(r.categoryId) || null,
-      subCategoryName: subCatMap.get(r.subCategoryId) || null
+      subCategoryName: subCatMap.get(r.subCategoryId) || null,
+      level: `${catMap.get(r.categoryId) || null} ${subCatMap.get(r.subCategoryId) || null}`
     }));
     if (String(list).toLowerCase() === 'full') {
       return res.status(constants.HTTPS_SUCCESS).send({

@@ -10,12 +10,12 @@ const s3Client = new S3Client({
   }
 });
 
-export const uploadFileToS3 = async (file) => {
+export const uploadFileToS3 = async (file, folderPath) => {
   if (!file) return null;
   const fileStream = fs.createReadStream(file.path);
-  const key = `${process.env.AWS_S3_Z7I_BUCKET}/tasks/${Date.now()}_${file.originalname}`;
+  const key = `${process.env.AWS_S3_Z7I_BUCKET}/${folderPath}/${Date.now()}_${file.originalname}`;
   const command = new PutObjectCommand({
-    Bucket: process.env.AWS_S3_BUCKET_NAME,
+    Bucket: process.env.AWS_S3_Z7I_BUCKET,
     Key: key,
     Body: fileStream,
     ContentType: file.mimetype
@@ -23,7 +23,7 @@ export const uploadFileToS3 = async (file) => {
   try {
     await s3Client.send(command);
     fs.unlinkSync(file.path);
-    const bucketUrl = `https://${process.env.AWS_S3_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com`;
+    const bucketUrl = `https://${process.env.AWS_S3_Z7I_BUCKET}.s3.${process.env.AWS_REGION}.amazonaws.com`;
     return `${bucketUrl}/${key}`;
   } catch (error) {
     console.error('S3 Upload Error:', error);
