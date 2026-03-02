@@ -157,6 +157,8 @@ routes.post('/package/disable', validatetoken, packageCtrl.revokeEnablement);
 routes.post('/package/enable/report', validatetoken, packageCtrl.reportPackageEnablement);
 routes.post('/package/students', packageCtrl.getStudentPackages);
 
+routes.post('/download', tenantCtrl.downloadFile);
+
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Tenant routes' }));
 
 export default routes;
