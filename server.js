@@ -32,8 +32,10 @@ const corsOptionsDelegate = (req, callback) => {
 };
 app.use(cors(corsOptionsDelegate));
 app.use(cookieParser());
-app.use(json());
-app.use(urlencoded({ extended: true }));
+// app.use(json());
+// app.use(urlencoded({ extended: true }));
+app.use(json({ limit: '50mb' }));
+app.use(urlencoded({ limit: '50mb', extended: true }));
 app.use((req, res, next) => {
   if (req.method === 'OPTIONS') {
     return cors(corsOptionsDelegate)(req, res, () => res.sendStatus(204));

@@ -136,11 +136,11 @@ routes.post('/exam/subcategory/view', validatetoken, manageCtrl.viewExamSubCateg
 // PTM Routes
 routes.post('/ptm/schedule', validatetoken, programCtrl.schedulePTM);
 routes.post('/ptm/schedule/import', validatetoken, programCtrl.bulkImportSchedule);
-routes.post('/ptm/parent/feedback', validatetoken, programCtrl.submitPrePTMFeedback);
+routes.post('/ptm/parent/feedback', programCtrl.submitPrePTMFeedback);
 routes.post('/ptm/staff/feedback', validatetoken, programCtrl.submitStaffFeedback);
 routes.post('/ptm/staff/feedback/import', validatetoken, programCtrl.bulkImportFeedback);
-routes.post('/ptm/list', validatetoken, programCtrl.listPTMs);
-routes.post('/ptm/view', validatetoken, programCtrl.viewPTM);
+routes.post('/ptm/list', programCtrl.listPTMs);
+routes.post('/ptm/view', programCtrl.viewPTM);
 routes.post('/ptm/update', validatetoken, programCtrl.editPTM);
 routes.post('/ptm/remove', validatetoken, programCtrl.removePTM);
 routes.post('/ptm/student/add', validatetoken, programCtrl.addStudentsToPTM);
@@ -155,7 +155,7 @@ routes.post('/package/list', validatetoken, packageCtrl.listPackages);
 routes.post('/package/enable', validatetoken, packageCtrl.assignPackage);
 routes.post('/package/disable', validatetoken, packageCtrl.revokeEnablement);
 routes.post('/package/enable/report', validatetoken, packageCtrl.reportPackageEnablement);
-routes.post('/package/students', validatetoken, packageCtrl.getStudentPackages);
+routes.post('/package/students', packageCtrl.getStudentPackages);
 
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Tenant routes' }));
 
