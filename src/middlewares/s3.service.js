@@ -1,6 +1,8 @@
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import fs from 'fs';
+
+const s3 = new S3Client({ region: process.env.AWS_REGION });
 
 const s3Client = new S3Client({
   region: process.env.AWS_REGION,
@@ -47,3 +49,27 @@ export const generatePresignedUrl = async (fileName, fileType) => {
     throw new Error('Failed to generate presigned URL');
   }
 };
+
+export async function downloadFileFrmS3(url) {
+  const cmd = new GetObjectCommand({ Bucket: url.bucket, Key: url.key });
+  const data = await s3.send(cmd);
+  return data;
+}
+
+export async function parseS3Url(fullUrl) {
+  if (!fullUrl) return null;
+  const u = new URL(fullUrl);
+  const vh = u.hostname.match(/^([^.]+)\.s3[.-][^.]+\.amazonaws\.com$/i);
+  if (vh) {
+    return { bucket: vh[1], key: decodeURIComponent(u.pathname.replace(/^\/+/, '')) };
+  }
+  if (/^s3[.-][^.]+\.amazonaws\.com$/i.test(u.hostname)) {
+    const parts = u.pathname.split('/').filter(Boolean);
+    if (parts.length >= 2) {
+      const bucket = parts.shift();
+      const key = decodeURIComponent(parts.join('/'));
+      return { bucket, key };
+    }
+  }
+  return null;
+}
