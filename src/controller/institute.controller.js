@@ -6,6 +6,7 @@ import { v4 as uuid } from 'uuid';
 import bcrypt from 'bcrypt';
 import dotenv from 'dotenv';
 import { signAccessToken, signRefreshToken, hashToken, verifyAccessToken, verifyRefreshToken } from '../helpers/auth.helper.js';
+import { downloadFileFrmS3, parseS3Url } from '../middlewares/s3.service.js';
 import Tenant from '../models/tenant.model.js';
 import User from '../models/users.model.js';
 import Center from '../models/center.model.js';
@@ -2621,6 +2622,25 @@ const deleteVenue = async (req, res, next) => {
   }
 };
 
+const downloadFile = async (req, res, next) => {
+  try {
+    const url = req.body.url;
+    const parsed = await parseS3Url(url);
+    if (!parsed) {
+      return res.status(constants.HTTPS_BAD_REQUEST).json({ status: false, message: 'Invalid S3 URL. Pass full bucket URL.' });
+    }
+    const data = await downloadFileFrmS3(parsed);
+    res.setHeader('Content-Type', data.ContentType || 'application/octet-stream');
+    data.Body.on('error', next);
+    data.Body.pipe(res);
+  } catch (err) {
+    if (err?.$metadata?.httpStatusCode === 404) {
+      return res.status(constants.HTTPS_NOT_FOUND).json({ status: false, message: 'File not found in S3' });
+    }
+    return next(err);
+  }
+};
+
 export default {
   createInstitute,
   viewInstitute,
@@ -2664,5 +2684,6 @@ export default {
   updateVenue,
   deleteVenue,
   importUsers,
-  syncExistingUsersAndStaff
+  syncExistingUsersAndStaff,
+  downloadFile
 };
