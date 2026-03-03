@@ -39,11 +39,11 @@ const circularSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-circularSchema.index({ instituteId: 1, circularId: 1, isdeleted: 1 }, { unique: true });
-circularSchema.index({ instituteId: 1, scope: 1, isdeleted: 1 });
-circularSchema.index({ instituteId: 1, centerId: 1, isdeleted: 1 });
-circularSchema.index({ instituteId: 1, batchId: 1, isdeleted: 1 });
-circularSchema.index({ instituteId: 1, category: 1, status: 1, isdeleted: 1 });
+circularSchema.index({ tenantId: 1, circularId: 1, isdeleted: 1 }, { unique: true });
+circularSchema.index({ tenantId: 1, scope: 1, isdeleted: 1 });
+circularSchema.index({ tenantId: 1, centerCode: 1, isdeleted: 1 });
+circularSchema.index({ tenantId: 1, batchCode: 1, isdeleted: 1 });
+circularSchema.index({ tenantId: 1, category: 1, status: 1, isdeleted: 1 });
 
 const Circular = mongoose.model('circular', circularSchema);
 export default Circular;

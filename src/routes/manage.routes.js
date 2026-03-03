@@ -57,6 +57,8 @@ routes.post('/circular/delete', validatetoken, circularCtrl.deleteCircular);
 routes.post('/circular/view', validatetoken, circularCtrl.viewCircular);
 routes.post('/circular/reports', validatetoken, circularCtrl.getCircularReports);
 routes.post('/circular/publish', validatetoken, circularCtrl.publishCircular);
+routes.post('/circular/markasread', circularCtrl.markCircularAsRead);
+routes.post('/circular/getRead/list', validatetoken, circularCtrl.getCircularReadList);
 
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Timetable routes' }));
 
