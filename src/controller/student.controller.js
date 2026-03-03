@@ -38,38 +38,111 @@ const toInt = (v, def = 0) => {
 
 const DAYS = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
 
+// const getEffectivePeriods = (tt, dateMs) => {
+//   if (!tt || !Array.isArray(tt.week)) return [];
+//   const targetDateMs = Number(dateMs);
+//   if (isNaN(targetDateMs)) return [];
+//   const targetDate = new Date(targetDateMs);
+//   const JS_DAYS = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
+//   const dayStr = JS_DAYS[targetDate.getDay()];
+//   const baseDay = tt.week.find((w) => w.day === dayStr);
+//   let periods = baseDay && Array.isArray(baseDay.periods) ? JSON.parse(JSON.stringify(baseDay.periods)) : [];
+//   const targetStartOfDay = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate()).getTime();
+//   const dayOverrides = (tt.overrides || []).filter((o) => {
+//     const oDate = new Date(Number(o.date));
+//     const overrideStartOfDay = new Date(oDate.getFullYear(), oDate.getMonth(), oDate.getDate()).getTime();
+//     return overrideStartOfDay === targetStartOfDay;
+//   });
+//   for (const ov of dayOverrides) {
+//     if (ov.action === 'CANCEL_DAY') {
+//       return [];
+//     }
+//     if (['CANCEL_PERIOD', 'REPLACE_PERIOD', 'MOVE_PERIOD'].includes(ov.action)) {
+//       periods = periods.filter((p) => p.periodNo !== ov.periodNo);
+//       if (ov.period) {
+//         periods.push(ov.period);
+//       }
+//     }
+//     if (ov.action === 'ADD_PERIOD') {
+//       if (ov.period) {
+//         periods.push(ov.period);
+//       }
+//     }
+//   }
+//   return periods.sort((a, b) => (a.periodNo || 0) - (b.periodNo || 0));
+// };
+
 const getEffectivePeriods = (tt, dateMs) => {
   if (!tt || !Array.isArray(tt.week)) return [];
-  const targetDateMs = Number(dateMs);
-  if (isNaN(targetDateMs)) return [];
-  const targetDate = new Date(targetDateMs);
+  const targetMs = Number(dateMs);
+  if (isNaN(targetMs)) return [];
+
+  // BUG 3 FIX: use UTC day to avoid timezone shift
+  const targetDate = new Date(targetMs);
   const JS_DAYS = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
-  const dayStr = JS_DAYS[targetDate.getDay()];
+  const dayStr = JS_DAYS[targetDate.getUTCDay()];
+
+  // Start with template week for this day
   const baseDay = tt.week.find((w) => w.day === dayStr);
   let periods = baseDay && Array.isArray(baseDay.periods) ? JSON.parse(JSON.stringify(baseDay.periods)) : [];
-  const targetStartOfDay = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate()).getTime();
-  const dayOverrides = (tt.overrides || []).filter((o) => {
-    const oDate = new Date(Number(o.date));
-    const overrideStartOfDay = new Date(oDate.getFullYear(), oDate.getMonth(), oDate.getDate()).getTime();
-    return overrideStartOfDay === targetStartOfDay;
-  });
-  for (const ov of dayOverrides) {
-    if (ov.action === 'CANCEL_DAY') {
-      return [];
-    }
-    if (['CANCEL_PERIOD', 'REPLACE_PERIOD', 'MOVE_PERIOD'].includes(ov.action)) {
-      periods = periods.filter((p) => p.periodNo !== ov.periodNo);
-      if (ov.period) {
-        periods.push(ov.period);
-      }
-    }
-    if (ov.action === 'ADD_PERIOD') {
-      if (ov.period) {
-        periods.push(ov.period);
-      }
+
+  // BUG 4 FIX: use UTC midnight for comparison
+  const targetUTCMidnight = Date.UTC(targetDate.getUTCFullYear(), targetDate.getUTCMonth(), targetDate.getUTCDate());
+
+  const matchesDate = (oDateMs) => {
+    // BUG 5 FIX: compare UTC midnights, not local midnights
+    const od = new Date(Number(oDateMs));
+    const ovUTCMidnight = Date.UTC(od.getUTCFullYear(), od.getUTCMonth(), od.getUTCDate());
+    return ovUTCMidnight === targetUTCMidnight;
+  };
+
+  // BUG 6 FIX: CANCEL_DAY and REPLACE_DAY come from dayOverrides
+  const dayOvs = Array.isArray(tt.dayOverrides) ? tt.dayOverrides : [];
+  for (const ov of dayOvs) {
+    if (!matchesDate(ov.date)) continue;
+    if (ov.action === 'CANCEL_DAY') return [];
+    // BUG 7 FIX: handle REPLACE_DAY — periods stored directly on override
+    if (ov.action === 'REPLACE_DAY' && Array.isArray(ov.periods)) {
+      periods = JSON.parse(JSON.stringify(ov.periods));
     }
   }
-  return periods.sort((a, b) => (a.periodNo || 0) - (b.periodNo || 0));
+
+  // BUG 2 FIX: period-level overrides come from periodOverrides
+  const periodOvs = Array.isArray(tt.periodOverrides) ? tt.periodOverrides : [];
+  const baseMap = new Map();
+  periods.forEach((p) => {
+    if (p.periodNo != null) baseMap.set(Number(p.periodNo), p);
+  });
+
+  for (const ov of periodOvs) {
+    if (!matchesDate(ov.date)) continue;
+    const fromNo = Number(ov.periodNo);
+
+    if (ov.action === 'CANCEL_PERIOD') {
+      baseMap.delete(fromNo);
+    }
+
+    if (ov.action === 'REPLACE_PERIOD' && ov.period) {
+      baseMap.set(fromNo, { ...ov.period, periodNo: fromNo });
+    }
+
+    // BUG 8 FIX: MOVE_PERIOD swaps fromPeriodNo → toPeriodNo
+    if (ov.action === 'MOVE_PERIOD') {
+      const toNo = Number(ov.toPeriodNo);
+      if (!fromNo || !toNo) continue;
+      const fromPeriod = baseMap.get(fromNo);
+      const toPeriod = baseMap.get(toNo);
+      if (fromPeriod) baseMap.set(toNo, { ...fromPeriod, periodNo: toNo });
+      if (toPeriod) baseMap.set(fromNo, { ...toPeriod, periodNo: fromNo });
+      else baseMap.delete(fromNo);
+    }
+
+    if (ov.action === 'ADD_PERIOD' && ov.period) {
+      baseMap.set(fromNo, { ...ov.period, periodNo: fromNo });
+    }
+  }
+
+  return Array.from(baseMap.values()).sort((a, b) => (a.periodNo || 0) - (b.periodNo || 0));
 };
 
 const listStudents = async (req, res, next) => {
@@ -367,6 +440,7 @@ const getStudentSubjects = async (req, res, next) => {
 
 const getAllClassSubjectTopics = async (req, res, next) => {
   try {
+    console.log('tests. method called');
     const tenantId = safeTrim(req.body?.entiId);
     const regNo = safeTrim(req.body?.regNo);
     const classNo = toNum(req.body?.classNo);
@@ -399,6 +473,7 @@ const getAllClassSubjectTopics = async (req, res, next) => {
     const program = await Program.findOne({ tenantId, programId, isdeleted: false }).lean();
     if (!program) return res.status(404).json({ status: false, message: 'Program not found' });
     const batchId = safeTrim(req.body?.batchId) || safeTrim(student?.batchId);
+    console.log('program ', program);
     const examMappings = (Array.isArray(program.examMappings) ? program.examMappings : [])
       .map((m) => ({
         categoryId: safeTrim(m?.categoryId),
@@ -407,6 +482,7 @@ const getAllClassSubjectTopics = async (req, res, next) => {
       }))
       .filter((m) => m.categoryId && m.subCategoryId)
       .sort((a, b) => Number(a.sortOrder) - Number(b.sortOrder));
+    console.log('examMappings ', examMappings);
     if (!examMappings.length) {
       return res.json({
         status: true,
@@ -459,7 +535,9 @@ const getAllClassSubjectTopics = async (req, res, next) => {
       .lean();
     const enabledTestMap = new Map();
     if (batchId) {
+      console.log('batchId ', batchId);
       const enabledRows = await BatchAssignEnable.find({ tenantId, batchId, subjectId, isdeleted: false, status: 'enabled' }, { testId: 1, testNo: 1, enabledAt: 1, students: { $elemMatch: { admissionNo: safeTrim(student.admissionNo || regNo) } } }).lean();
+      console.log('enabledRows ', enabledRows);
       const now = Date.now();
       const admissionNo = safeTrim(student.admissionNo || regNo);
       const studentId = safeTrim(student.studentId || student._id);
@@ -720,7 +798,12 @@ const getStudentTimetable = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     const identifier = safeTrim(req.body?.studentNo || req.body?.studentId);
-    const targetDateMs = req.body?.date ? Number(req.body.date) : Date.now();
+    // const targetDateMs = req.body?.date ? Number(req.body.date) : Date.now();
+    let targetDateMs = Date.now();
+    if (req.body?.date !== undefined && req.body?.date !== null) {
+      const parsed = Number(req.body.date);
+      targetDateMs = Number.isFinite(parsed) ? parsed : Date.now();
+    }
     if (!tenantId || !identifier) {
       return res.status(400).json({ status: false, message: 'tenantId and studentNo are required' });
     }
@@ -733,25 +816,23 @@ const getStudentTimetable = async (req, res, next) => {
     if (!student) {
       return res.status(404).json({ status: false, message: 'Student profile not found' });
     }
+    // const d = new Date(targetDateMs);
+    // const diff = d.getDay() === 0 ? -6 : 1 - d.getDay();
+    // const mondayMs = new Date(d.setDate(d.getDate() + diff)).setHours(0, 0, 0, 0);
     const d = new Date(targetDateMs);
-    const diff = d.getDay() === 0 ? -6 : 1 - d.getDay();
-    const mondayMs = new Date(d.setDate(d.getDate() + diff)).setHours(0, 0, 0, 0);
+    const utcDay = d.getUTCDay(); // 0=Sun
+    const diffDays = utcDay === 0 ? -6 : 1 - utcDay;
+    const mondayMs = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + diffDays);
+    console.log('student.batchCode ', student.batchCode);
     const timetableDoc = await TimeTable.findOne({
       tenantId,
       batchCode: student.batchCode,
       wkStartOn: mondayMs,
       isdeleted: false
-    })
-      .populate({
-        path: 'topicId',
-        localField: 'topicId',
-        foreignField: 'topicId',
-        model: 'topic',
-        justOne: true,
-        select: 'topicId topicName topicCode _id'
-      })
-      .lean();
-    const todaysPeriods = getEffectivePeriods(timetableDoc, targetDateMs);
+    }).lean();
+    // const todaysPeriods = getEffectivePeriods(timetableDoc, targetDateMs);
+    const targetUTCMidnight = Date.UTC(new Date(targetDateMs).getUTCFullYear(), new Date(targetDateMs).getUTCMonth(), new Date(targetDateMs).getUTCDate());
+    const todaysPeriods = getEffectivePeriods(timetableDoc, targetUTCMidnight);
     return res.status(200).json({
       status: true,
       message: 'Timetable retrieved successfully',
