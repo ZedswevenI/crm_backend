@@ -2,8 +2,6 @@ import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import fs from 'fs';
 
-const s3 = new S3Client({ region: process.env.AWS_REGION });
-
 const s3Client = new S3Client({
   region: process.env.AWS_REGION,
   credentials: {
@@ -52,7 +50,7 @@ export const generatePresignedUrl = async (fileName, fileType) => {
 
 export async function downloadFileFrmS3(url) {
   const cmd = new GetObjectCommand({ Bucket: url.bucket, Key: url.key });
-  const data = await s3.send(cmd);
+  const data = await S3Client.send(cmd);
   return data;
 }
 
