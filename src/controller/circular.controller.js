@@ -1,6 +1,7 @@
 import { v4 as uuid } from 'uuid';
 import constants from '../helpers/constants.js';
 import Circular from '../models/circular.model.js';
+import CircularRead from '../models/circularRead.model.js';
 import StudentProfile from '../models/studentProfile.model.js';
 import { uploadFileToS3 } from '../middlewares/s3.service.js';
 
@@ -210,61 +211,61 @@ const getCircularReports = async (req, res, next) => {
   }
 };
 
-const getStudentCirculars = async (req, res, next) => {
-  try {
-    const tenantId = picktenantId(req);
-    const studentNo = safeTrim(req.query.studentNo || req.body.studentNo);
+// const getStudentCirculars = async (req, res, next) => {
+//   try {
+//     const tenantId = picktenantId(req);
+//     const studentNo = safeTrim(req.query.studentNo || req.body.studentNo);
 
-    if (!tenantId || !studentNo) {
-      return res.status(400).json({ status: false, message: 'tenantId and studentNo are required' });
-    }
+//     if (!tenantId || !studentNo) {
+//       return res.status(400).json({ status: false, message: 'tenantId and studentNo are required' });
+//     }
 
-    const student = await StudentProfile.findOne({
-      tenantId: tenantId,
-      isdeleted: false,
-      $or: [{ studentId: studentNo }, { admissionNo: studentNo }, { registrationNumber: studentNo }]
-    }).lean();
+//     const student = await StudentProfile.findOne({
+//       tenantId: tenantId,
+//       isdeleted: false,
+//       $or: [{ studentId: studentNo }, { admissionNo: studentNo }, { registrationNumber: studentNo }]
+//     }).lean();
 
-    if (!student) {
-      return res.status(404).json({ status: false, message: 'Student profile not found' });
-    }
+//     if (!student) {
+//       return res.status(404).json({ status: false, message: 'Student profile not found' });
+//     }
 
-    const centerCode = safeTrim(student.centerCode);
-    const batchCode = safeTrim(student.batchCode);
+//     const centerCode = safeTrim(student.centerCode);
+//     const batchCode = safeTrim(student.batchCode);
 
-    const page = parseInt(req.query.page || req.body.page, 10) || 1;
-    const limit = parseInt(req.query.limit || req.body.limit, 10) || 10;
-    const skip = (page - 1) * limit;
-    const sort = req.query.sort || req.body.sort || '-publishedAt';
+//     const page = parseInt(req.query.page || req.body.page, 10) || 1;
+//     const limit = parseInt(req.query.limit || req.body.limit, 10) || 10;
+//     const skip = (page - 1) * limit;
+//     const sort = req.query.sort || req.body.sort || '-publishedAt';
 
-    const query = {
-      tenantId,
-      isdeleted: false,
-      status: 'PUBLISHED',
-      $or: [{ scope: 'INSTITUTE' }, { scope: 'CENTER', centerCode: centerCode }, { scope: 'BATCH', batchCode: batchCode }]
-    };
+//     const query = {
+//       tenantId,
+//       isdeleted: false,
+//       status: 'PUBLISHED',
+//       $or: [{ scope: 'INSTITUTE' }, { scope: 'CENTER', centerCode: centerCode }, { scope: 'BATCH', batchCode: batchCode }]
+//     };
 
-    console.log(query);
-    const [rows, count] = await Promise.all([Circular.find(query).sort(sort).skip(skip).limit(limit).lean(), Circular.countDocuments(query)]);
+//     console.log(query);
+//     const [rows, count] = await Promise.all([Circular.find(query).sort(sort).skip(skip).limit(limit).lean(), Circular.countDocuments(query)]);
 
-    return res.status(constants.HTTPS_SUCCESS || 200).json({
-      status: true,
-      message: 'Student circulars retrieved successfully',
-      data: rows,
-      meta: {
-        studentId: student.studentId,
-        centerCode: centerCode,
-        batchCode: batchCode
-      },
-      page,
-      limit,
-      count,
-      pages: Math.ceil(count / limit) || 0
-    });
-  } catch (err) {
-    return next(err);
-  }
-};
+//     return res.status(constants.HTTPS_SUCCESS || 200).json({
+//       status: true,
+//       message: 'Student circulars retrieved successfully',
+//       data: rows,
+//       meta: {
+//         studentId: student.studentId,
+//         centerCode: centerCode,
+//         batchCode: batchCode
+//       },
+//       page,
+//       limit,
+//       count,
+//       pages: Math.ceil(count / limit) || 0
+//     });
+//   } catch (err) {
+//     return next(err);
+//   }
+// };
 
 const publishCircular = async (req, res, next) => {
   try {
@@ -302,6 +303,140 @@ const publishCircular = async (req, res, next) => {
   }
 };
 
+const getStudentCirculars = async (req, res, next) => {
+  try {
+    const tenantId = picktenantId(req);
+    const studentNo = safeTrim(req.query.studentNo || req.body.studentNo);
+
+    if (!tenantId || !studentNo) {
+      return res.status(400).json({ status: false, message: 'tenantId and studentNo are required' });
+    }
+
+    const student = await StudentProfile.findOne({
+      tenantId: tenantId,
+      isdeleted: false,
+      $or: [{ studentId: studentNo }, { admissionNo: studentNo }, { registrationNumber: studentNo }]
+    }).lean();
+
+    if (!student) {
+      return res.status(404).json({ status: false, message: 'Student profile not found' });
+    }
+
+    const centerCode = safeTrim(student.centerCode);
+    const batchCode = safeTrim(student.batchCode);
+
+    const page = parseInt(req.query.page || req.body.page, 10) || 1;
+    const limit = parseInt(req.query.limit || req.body.limit, 10) || 10;
+    const skip = (page - 1) * limit;
+    const sort = req.query.sort || req.body.sort || '-publishedAt';
+
+    const query = {
+      tenantId,
+      isdeleted: false,
+      status: 'PUBLISHED',
+      $or: [{ scope: 'INSTITUTE' }, { scope: 'CENTER', centerCode: centerCode }, { scope: 'BATCH', batchCode: batchCode }]
+    };
+
+    const [rows, count] = await Promise.all([Circular.find(query).sort(sort).skip(skip).limit(limit).lean(), Circular.countDocuments(query)]);
+
+    // --- Check which circulars have been read by this student ---
+    const circularIds = rows.map((c) => c.circularId);
+    const readRecords = await CircularRead.find({
+      tenantId,
+      studentNo,
+      circularId: { $in: circularIds }
+    }).lean();
+
+    const readSet = new Set(readRecords.map((r) => r.circularId));
+
+    const formattedRows = rows.map((circular) => ({
+      ...circular,
+      isRead: readSet.has(circular.circularId)
+    }));
+
+    return res.status(constants.HTTPS_SUCCESS || 200).json({
+      status: true,
+      message: 'Student circulars retrieved successfully',
+      data: formattedRows,
+      meta: {
+        studentId: student.studentId,
+        centerCode: centerCode,
+        batchCode: batchCode
+      },
+      page,
+      limit,
+      count,
+      pages: Math.ceil(count / limit) || 0
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const markCircularAsRead = async (req, res, next) => {
+  try {
+    const tenantId = picktenantId(req);
+    const circularId = safeTrim(req.body?.circularId);
+    const studentNo = safeTrim(req.body?.studentNo);
+
+    if (!tenantId || !circularId || !studentNo) {
+      return res.status(400).json({ status: false, message: 'tenantId, circularId, and studentNo are required' });
+    }
+
+    await CircularRead.findOneAndUpdate({ tenantId, circularId, studentNo }, { $setOnInsert: { readAt: Date.now() } }, { upsert: true, new: true });
+
+    return res.status(200).json({
+      status: true,
+      message: 'Circular marked as read successfully'
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const getCircularReadList = async (req, res, next) => {
+  try {
+    const tenantId = picktenantId(req);
+    const circularId = safeTrim(req.query.circularId || req.body.circularId);
+    if (!tenantId || !circularId) {
+      return res.status(400).json({ status: false, message: 'tenantId and circularId are required' });
+    }
+    const page = parseInt(req.query.page || req.body.page, 10) || 1;
+    const limit = parseInt(req.query.limit || req.body.limit, 10) || 50;
+    const skip = (page - 1) * limit;
+    const [readList, count] = await Promise.all([CircularRead.find({ tenantId, circularId }).sort({ readAt: -1 }).skip(skip).limit(limit).lean(), CircularRead.countDocuments({ tenantId, circularId })]);
+    const studentNos = readList.map((r) => r.studentNo);
+    const students = await StudentProfile.find(
+      {
+        tenantId,
+        isdeleted: false,
+        $or: [{ studentId: { $in: studentNos } }, { admissionNo: { $in: studentNos } }, { registrationNumber: { $in: studentNos } }]
+      },
+      'studentId admissionNo registrationNumber firstName lastName batchCode centerCode student'
+    ).lean();
+    const formattedList = readList.map((record) => {
+      const stu = students.find((s) => s.studentId === record.studentNo || s.admissionNo === record.studentNo || s.registrationNumber === record.studentNo);
+      return {
+        ...record,
+        studentName: stu ? stu.student?.name || 'Unknown' : 'Unknown',
+        batchCode: stu ? stu.batchCode : null,
+        centerCode: stu ? stu.centerCode : null
+      };
+    });
+    return res.status(200).json({
+      status: true,
+      message: 'Read list retrieved successfully',
+      data: formattedList,
+      page,
+      limit,
+      count,
+      pages: Math.ceil(count / limit) || 0
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   uploadCircularFile,
   createCircular,
@@ -311,5 +446,7 @@ export default {
   deleteCircular,
   getCircularReports,
   getStudentCirculars,
-  publishCircular
+  publishCircular,
+  markCircularAsRead,
+  getCircularReadList
 };
