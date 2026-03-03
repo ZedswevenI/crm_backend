@@ -17,19 +17,37 @@ const DAYS = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'
 const isValidDay = (d) => DAYS.includes(String(d || '').toUpperCase());
 const normDay = (d) => String(d || '').toUpperCase();
 
+// const getPreviousMonday = (epochMs) => {
+//   const d = new Date(epochMs);
+//   const day = d.getDay(); // 0=Sun
+//   const diff = day === 0 ? -6 : 1 - day; // shift to monday
+//   d.setDate(d.getDate() + diff);
+//   d.setHours(0, 0, 0, 0);
+//   return d.getTime();
+// };
+
 const getPreviousMonday = (epochMs) => {
   const d = new Date(epochMs);
-  const day = d.getDay(); // 0=Sun
-  const diff = day === 0 ? -6 : 1 - day; // shift to monday
-  d.setDate(d.getDate() + diff);
-  d.setHours(0, 0, 0, 0);
+  const day = d.getUTCDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  d.setUTCDate(d.getUTCDate() + diff);
+  d.setUTCHours(0, 0, 0, 0);
   return d.getTime();
 };
 
+// const getOffsetDate = (wkStartOn, dayName) => {
+//   const offsets = { MONDAY: 0, TUESDAY: 1, WEDNESDAY: 2, THURSDAY: 3, FRIDAY: 4, SATURDAY: 5, SUNDAY: 6 };
+//   const offsetMs = (offsets[dayName] || 0) * 24 * 60 * 60 * 1000;
+//   return wkStartOn + offsetMs;
+// };
+
 const getOffsetDate = (wkStartOn, dayName) => {
   const offsets = { MONDAY: 0, TUESDAY: 1, WEDNESDAY: 2, THURSDAY: 3, FRIDAY: 4, SATURDAY: 5, SUNDAY: 6 };
-  const offsetMs = (offsets[dayName] || 0) * 24 * 60 * 60 * 1000;
-  return wkStartOn + offsetMs;
+  const offset = offsets[dayName] ?? 0;
+  const d = new Date(wkStartOn);
+  d.setUTCDate(d.getUTCDate() + offset);
+  d.setUTCHours(0, 0, 0, 0);
+  return d.getTime();
 };
 
 const validateTimeRange = (t) => {
@@ -58,9 +76,15 @@ const normalizePeriod = (p) => {
     return { ok: false, msg: `periodType must be one of: ${validPeriodTypes.join(', ')}` };
   }
 
+  // const mode = safeTrim(p?.mode) || 'OFFLINE';
+  // if (!['OFFLINE', 'ONLINE'].includes(mode)) {
+  //   return { ok: false, msg: 'mode must be OFFLINE or ONLINE' };
+  // }
+
   const mode = safeTrim(p?.mode) || 'OFFLINE';
-  if (!['OFFLINE', 'ONLINE'].includes(mode)) {
-    return { ok: false, msg: 'mode must be OFFLINE or ONLINE' };
+  const validModes = ['OFFLINE', 'ONLINE'];
+  if (!validModes.includes(mode)) {
+    return { ok: false, msg: `mode must be one of: ${validModes.join(', ')}` };
   }
 
   return {
@@ -129,13 +153,10 @@ const upsertPeriodOverride = (tt, ov) => {
  */
 const buildDaySchedule = (tt, dateEpochMs) => {
   const d = new Date(dateEpochMs);
-  const dayName = DAYS[d.getDay() === 0 ? 6 : d.getDay() - 1];
-
-  // Base from template
+  // const dayName = DAYS[d.getDay() === 0 ? 6 : d.getDay() - 1];
+  const dayName = DAYS[d.getUTCDay() === 0 ? 6 : d.getUTCDay() - 1];
   const baseDay = (tt.week || []).find((w) => w.day === dayName);
   let periods = baseDay ? JSON.parse(JSON.stringify(baseDay.periods || [])) : [];
-
-  // Day override
   const dayOv = (tt.dayOverrides || []).find((o) => toInt(o?.date, 0) === toInt(dateEpochMs, 0) && normDay(o?.day) === dayName);
   if (dayOv) {
     if (dayOv.action === 'CANCEL_DAY') {
@@ -151,21 +172,15 @@ const buildDaySchedule = (tt, dateEpochMs) => {
       periods = Array.isArray(dayOv.periods) ? JSON.parse(JSON.stringify(dayOv.periods)) : [];
     }
   }
-
-  // Period overrides
   const povs = (tt.periodOverrides || []).filter((o) => toInt(o?.date, 0) === toInt(dateEpochMs, 0) && normDay(o?.day) === dayName);
-
-  // Apply CANCEL/REPLACE/ADD first
   for (const ov of povs) {
     const pno = toInt(ov?.periodNo, 0);
     if (!pno) continue;
-
     if (ov.action === 'CANCEL_PERIOD') {
       const idx = periods.findIndex((p) => toInt(p?.periodNo, 0) === pno);
       if (idx !== -1) periods[idx] = { ...periods[idx], isCancelled: true, cancelReason: ov.reason || periods[idx].cancelReason || null };
       continue;
     }
-
     if (ov.action === 'REPLACE_PERIOD') {
       const repl = ov.period ? JSON.parse(JSON.stringify(ov.period)) : null;
       if (!repl) continue;
@@ -174,7 +189,6 @@ const buildDaySchedule = (tt, dateEpochMs) => {
       else periods.push({ ...repl, periodNo: pno });
       continue;
     }
-
     if (ov.action === 'ADD_PERIOD') {
       const add = ov.period ? JSON.parse(JSON.stringify(ov.period)) : null;
       if (!add) continue;
@@ -183,23 +197,15 @@ const buildDaySchedule = (tt, dateEpochMs) => {
       continue;
     }
   }
-
-  // Apply MOVE (swap/move)
-  // Note: your changePeriod writes MOVE overrides with toPeriodNo for both involved slots.
   for (const ov of povs.filter((x) => x.action === 'MOVE_PERIOD')) {
     const fromNo = toInt(ov?.periodNo, 0);
     const toNo = toInt(ov?.toPeriodNo, 0);
     if (!fromNo || !toNo) continue;
-
     const fromIdx = periods.findIndex((p) => toInt(p?.periodNo, 0) === fromNo);
     if (fromIdx === -1) continue;
-
-    // Move by changing periodNo; sorting at end will place it.
     periods[fromIdx] = { ...periods[fromIdx], periodNo: toNo };
   }
-
   periods = periods.sort((a, b) => (toInt(a?.periodNo, 0) || 0) - (toInt(b?.periodNo, 0) || 0));
-
   return {
     date: dateEpochMs,
     day: dayName,
@@ -347,19 +353,15 @@ const cancelWholeDay = async (req, res, next) => {
     const date = toInt(req.body?.date, 0);
     const reason = safeTrim(req.body?.reason) || 'Holiday';
     const userId = safeTrim(req.body?.userId);
-
     if (!tenantId || !timetableId || !date) return res.status(400).json({ status: false, message: 'tenantId, timetableId and date required' });
-
     const tt = await TimeTable.findOne({ _id: timetableId, tenantId, isdeleted: false });
     if (!tt) return res.status(404).json({ status: false, message: 'Timetable not found' });
-
     const d = new Date(date);
-    const day = DAYS[d.getDay() === 0 ? 6 : d.getDay() - 1];
-
+    // const day = DAYS[d.getDay() === 0 ? 6 : d.getDay() - 1];
+    const day = DAYS[d.getUTCDay() === 0 ? 6 : d.getUTCDay() - 1];
     upsertDayOverride(tt, { date, day, action: 'CANCEL_DAY', periods: null, reason, updatedBy: userId || null });
     tt.markModified('dayOverrides');
     await tt.save();
-
     return res.json({ status: true, message: 'Whole day cancelled' });
   } catch (err) {
     return next(err);
@@ -510,14 +512,16 @@ const cancelPeriod = async (req, res, next) => {
     const day = normDay(req.body?.day);
     const periodNo = toInt(req.body?.periodNo, 0);
     const reason = safeTrim(req.body?.reason) || 'Cancelled';
-
     if (!tenantId || !timetableId || !date || !periodNo || !day) return res.status(400).json({ status: false, message: 'Missing required fields' });
 
     const tt = await TimeTable.findOne({ _id: timetableId, tenantId, isdeleted: false });
     if (!tt) return res.status(404).json({ status: false, message: 'Timetable not found' });
 
-    const base = findTemplatePeriod(tt, day, periodNo);
-    if (!base) return res.status(400).json({ status: false, message: 'Template period not found' });
+    // const base = findTemplatePeriod(tt, day, periodNo);
+    // if (!base) return res.status(400).json({ status: false, message: 'Template period not found' });
+
+    const base = findTemplatePeriod(tt, day, periodNo) ?? (tt.periodOverrides || []).find((o) => normDay(o?.day) === day && toInt(o?.periodNo, 0) === periodNo && o.action === 'ADD_PERIOD')?.period;
+    if (!base) return res.status(400).json({ status: false, message: 'Period not found in template or overrides' });
 
     upsertPeriodOverride(tt, {
       date,
@@ -556,8 +560,11 @@ const rearrangeStaff = async (req, res, next) => {
     const tt = await TimeTable.findOne({ _id: timetableId, tenantId, isdeleted: false });
     if (!tt) return res.status(404).json({ status: false, message: 'Timetable not found' });
 
-    const base = findTemplatePeriod(tt, day, periodNo);
-    if (!base) return res.status(400).json({ status: false, message: 'Template period not found' });
+    // const base = findTemplatePeriod(tt, day, periodNo);
+    // if (!base) return res.status(400).json({ status: false, message: 'Template period not found' });
+
+    const base = findTemplatePeriod(tt, day, periodNo) ?? (tt.periodOverrides || []).find((o) => normDay(o?.day) === day && toInt(o?.periodNo, 0) === periodNo && o.action === 'ADD_PERIOD')?.period;
+    if (!base) return res.status(400).json({ status: false, message: 'Period not found in template or overrides' });
 
     // conflict check
     const baseObj = base.toObject?.() ?? base;
@@ -613,6 +620,23 @@ const changePeriod = async (req, res, next) => {
     const toBase = findTemplatePeriod(tt, day, toPeriodNo); // may be null
 
     // Move: store mapping; rendering will apply
+    const fromBaseObj = fromBase.toObject?.() ?? fromBase;
+    const toBaseObj = toBase ? (toBase.toObject?.() ?? toBase) : null;
+
+    // Check fromBase faculty at toBase's time slot (if toBase exists)
+    if (toBaseObj) {
+      const fromFaculty = fromBaseObj.replacementFacultyId || fromBaseObj.facultyId;
+      const toTime = toBaseObj.time || {};
+      const checkFrom = await checkStaffConflicts(tenantId, fromFaculty, date, day, toInt(toTime.startMin, -1), toInt(toTime.endMin, -1), timetableId);
+      if (checkFrom.conflict) return res.status(400).json({ status: false, message: `Swap conflict for source faculty: ${checkFrom.message}` });
+
+      const toFaculty = toBaseObj.replacementFacultyId || toBaseObj.facultyId;
+      const fromTime = fromBaseObj.time || {};
+      const checkTo = await checkStaffConflicts(tenantId, toFaculty, date, day, toInt(fromTime.startMin, -1), toInt(fromTime.endMin, -1), timetableId);
+      if (checkTo.conflict) return res.status(400).json({ status: false, message: `Swap conflict for target faculty: ${checkTo.message}` });
+    }
+
+    // Move: store mapping; rendering will apply
     upsertPeriodOverride(tt, {
       date,
       day,
@@ -623,8 +647,6 @@ const changePeriod = async (req, res, next) => {
       reason: 'Period moved',
       updatedBy: userId || null
     });
-
-    // Swap if target exists
     if (toBase) {
       upsertPeriodOverride(tt, {
         date,
@@ -637,7 +659,6 @@ const changePeriod = async (req, res, next) => {
         updatedBy: userId || null
       });
     } else {
-      // optional: nothing else required (slot was empty)
     }
 
     tt.markModified('periodOverrides');
@@ -1063,12 +1084,10 @@ const bulkUpdateZoomLinks = async (req, res, next) => {
         const periodNo = toInt(u.periodNo, 0);
         const zoomUrl = safeTrim(u.zoomUrl);
         if (!date || !periodNo) continue;
-
         const d = new Date(date);
-        const day = DAYS[d.getDay() === 0 ? 6 : d.getDay() - 1];
-
+        // const day = DAYS[d.getDay() === 0 ? 6 : d.getDay() - 1];
+        const day = DAYS[d.getUTCDay() === 0 ? 6 : d.getUTCDay() - 1];
         const existing = (tt.periodOverrides || []).find((o) => toInt(o?.date, 0) === date && normDay(o?.day) === day && toInt(o?.periodNo, 0) === periodNo && (o.action === 'REPLACE_PERIOD' || o.action === 'ADD_PERIOD'));
-
         let baseObj;
         if (existing?.period) baseObj = existing.period.toObject?.() ?? existing.period;
         else {
