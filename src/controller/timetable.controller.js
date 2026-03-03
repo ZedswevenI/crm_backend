@@ -298,25 +298,53 @@ const createTimeTable = async (req, res, next) => {
       week.push({ day, periods });
     }
 
-    const doc = await TimeTable.findOneAndUpdate(
-      { tenantId, batchCode, wkStartOn: correctedMonday, isdeleted: false },
-      {
-        $set: {
-          tenantId,
-          batchCode,
-          wkStartOn: correctedMonday,
-          centerCode: safeTrim(payload.centerCode) || null,
-          phase: safeTrim(payload.phase) || null,
-          status: safeTrim(payload.status) || 'Active',
-          week,
-          updatedBy: payload.userId || null
-        },
-        $setOnInsert: { createdBy: payload.userId || null, isdeleted: false }
-      },
-      { new: true, upsert: true }
-    );
+    // const doc = await TimeTable.findOneAndUpdate(
+    //   { tenantId, batchCode, wkStartOn: correctedMonday, isdeleted: false },
+    //   {
+    //     $set: {
+    //       tenantId,
+    //       batchCode,
+    //       wkStartOn: correctedMonday,
+    //       centerCode: safeTrim(payload.centerCode) || null,
+    //       phase: safeTrim(payload.phase) || null,
+    //       status: safeTrim(payload.status) || 'Active',
+    //       week,
+    //       updatedBy: payload.userId || null
+    //     },
+    //     $setOnInsert: { createdBy: payload.userId || null, isdeleted: false }
+    //   },
+    //   { new: true, upsert: true }
+    // );
 
-    // Auto holiday if input was not Monday (same intent as your old logic)
+    let doc = await TimeTable.findOne({ tenantId, batchCode, wkStartOn: correctedMonday, isdeleted: false });
+
+    if (!doc) {
+      doc = await TimeTable.create({
+        tenantId,
+        batchCode,
+        wkStartOn: correctedMonday,
+        centerCode: safeTrim(payload.centerCode) || null,
+        phase: safeTrim(payload.phase) || null,
+        status: safeTrim(payload.status) || 'Active',
+        week,
+        createdBy: payload.userId || null,
+        updatedBy: payload.userId || null,
+        isdeleted: false
+      });
+    } else {
+      console.log('doc already there');
+      const incomingDays = new Set(week.map((d) => d.day));
+      const mergedWeek = [...doc.week.filter((d) => !incomingDays.has(d.day)), ...week];
+      const dayOrder = { MONDAY: 0, TUESDAY: 1, WEDNESDAY: 2, THURSDAY: 3, FRIDAY: 4, SATURDAY: 5, SUNDAY: 6 };
+      mergedWeek.sort((a, b) => (dayOrder[a.day] ?? 7) - (dayOrder[b.day] ?? 7));
+      doc.week = mergedWeek;
+      doc.centerCode = safeTrim(payload.centerCode) || doc.centerCode || null;
+      doc.phase = safeTrim(payload.phase) || doc.phase || null;
+      doc.status = safeTrim(payload.status) || doc.status || 'Active';
+      doc.updatedBy = payload.userId || null;
+      await doc.save();
+    }
+
     if (correctedMonday !== inputWeekStart) {
       let d = new Date(correctedMonday);
       const end = new Date(inputWeekStart);
@@ -772,7 +800,33 @@ const bulkUploadTimeTables = async (req, res, next) => {
         week.push({ day, periods });
       }
 
+      // if (!rowHasConflict) {
+      //   ops.push({
+      //     updateOne: {
+      //       filter: { tenantId, batchCode, wkStartOn: correctedMonday, isdeleted: false },
+      //       update: {
+      //         $set: {
+      //           centerCode: safeTrim(item.centerCode) || null,
+      //           phase: safeTrim(item.phase) || null,
+      //           status: safeTrim(item.status) || 'Active',
+      //           week,
+      //           updatedBy: userId || null
+      //         },
+      //         $setOnInsert: { createdBy: userId || null }
+      //       },
+      //       upsert: true
+      //     }
+      //   });
+      // }
+
       if (!rowHasConflict) {
+        const existingForMerge = await TimeTable.findOne({ tenantId, batchCode, wkStartOn: correctedMonday, isdeleted: false }).lean();
+        let mergedWeek = week;
+        if (existingForMerge?.week?.length) {
+          const incomingDays = new Set(week.map((d) => d.day));
+          const dayOrder = { MONDAY: 0, TUESDAY: 1, WEDNESDAY: 2, THURSDAY: 3, FRIDAY: 4, SATURDAY: 5, SUNDAY: 6 };
+          mergedWeek = [...existingForMerge.week.filter((d) => !incomingDays.has(d.day)), ...week].sort((a, b) => (dayOrder[a.day] ?? 7) - (dayOrder[b.day] ?? 7));
+        }
         ops.push({
           updateOne: {
             filter: { tenantId, batchCode, wkStartOn: correctedMonday, isdeleted: false },
@@ -781,7 +835,7 @@ const bulkUploadTimeTables = async (req, res, next) => {
                 centerCode: safeTrim(item.centerCode) || null,
                 phase: safeTrim(item.phase) || null,
                 status: safeTrim(item.status) || 'Active',
-                week,
+                week: mergedWeek,
                 updatedBy: userId || null
               },
               $setOnInsert: { createdBy: userId || null }
@@ -791,13 +845,10 @@ const bulkUploadTimeTables = async (req, res, next) => {
         });
       }
     }
-
     if (bulkErrors.length > 0) {
       return res.status(400).json({ status: false, message: 'Bulk upload aborted due to scheduling conflicts', conflicts: bulkErrors });
     }
-
     if (!ops.length) return res.status(400).json({ status: false, message: 'No valid timetable data found to process' });
-
     const result = await TimeTable.bulkWrite(ops, { ordered: false });
     return res.status(200).json({
       status: true,
