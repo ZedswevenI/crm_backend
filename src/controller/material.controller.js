@@ -18,6 +18,7 @@ const uploadMaterialFile = async (req, res, next) => {
       return res.status(400).json({ status: false, message: 'Only PDF files are allowed for study materials.' });
     }
     const attachmentUrl = await uploadFileToS3(req.file, 'library');
+    (console.log('attachmentUrl '), attachmentUrl);
     if (!attachmentUrl) {
       return res.status(500).json({ status: false, message: 'Failed to upload to S3' });
     }
