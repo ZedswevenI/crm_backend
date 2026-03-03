@@ -318,6 +318,7 @@ const viewAcademicSummary = async (req, res, next) => {
 
 const studentLogin = async (req, res, next) => {
   try {
+    console.log('method called');
     const regNo = safeTrim(req.body?.regNo);
     if (!regNo) {
       return res.status(constants.HTTPS_BAD_REQUEST).json({ status: false, message: 'regNo (admissionNo or registrationNumber) is required' });
