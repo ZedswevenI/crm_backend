@@ -1,6 +1,13 @@
+import 'dotenv/config';
 import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import fs from 'fs';
+
+console.log('--- AWS CONFIG DEBUG ---');
+console.log('REGION:', process.env.AWS_REGION);
+console.log('BUCKET:', process.env.AWS_S3_Z7I_BUCKET);
+console.log('ACCESS_KEY_ID exists?:', !!process.env.AWS_ACCESS_KEY_ID);
+console.log('SECRET_KEY exists?:', !!process.env.AWS_SECRET_ACCESS_KEY);
 
 const s3Client = new S3Client({
   region: process.env.AWS_REGION,
@@ -10,8 +17,19 @@ const s3Client = new S3Client({
   }
 });
 
+const getS3Client = () => {
+  return new S3Client({
+    region: (process.env.AWS_REGION || '').trim(),
+    credentials: {
+      accessKeyId: (process.env.AWS_ACCESS_KEY_ID || '').trim(),
+      secretAccessKey: (process.env.AWS_SECRET_ACCESS_KEY || '').trim()
+    }
+  });
+};
+
 export const uploadFileToS3 = async (file, folderPath) => {
   if (!file) return null;
+  const s3 = getS3Client();
   const fileStream = fs.createReadStream(file.path);
   const key = `${process.env.AWS_S3_Z7I_BUCKET}/${folderPath}/${Date.now()}_${file.originalname}`;
   const command = new PutObjectCommand({
@@ -26,12 +44,12 @@ export const uploadFileToS3 = async (file, folderPath) => {
     const bucketUrl = `https://${process.env.AWS_S3_Z7I_BUCKET}.s3.${process.env.AWS_REGION}.amazonaws.com`;
     return `${bucketUrl}/${key}`;
   } catch (error) {
-    console.error('S3 Upload Error:', error);
     throw new Error('Failed to upload attachment to S3');
   }
 };
 
 export const generatePresignedUrl = async (fileName, fileType) => {
+  const s3 = getS3Client();
   const key = `tasks/${Date.now()}_${fileName}`;
   const command = new PutObjectCommand({
     Bucket: process.env.AWS_S3_BUCKET_NAME,
@@ -43,14 +61,14 @@ export const generatePresignedUrl = async (fileName, fileType) => {
     const finalFileUrl = `https://${process.env.AWS_S3_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${key}`;
     return { signedUrl, finalFileUrl };
   } catch (error) {
-    console.error('Presigned URL Error:', error);
     throw new Error('Failed to generate presigned URL');
   }
 };
 
 export async function downloadFileFrmS3(url) {
+  const s3 = getS3Client();
   const cmd = new GetObjectCommand({ Bucket: url.bucket, Key: url.key });
-  const data = await S3Client.send(cmd);
+  const data = await s3.send(cmd);
   return data;
 }
 
