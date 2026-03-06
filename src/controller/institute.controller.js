@@ -116,11 +116,38 @@ const buildSort = (raw) => {
   return { [s]: 1 };
 };
 
+// const toStaffResponse = (d) => {
+//   if (!d) return d;
+//   return {
+//     _id: d._id,
+//     staffId: d.staffId,
+//     employeeId: d.employeeId,
+//     staffCode: d.staffCode,
+//     staffName: d.staffName,
+//     role: d.role,
+//     phone: d.phone,
+//     email: d.email,
+//     centerId: d.centerId,
+//     joiningDate: d.joiningDate,
+//     relievingDate: d.relievingDate,
+//     facultyType: d.facultyType,
+//     subject: d.subject,
+//     payroll: d.payroll,
+//     department: d.department,
+//     weekoff: d.weekoff,
+//     status: d.status,
+//     createdAt: d.createdAt,
+//     updatedAt: d.updatedAt
+//   };
+// };
+
 const toStaffResponse = (d) => {
   if (!d) return d;
   return {
     _id: d._id,
     staffId: d.staffId,
+    userId: d.userId || null,
+    hasSystemAccess: !!d.userId,
     employeeId: d.employeeId,
     staffCode: d.staffCode,
     staffName: d.staffName,
@@ -136,6 +163,8 @@ const toStaffResponse = (d) => {
     department: d.department,
     weekoff: d.weekoff,
     status: d.status,
+    createdBy: d.createdBy || null,
+    updatedBy: d.updatedBy || null,
     createdAt: d.createdAt,
     updatedAt: d.updatedAt
   };
@@ -491,30 +520,32 @@ const deleteCenter = async (req, res, next) => {
 //     const password = safeTrim(req.body.password);
 //     const roleLevel = safeTrim(req.body.roleLevel) || 'L4';
 //     const roleLabel = ROLE_MAP[roleLevel] || safeTrim(req.body.roleLabel) || ROLE_MAP.L4;
-//     const staffId = safeTrim(req.body.staffId) || null;
+//     const empCode = req.body.empCode ? safeTrim(req.body.empCode) : null;
 //     if (!name || !email || !phone || !password) {
-//       return res.status(constants.HTTPS_BAD_REQUEST || 400).json({
-//         status: false,
-//         message: 'name, email, phone and password are required'
-//       });
+//       return res.status(constants.HTTPS_BAD_REQUEST || 400).json({ status: false, message: 'name, email, phone and password are required' });
 //     }
-//     if (staffId) {
-//       const staffExists = await Staff.exists({ staffId, tenantId, isdeleted: false });
-//       if (!staffExists) {
-//         return res.status(400).json({ status: false, message: 'Provided staffId does not exist' });
+//     let mappedStaffId = null;
+//     if (empCode) {
+//       const staffMatch = await Staff.findOne({ tenantId, employeeId: empCode, isdeleted: false }).lean();
+//       if (!staffMatch) {
+//         return res.status(constants.HTTPS_BAD_REQUEST || 400).json({
+//           status: false,
+//           message: `No staff record found for empCode: ${empCode}`
+//         });
 //       }
+//       mappedStaffId = staffMatch.staffId;
 //     }
 //     const hashedPassword = await bcrypt.hash(password, Rounds);
 //     const newUserId = uuid();
 //     const doc = await User.create({
 //       tenantId,
 //       userId: newUserId,
-//       staffId,
+//       staffId: mappedStaffId,
 //       name,
 //       email,
 //       phone,
 //       password: hashedPassword,
-//       empCode: req.body.empCode ? safeTrim(req.body.empCode) : null,
+//       empCode,
 //       roleLevel,
 //       roleLabel,
 //       centerId: req.body.centerId ? safeTrim(req.body.centerId) : null,
@@ -522,8 +553,8 @@ const deleteCenter = async (req, res, next) => {
 //       status: req.body.status || 'Active',
 //       isdeleted: false
 //     });
-//     if (staffId) {
-//       await Staff.updateOne({ tenantId, staffId, isdeleted: false }, { $set: { userId: newUserId } });
+//     if (mappedStaffId) {
+//       await Staff.updateOne({ tenantId, staffId: mappedStaffId, isdeleted: false }, { $set: { userId: newUserId } });
 //     }
 //     const out = doc.toObject();
 //     delete out.password;
@@ -541,31 +572,58 @@ const createUser = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     if (!tenantId) {
-      return res.status(constants.HTTPS_BAD_REQUEST || 400).json({ status: false, message: 'tenantId (entiId) is required' });
+      return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
     }
     const name = safeTrim(req.body.name);
     const email = safeLower(req.body.email);
     const phone = safeTrim(req.body.phone);
     const password = safeTrim(req.body.password);
     const roleLevel = safeTrim(req.body.roleLevel) || 'L4';
-    const roleLabel = ROLE_MAP[roleLevel] || safeTrim(req.body.roleLabel) || ROLE_MAP.L4;
+    const roleLabel = ROLE_MAP[roleLevel] || ROLE_MAP.L4;
     const empCode = req.body.empCode ? safeTrim(req.body.empCode) : null;
-    if (!name || !email || !phone || !password || !empCode) {
-      return res.status(constants.HTTPS_BAD_REQUEST || 400).json({ status: false, message: 'name, email, phone and password are required' });
+    const centerId = req.body.centerId ? safeTrim(req.body.centerId) : null;
+    if (!name || !email || !phone || !password) {
+      return res.status(400).json({
+        status: false,
+        message: 'name, email, phone and password are required'
+      });
+    }
+    let centerName = req.body.centerName ? safeTrim(req.body.centerName) : null;
+    if (centerId && !centerName) {
+      const centerDoc = await Center.findOne({ centerId, tenantId, isdeleted: false }, { centerName: 1 }).lean();
+      centerName = centerDoc?.centerName || null;
     }
     let mappedStaffId = null;
     if (empCode) {
+      const escaped = empCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const staffMatch = await Staff.findOne({
         tenantId,
-        employeeId: empCode,
+        employeeId: new RegExp(`^${escaped}$`, 'i'),
         isdeleted: false
       }).lean();
       if (!staffMatch) {
-        return res.status(constants.HTTPS_BAD_REQUEST || 400).json({ status: false, message: 'Employee not found' });
+        return res.status(400).json({
+          status: false,
+          message: `No staff record found for empCode: ${empCode}`
+        });
       }
-      if (staffMatch) {
-        mappedStaffId = staffMatch.staffId;
+      if (staffMatch.userId) {
+        const existingLinkedUser = await User.findOne(
+          {
+            tenantId,
+            userId: staffMatch.userId,
+            isdeleted: false
+          },
+          { email: 1, userId: 1 }
+        ).lean();
+        if (existingLinkedUser) {
+          return res.status(409).json({
+            status: false,
+            message: `Staff ${empCode} is already linked to user: ${existingLinkedUser.email}`
+          });
+        }
       }
+      mappedStaffId = staffMatch.staffId;
     }
     const hashedPassword = await bcrypt.hash(password, Rounds);
     const newUserId = uuid();
@@ -580,8 +638,8 @@ const createUser = async (req, res, next) => {
       empCode,
       roleLevel,
       roleLabel,
-      centerId: req.body.centerId ? safeTrim(req.body.centerId) : null,
-      centerName: req.body.centerName ? safeTrim(req.body.centerName) : null,
+      centerId,
+      centerName,
       status: req.body.status || 'Active',
       isdeleted: false
     });
@@ -590,11 +648,23 @@ const createUser = async (req, res, next) => {
     }
     const out = doc.toObject();
     delete out.password;
-    return res.status(constants.HTTPS_CREATED || 201).json({ status: true, message: 'User created successfully', data: out });
+    return res.status(201).json({
+      status: true,
+      message: 'User created successfully',
+      data: out
+    });
   } catch (err) {
-    if (err && err.code === 11000) {
-      const dupField = Object.keys(err.keyPattern || {})[0] || 'unique field';
-      return res.status(409).json({ status: false, message: `Duplicate ${dupField}.` });
+    if (err?.code === 11000) {
+      const dupField = Object.keys(err.keyPattern || {})[0] || 'field';
+      const map = {
+        email: 'Email already exists',
+        phone: 'Phone number already exists',
+        empCode: 'Employee code already linked to another user'
+      };
+      return res.status(409).json({
+        status: false,
+        message: map[dupField] || `Duplicate ${dupField}`
+      });
     }
     return next(err);
   }
@@ -668,14 +738,8 @@ const viewUser = async (req, res, next) => {
 //     if (req.body.name !== undefined) updateDoc.name = safeTrim(req.body.name);
 //     if (req.body.email !== undefined) updateDoc.email = safeLower(req.body.email);
 //     if (req.body.phone !== undefined) updateDoc.phone = safeTrim(req.body.phone);
-//     if (req.body.empCode !== undefined) updateDoc.empCode = req.body.empCode ? safeTrim(req.body.empCode) : null;
 //     if (req.body.centerId !== undefined) updateDoc.centerId = req.body.centerId ? safeTrim(req.body.centerId) : null;
 //     if (req.body.centerName !== undefined) updateDoc.centerName = req.body.centerName ? safeTrim(req.body.centerName) : null;
-//     let newStaffId = undefined;
-//     if (req.body.staffId !== undefined) {
-//       newStaffId = safeTrim(req.body.staffId) || null;
-//       updateDoc.staffId = newStaffId;
-//     }
 //     if (req.body.roleLevel !== undefined) {
 //       const lvl = safeTrim(req.body.roleLevel) || 'L4';
 //       updateDoc.roleLevel = lvl;
@@ -687,13 +751,34 @@ const viewUser = async (req, res, next) => {
 //     if (req.body.password !== undefined && req.body.password !== null && req.body.password !== '') {
 //       updateDoc.password = await bcrypt.hash(String(req.body.password), Rounds);
 //     }
+//     let mappedStaffIdToSync = null;
+//     if (req.body.empCode !== undefined) {
+//       const newEmpCode = req.body.empCode ? safeTrim(req.body.empCode) : null;
+//       updateDoc.empCode = newEmpCode;
+//       if (newEmpCode) {
+//         const escaped = newEmpCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+//         const staffMatch = await Staff.findOne({
+//           tenantId,
+//           employeeId: new RegExp(`^${escaped}$`, 'i'),
+//           isdeleted: false
+//         }).lean();
+//         if (staffMatch) {
+//           updateDoc.staffId = staffMatch.staffId;
+//           mappedStaffIdToSync = staffMatch.staffId;
+//         } else {
+//           updateDoc.staffId = null;
+//         }
+//       } else {
+//         updateDoc.staffId = null;
+//       }
+//     }
 //     if (Object.keys(updateDoc).length === 0) {
 //       return res.status(400).json({ status: false, message: 'No fields to update' });
 //     }
 //     const updated = await User.findOneAndUpdate({ _id: recId, tenantId, isdeleted: false }, { $set: updateDoc }, { new: true }).select('-password');
 //     if (!updated) return res.status(404).json({ status: false, message: 'User not found or already deleted' });
-//     if (newStaffId !== undefined && newStaffId !== null) {
-//       await Staff.updateOne({ tenantId, staffId: newStaffId, isdeleted: false }, { $set: { userId: updated.userId } });
+//     if (mappedStaffIdToSync) {
+//       await Staff.updateOne({ tenantId, staffId: mappedStaffIdToSync, isdeleted: false }, { $set: { userId: updated.userId } });
 //     }
 //     return res.status(constants.HTTPS_SUCCESS || 200).json({ status: true, message: 'User updated successfully', data: updated });
 //   } catch (err) {
@@ -711,6 +796,8 @@ const updateUser = async (req, res, next) => {
     const { recId } = req.body;
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
     if (!recId) return res.status(400).json({ status: false, message: 'recId is required' });
+    const existingUser = await User.findOne({ _id: recId, tenantId, isdeleted: false }).lean();
+    if (!existingUser) return res.status(404).json({ status: false, message: 'User not found or already deleted' });
     const updateDoc = {};
     if (req.body.name !== undefined) updateDoc.name = safeTrim(req.body.name);
     if (req.body.email !== undefined) updateDoc.email = safeLower(req.body.email);
@@ -720,7 +807,7 @@ const updateUser = async (req, res, next) => {
     if (req.body.roleLevel !== undefined) {
       const lvl = safeTrim(req.body.roleLevel) || 'L4';
       updateDoc.roleLevel = lvl;
-      updateDoc.roleLabel = ROLE_MAP[lvl] || safeTrim(req.body.roleLabel) || ROLE_MAP.L4;
+      updateDoc.roleLabel = ROLE_MAP[lvl] || ROLE_MAP.L4;
     } else if (req.body.roleLabel !== undefined) {
       updateDoc.roleLabel = safeTrim(req.body.roleLabel);
     }
@@ -728,19 +815,20 @@ const updateUser = async (req, res, next) => {
     if (req.body.password !== undefined && req.body.password !== null && req.body.password !== '') {
       updateDoc.password = await bcrypt.hash(String(req.body.password), Rounds);
     }
-    let mappedStaffIdToSync = null;
+    let newStaffId = null;
     if (req.body.empCode !== undefined) {
       const newEmpCode = req.body.empCode ? safeTrim(req.body.empCode) : null;
       updateDoc.empCode = newEmpCode;
       if (newEmpCode) {
+        const escaped = newEmpCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const staffMatch = await Staff.findOne({
           tenantId,
-          employeeId: new RegExp(`^${newEmpCode}$`, 'i'),
+          employeeId: new RegExp(`^${escaped}$`, 'i'),
           isdeleted: false
         }).lean();
         if (staffMatch) {
           updateDoc.staffId = staffMatch.staffId;
-          mappedStaffIdToSync = staffMatch.staffId;
+          newStaffId = staffMatch.staffId;
         } else {
           updateDoc.staffId = null;
         }
@@ -753,10 +841,20 @@ const updateUser = async (req, res, next) => {
     }
     const updated = await User.findOneAndUpdate({ _id: recId, tenantId, isdeleted: false }, { $set: updateDoc }, { new: true }).select('-password');
     if (!updated) return res.status(404).json({ status: false, message: 'User not found or already deleted' });
-    if (mappedStaffIdToSync) {
-      await Staff.updateOne({ tenantId, staffId: mappedStaffIdToSync, isdeleted: false }, { $set: { userId: updated.userId } });
+    if (req.body.empCode !== undefined) {
+      const oldStaffId = existingUser.staffId;
+      if (oldStaffId && oldStaffId !== newStaffId) {
+        await Staff.updateOne({ tenantId, staffId: oldStaffId, isdeleted: false }, { $set: { userId: null } });
+      }
+      if (newStaffId) {
+        await Staff.updateOne({ tenantId, staffId: newStaffId, isdeleted: false }, { $set: { userId: updated.userId } });
+      }
     }
-    return res.status(constants.HTTPS_SUCCESS || 200).json({ status: true, message: 'User updated successfully', data: updated });
+    return res.status(constants.HTTPS_SUCCESS || 200).json({
+      status: true,
+      message: 'User updated successfully',
+      data: updated
+    });
   } catch (err) {
     if (err && err.code === 11000) {
       const dupField = Object.keys(err.keyPattern || {})[0] || 'unique field';
@@ -810,9 +908,17 @@ const deleteUser = async (req, res, next) => {
     const { recId } = req.body;
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
     if (!recId) return res.status(400).json({ status: false, message: 'recId is required' });
-    const deletedUser = await User.findOneAndUpdate({ _id: recId, tenantId, isdeleted: false }, { $set: { isdeleted: true } }, { new: true }).select('-password');
+    // const deletedUser = await User.findOneAndUpdate({ _id: recId, tenantId, isdeleted: false }, { $set: { isdeleted: true } }, { new: true }).select('-password');
+    // if (!deletedUser) {
+    //   return res.status(constants.HTTPS_NOT_FOUND || 404).json({ status: false, message: 'User not found or already deleted' });
+    // }
+    const deletedUser = await User.findOneAndUpdate({ _id: recId, tenantId, isdeleted: false }, { $set: { isdeleted: true, status: 'Inactive' } }, { new: true }).select('-password');
+
     if (!deletedUser) {
-      return res.status(constants.HTTPS_NOT_FOUND || 404).json({ status: false, message: 'User not found or already deleted' });
+      return res.status(404).json({ status: false, message: 'User not found or already deleted' });
+    }
+    if (deletedUser.staffId) {
+      await Staff.updateOne({ tenantId, staffId: deletedUser.staffId, isdeleted: false }, { $set: { userId: null } });
     }
     return res.status(constants.HTTPS_SUCCESS || 200).json({
       status: true,
@@ -832,34 +938,28 @@ const Loginuser = async (req, res, next) => {
       const err = { status: constants.HTTPS_NOT_FOUND, message: 'User not found.' };
       return next(err);
     }
-
     const isPasswordValid = await bcrypt.compare(password, user.password);
     if (!isPasswordValid) {
       const err = { status: constants.HTTPS_UNAUTHORISED, message: 'Invalid password.' };
       return next(err);
     }
-
     const token = signAccessToken(user);
     const refreshToken = signRefreshToken(user);
     const hashedRefresh = hashToken(refreshToken);
-
+    await Token.deleteMany({ userId: user.userId, expiresAt: { $lt: new Date() } });
     await Token.create({
       userId: user.userId,
       token: hashedRefresh,
       expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
     });
-
     const userdata = { ...user.toJSON(), token };
     delete userdata.password;
-
-    // keep your cookie name used by refreshToken() in your existing code :contentReference[oaicite:4]{index=4}
     res.cookie('refresh_token', refreshToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production' ? true : false,
       sameSite: 'strict',
       maxAge: 7 * 24 * 60 * 60 * 1000
     });
-
     return res.status(constants.HTTPS_SUCCESS).json({ status: true, message: 'Login successful', data: userdata });
   } catch (err) {
     return next(err);
@@ -942,10 +1042,29 @@ const changePassword = async (req, res, next) => {
 //     if (!rows.length) {
 //       return res.status(constants.HTTPS_BAD_REQUEST || 400).json({ status: false, message: 'rows is required' });
 //     }
+//     const empCodesFromUpload = rows.map((r) => (r.empCode ? safeTrim(r.empCode) : null)).filter(Boolean);
+//     const matchedStaff = await Staff.find({
+//       tenantId,
+//       employeeId: { $in: empCodesFromUpload.map((code) => new RegExp(`^${code}$`, 'i')) },
+//       isdeleted: false
+//     }).lean();
+//     const staffMappingDict = matchedStaff.reduce((acc, staff) => {
+//       if (staff.employeeId) acc[String(staff.employeeId).toLowerCase()] = staff.staffId;
+//       return acc;
+//     }, {});
 //     const ops = [];
-//     let inserted = 0;
-//     let updated = 0;
+//     const validEmailsForPostSync = [];
 //     let skipped = 0;
+//     const passwordMap = new Map();
+//     await Promise.all(
+//       rows.map(async (r) => {
+//         const rawPassword = safeTrim(r?.password) || 'Welcome@123';
+//         const key = rawPassword;
+//         if (!passwordMap.has(key)) {
+//           passwordMap.set(key, await bcrypt.hash(rawPassword, Rounds));
+//         }
+//       })
+//     );
 //     for (const r0 of rows) {
 //       const r = r0 || {};
 //       const name = safeTrim(r.name);
@@ -958,12 +1077,15 @@ const changePassword = async (req, res, next) => {
 //       const centerId = r.centerId !== undefined ? (r.centerId ? safeTrim(r.centerId) : null) : null;
 //       const centerName = r.centerName !== undefined ? (r.centerName ? safeTrim(r.centerName) : null) : null;
 //       const rawPassword = safeTrim(r.password) || 'Welcome@123';
-//       const hashedPassword = await bcrypt.hash(rawPassword, Rounds);
 //       if (!name || !email || !phone) {
 //         skipped++;
 //         continue;
 //       }
+//       const hashedPassword = passwordMap.get(rawPassword);
+//       const empCodeKey = empCode ? String(empCode).toLowerCase() : null;
+//       const mappedStaffId = empCodeKey ? staffMappingDict[empCodeKey] || null : null;
 //       const filter = { tenantId, email, isdeleted: false };
+//       if (mappedStaffId) validEmailsForPostSync.push(email);
 //       if (mode === 'insert') {
 //         ops.push({
 //           updateOne: {
@@ -972,6 +1094,7 @@ const changePassword = async (req, res, next) => {
 //               $setOnInsert: {
 //                 tenantId,
 //                 userId: uuid(),
+//                 staffId: mappedStaffId,
 //                 name,
 //                 email,
 //                 phone,
@@ -997,6 +1120,7 @@ const changePassword = async (req, res, next) => {
 //                 name,
 //                 phone,
 //                 empCode,
+//                 staffId: mappedStaffId,
 //                 roleLevel,
 //                 roleLabel,
 //                 centerId,
@@ -1024,17 +1148,30 @@ const changePassword = async (req, res, next) => {
 //       });
 //     }
 //     const bulkRes = await User.bulkWrite(ops, { ordered: false });
-//     inserted = bulkRes?.upsertedCount || 0;
-//     updated = bulkRes?.modifiedCount || 0;
+//     const inserted = bulkRes?.upsertedCount || 0;
+//     const updated = bulkRes?.modifiedCount || 0;
+//     if (validEmailsForPostSync.length > 0) {
+//       const successfullyImportedUsers = await User.find({
+//         tenantId,
+//         email: { $in: validEmailsForPostSync },
+//         isdeleted: false
+//       }).lean();
+//       const staffOps = successfullyImportedUsers
+//         .filter((u) => u.staffId && u.userId)
+//         .map((u) => ({
+//           updateOne: {
+//             filter: { tenantId, staffId: u.staffId, isdeleted: false },
+//             update: { $set: { userId: u.userId } }
+//           }
+//         }));
+//       if (staffOps.length > 0) {
+//         await Staff.bulkWrite(staffOps, { ordered: false });
+//       }
+//     }
 //     return res.status(constants.HTTPS_SUCCESS || 200).json({
 //       status: true,
-//       message: 'User import completed',
-//       data: {
-//         mode,
-//         inserted,
-//         updated,
-//         skipped
-//       }
+//       message: 'User import completed with automatic staff linking',
+//       data: { mode, inserted, updated, skipped }
 //     });
 //   } catch (err) {
 //     if (err && err.code === 11000) {
@@ -1049,46 +1186,88 @@ const importUsers = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     if (!tenantId) {
-      return res.status(constants.HTTPS_BAD_REQUEST || 400).json({ status: false, message: 'tenantId (entiId) is required' });
+      return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
     }
     const modeRaw = safeTrim(req.body.mode);
     const mode = modeRaw === 'insert' ? 'insert' : 'upsert';
     const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
     if (!rows.length) {
-      return res.status(constants.HTTPS_BAD_REQUEST || 400).json({ status: false, message: 'rows is required' });
+      return res.status(400).json({ status: false, message: 'rows is required' });
     }
-    const empCodesFromUpload = rows.map((r) => (r.empCode ? safeTrim(r.empCode) : null)).filter(Boolean);
-    const matchedStaff = await Staff.find({
-      tenantId,
-      employeeId: { $in: empCodesFromUpload.map((code) => new RegExp(`^${code}$`, 'i')) },
-      isdeleted: false
-    }).lean();
-    const staffMappingDict = matchedStaff.reduce((acc, staff) => {
-      if (staff.employeeId) acc[String(staff.employeeId).toLowerCase()] = staff.staffId;
-      return acc;
-    }, {});
+    const empCodesFromUpload = [...new Set(rows.map((r) => (r.empCode ? safeTrim(r.empCode) : null)).filter(Boolean))];
+    let staffMappingDict = {};
+    if (empCodesFromUpload.length) {
+      const matchedStaff = await Staff.find(
+        {
+          tenantId,
+          employeeId: {
+            $in: empCodesFromUpload.map((code) => {
+              const escaped = code.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              return new RegExp(`^${escaped}$`, 'i');
+            })
+          },
+          isdeleted: false
+        },
+        { staffId: 1, userId: 1, employeeId: 1 }
+      ).lean();
+      staffMappingDict = matchedStaff.reduce((acc, s) => {
+        if (s.employeeId) {
+          acc[String(s.employeeId).toLowerCase()] = {
+            staffId: s.staffId,
+            userId: s.userId || null
+          };
+        }
+        return acc;
+      }, {});
+    }
+    const uniquePasswords = [...new Set(rows.map((r) => safeTrim(r?.password) || 'Welcome@123'))];
+    const passwordMap = new Map();
+    await Promise.all(
+      uniquePasswords.map(async (pw) => {
+        passwordMap.set(pw, await bcrypt.hash(pw, Rounds));
+      })
+    );
+    const staffWithExistingUser = Object.values(staffMappingDict)
+      .filter((s) => s.userId)
+      .map((s) => s.userId);
+    const activeLinkedUsers = staffWithExistingUser.length ? await User.find({ tenantId, userId: { $in: staffWithExistingUser }, isdeleted: false }, { userId: 1, email: 1 }).lean() : [];
+    const activeLinkedUserIdSet = new Set(activeLinkedUsers.map((u) => u.userId));
     const ops = [];
+    const skippedRows = [];
     const validEmailsForPostSync = [];
-    let skipped = 0;
     for (const r0 of rows) {
       const r = r0 || {};
       const name = safeTrim(r.name);
       const email = safeLower(r.email);
       const phone = safeTrim(r.phone);
       const roleLevel = safeTrim(r.roleLevel) || 'L4';
-      const roleLabel = ROLE_MAP[roleLevel] || safeTrim(r.roleLabel) || ROLE_MAP.L4;
+      const roleLabel = ROLE_MAP[roleLevel] || ROLE_MAP.L4;
       const status = safeTrim(r.status) || 'Active';
-      const empCode = r.empCode !== undefined ? (r.empCode ? safeTrim(r.empCode) : null) : null;
-      const centerId = r.centerId !== undefined ? (r.centerId ? safeTrim(r.centerId) : null) : null;
-      const centerName = r.centerName !== undefined ? (r.centerName ? safeTrim(r.centerName) : null) : null;
-      const rawPassword = safeTrim(r.password) || 'Welcome@123';
+      const empCode = r.empCode ? safeTrim(r.empCode) : null;
+      const centerId = r.centerId ? safeTrim(r.centerId) : null;
+      const centerName = r.centerName ? safeTrim(r.centerName) : null;
+      const rawPw = safeTrim(r.password) || 'Welcome@123';
       if (!name || !email || !phone) {
-        skipped++;
+        skippedRows.push({
+          email: email || '(empty)',
+          reason: [!name && 'name required', !email && 'email required', !phone && 'phone required'].filter(Boolean).join(', ')
+        });
         continue;
       }
-      const hashedPassword = await bcrypt.hash(rawPassword, Rounds);
-      const empCodeKey = empCode ? String(empCode).toLowerCase() : null;
-      const mappedStaffId = empCodeKey ? staffMappingDict[empCodeKey] || null : null;
+      const hashedPassword = passwordMap.get(rawPw);
+      const empCodeKey = empCode ? empCode.toLowerCase() : null;
+      const staffEntry = empCodeKey ? staffMappingDict[empCodeKey] : null;
+      let mappedStaffId = staffEntry?.staffId || null;
+      if (staffEntry?.userId && activeLinkedUserIdSet.has(staffEntry.userId)) {
+        const linkedUser = activeLinkedUsers.find((u) => u.userId === staffEntry.userId);
+        if (linkedUser && linkedUser.email !== email) {
+          skippedRows.push({
+            email,
+            reason: `empCode ${empCode} already linked to user: ${linkedUser.email}`
+          });
+          mappedStaffId = null;
+        }
+      }
       const filter = { tenantId, email, isdeleted: false };
       if (mappedStaffId) validEmailsForPostSync.push(email);
       if (mode === 'insert') {
@@ -1096,15 +1275,17 @@ const importUsers = async (req, res, next) => {
           updateOne: {
             filter,
             update: {
+              $set: {
+                ...(empCode !== null ? { empCode } : {}),
+                ...(mappedStaffId !== null ? { staffId: mappedStaffId } : {})
+              },
               $setOnInsert: {
                 tenantId,
                 userId: uuid(),
-                staffId: mappedStaffId,
                 name,
                 email,
                 phone,
                 password: hashedPassword,
-                empCode,
                 roleLevel,
                 roleLabel,
                 centerId,
@@ -1146,22 +1327,18 @@ const importUsers = async (req, res, next) => {
       }
     }
     if (!ops.length) {
-      return res.status(constants.HTTPS_SUCCESS || 200).json({
+      return res.status(200).json({
         status: true,
         message: 'No valid rows to import',
-        data: { mode, inserted: 0, updated: 0, skipped }
+        data: { mode, inserted: 0, updated: 0, skipped: skippedRows.length, skippedRows }
       });
     }
     const bulkRes = await User.bulkWrite(ops, { ordered: false });
     const inserted = bulkRes?.upsertedCount || 0;
     const updated = bulkRes?.modifiedCount || 0;
-    if (validEmailsForPostSync.length > 0) {
-      const successfullyImportedUsers = await User.find({
-        tenantId,
-        email: { $in: validEmailsForPostSync },
-        isdeleted: false
-      }).lean();
-      const staffOps = successfullyImportedUsers
+    if (validEmailsForPostSync.length) {
+      const importedUsers = await User.find({ tenantId, email: { $in: validEmailsForPostSync }, isdeleted: false }, { userId: 1, staffId: 1, email: 1 }).lean();
+      const staffOps = importedUsers
         .filter((u) => u.staffId && u.userId)
         .map((u) => ({
           updateOne: {
@@ -1169,17 +1346,23 @@ const importUsers = async (req, res, next) => {
             update: { $set: { userId: u.userId } }
           }
         }));
-      if (staffOps.length > 0) {
+      if (staffOps.length) {
         await Staff.bulkWrite(staffOps, { ordered: false });
       }
     }
-    return res.status(constants.HTTPS_SUCCESS || 200).json({
+    return res.status(200).json({
       status: true,
       message: 'User import completed with automatic staff linking',
-      data: { mode, inserted, updated, skipped }
+      data: {
+        mode,
+        inserted,
+        updated,
+        skipped: skippedRows.length,
+        skippedRows
+      }
     });
   } catch (err) {
-    if (err && err.code === 11000) {
+    if (err?.code === 11000) {
       const dupField = Object.keys(err.keyPattern || {})[0] || 'unique field';
       return res.status(409).json({ status: false, message: `Duplicate ${dupField}.` });
     }
@@ -1688,7 +1871,7 @@ const createStaff = async (req, res, next) => {
     const joiningDate = toNum(payload.joiningDate);
     const relievingDate = payload.relievingDate ? toNum(payload.relievingDate) : null;
     const facultyType = safeTrim(payload.facultyType) || null;
-    const payroll = safeTrim(payload.payroll);
+    const payroll = safeTrim(payload.payroll).toLowerCase();
     const department = safeTrim(payload.department);
     const subject = safeTrim(payload.subject) || null;
     const weekoff = Array.isArray(payload.weekoff) ? payload.weekoff.map((x) => safeTrim(x)).filter(Boolean) : [];
@@ -1813,7 +1996,14 @@ const listStaff = async (req, res, next) => {
     const search = safeTrim(req.query.search);
     const list = safeTrim(req.query.list);
     const sort = typeof buildSort === 'function' ? buildSort(req.query.sort) : { createdAt: -1 };
+    // const query = { tenantId, isdeleted: false };
+    const centerId = safeTrim(req.query.centerId);
+    const role = safeTrim(req.query.role);
+    const status = safeTrim(req.query.status);
     const query = { tenantId, isdeleted: false };
+    if (centerId) query.centerId = centerId;
+    if (role) query.role = role;
+    if (status) query.status = status;
     if (search) {
       const rx = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
       query.$or = [{ staffName: rx }, { employeeId: rx }, { staffCode: rx }, { phone: rx }, { email: rx }, { role: rx }, { centerId: rx }];
@@ -1858,7 +2048,7 @@ const viewStaff = async (req, res, next) => {
     if (recId) filter._id = recId;
     else if (staffId) filter.staffId = staffId;
     else return res.status(400).json({ status: false, message: 'recId or staffId is required' });
-    const doc = await Staff.findOne(filter).populate({ path: 'centerId', model: 'center', localField: 'centerId', foreignField: 'centerId', model: 'center', justOne: true, select: 'centerName centerCode centerId' }).populate('department', 'departmentName').populate('subject', 'subjectName').lean();
+    const doc = await Staff.findOne(filter).populate({ path: 'centerId', localField: 'centerId', foreignField: 'centerId', model: 'center', justOne: true, select: 'centerName centerCode centerId' }).populate('department', 'departmentName').populate('subject', 'subjectName').lean();
     if (!doc) return res.status(404).json({ status: false, message: 'Staff not found' });
     return res.status(constants.HTTPS_SUCCESS).json({
       status: true,
@@ -1937,9 +2127,74 @@ const updateStaff = async (req, res, next) => {
     if (patch.payroll !== undefined && !patch.payroll) return res.status(400).json({ status: false, message: 'payroll cannot be empty' });
     if (patch.department !== undefined && !patch.department) return res.status(400).json({ status: false, message: 'department cannot be empty' });
     const doc = await Staff.findOneAndUpdate({ _id: recId, tenantId, isdeleted: false }, { $set: patch }, { new: true }).lean();
-    return res.status(constants.HTTPS_SUCCESS).json({
+    if (doc?.userId) {
+      const userPatch = {};
+      if (patch.staffName !== undefined) userPatch.name = doc.staffName;
+      if (patch.phone !== undefined) userPatch.phone = doc.phone;
+      if (patch.email !== undefined) userPatch.email = doc.email;
+      if (patch.centerId !== undefined) userPatch.centerId = doc.centerId;
+      if (Object.keys(userPatch).length) {
+        await User.updateOne({ tenantId, userId: doc.userId, isdeleted: false }, { $set: userPatch }).catch(() => {});
+      }
+    }
+    if (req.body.createSystemAccess === true && !doc.userId) {
+      const email = (doc.email || '').trim();
+      if (!email) {
+        // Staff updated OK, but can't create user without email — warn but don't fail
+        return res.status(200).json({
+          status: true,
+          message: 'Staff updated. Portal access skipped — email is required to create a login account.',
+          data: toStaffResponse(doc)
+        });
+      }
+
+      // Check if a user with this email already exists for this tenant
+      const existingUser = await User.findOne({ tenantId, email, isdeleted: false }).lean();
+      if (existingUser) {
+        // Email already has a user — link them instead of creating duplicate
+        await Staff.updateOne({ tenantId, staffId: doc.staffId, isdeleted: false }, { $set: { userId: existingUser.userId } });
+        await User.updateOne({ tenantId, userId: existingUser.userId, isdeleted: false }, { $set: { staffId: doc.staffId, empCode: doc.employeeId } });
+        return res.status(200).json({
+          status: true,
+          message: 'Staff updated. Existing user account linked for portal access.',
+          data: toStaffResponse({ ...doc, userId: existingUser.userId })
+        });
+      }
+
+      // Create a new User account
+      const newUserId = uuid();
+      const hashedPassword = await bcrypt.hash('Welcome@123', Rounds);
+      const roleLevel = 'L4';
+
+      await User.create({
+        tenantId,
+        userId: newUserId,
+        staffId: doc.staffId,
+        name: doc.staffName,
+        email,
+        phone: doc.phone || '',
+        password: hashedPassword,
+        empCode: doc.employeeId || null,
+        roleLevel,
+        roleLabel: ROLE_MAP[roleLevel] || 'Academic Operations',
+        centerId: doc.centerId || null,
+        status: 'Active',
+        isdeleted: false
+      });
+
+      // Back-link userId on Staff
+      await Staff.updateOne({ tenantId, staffId: doc.staffId, isdeleted: false }, { $set: { userId: newUserId } });
+
+      return res.status(200).json({
+        status: true,
+        message: 'Staff updated and portal access granted. Default password: Welcome@123',
+        data: toStaffResponse({ ...doc, userId: newUserId })
+      });
+    }
+
+    return res.status(200).json({
       status: true,
-      message: 'Staff updated',
+      message: 'Staff updated successfully',
       data: toStaffResponse(doc)
     });
   } catch (err) {
@@ -1963,8 +2218,13 @@ const deleteStaff = async (req, res, next) => {
     const recId = safeTrim(req.body.recId);
     if (!recId) return res.status(400).json({ status: false, message: 'recId is required' });
     const updatedBy = req.body.updatedBy || null;
+    // const doc = await Staff.findOneAndUpdate({ _id: recId, tenantId, isdeleted: false }, { $set: { isdeleted: true, status: 'Inactive', updatedBy } }, { new: true }).lean();
+    // if (!doc) return res.status(404).json({ status: false, message: 'Staff not found' });
     const doc = await Staff.findOneAndUpdate({ _id: recId, tenantId, isdeleted: false }, { $set: { isdeleted: true, status: 'Inactive', updatedBy } }, { new: true }).lean();
     if (!doc) return res.status(404).json({ status: false, message: 'Staff not found' });
+    if (doc.userId) {
+      await User.updateOne({ tenantId, userId: doc.userId, isdeleted: false }, { $set: { status: 'Inactive' } });
+    }
     return res.status(constants.HTTPS_SUCCESS).json({
       status: true,
       message: 'Staff deleted',
@@ -2123,7 +2383,7 @@ const bulkImportStaff = async (req, res, next) => {
       relievingDate: r.relievingDate,
       facultyType: r.facultyType,
       subject: r.subject,
-      payroll: r.payroll.toUpperCase(),
+      payroll: r.payroll.toLowerCase(),
       department: r.department,
       weekoff: r.weekoff,
       status: r.status,
