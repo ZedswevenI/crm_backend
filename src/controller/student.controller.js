@@ -940,7 +940,7 @@ const getStudentProfileView = async (req, res, next) => {
   }
 };
 
-const getStudentMaterials = async (req, res, next) => {
+const getStudentMaterialSubjects = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     const identifier = safeTrim(req.body?.studentNo || req.body?.studentId);
@@ -967,6 +967,136 @@ const getStudentMaterials = async (req, res, next) => {
       $and: [{ $or: [{ availableFrom: null }, { availableFrom: { $lte: now } }] }, { $or: [{ availableUntil: null }, { availableUntil: { $gte: now } }] }],
       $or: [{ batchIds: batchCode }, { batchIds: batchId }, { studentIds: studentId }]
     };
+    const materials = await StudyMaterial.find(materialQuery, { subjectId: 1 }).populate('subjectId', 'subjectName subjectCode').lean();
+    const subjectMap = new Map();
+    for (const mat of materials) {
+      if (!mat.subjectId) continue;
+      const subIdStr = String(mat.subjectId._id);
+      if (!subjectMap.has(subIdStr)) {
+        subjectMap.set(subIdStr, {
+          subjectId: subIdStr,
+          subjectName: mat.subjectId.subjectName,
+          subjectCode: mat.subjectId.subjectCode,
+          materialCount: 0
+        });
+      }
+      subjectMap.get(subIdStr).materialCount++;
+    }
+    const subjects = Array.from(subjectMap.values());
+    return res.status(200).json({
+      status: true,
+      message: 'Subjects with study materials retrieved successfully',
+      data: {
+        studentId: student.studentId,
+        subjectsCount: subjects.length,
+        subjects: subjects
+      }
+    });
+  } catch (err) {
+    console.log('err ', err);
+    return next(err);
+  }
+};
+
+// const getStudentMaterials = async (req, res, next) => {
+//   try {
+//     const tenantId = pickTenantId(req);
+//     const identifier = safeTrim(req.body?.studentNo || req.body?.studentId);
+//     if (!tenantId || !identifier) {
+//       return res.status(400).json({ status: false, message: 'tenantId and studentNo are required' });
+//     }
+//     const student = await StudentProfile.findOne({
+//       tenantId,
+//       status: 'ACTIVE',
+//       isdeleted: false,
+//       $or: [{ studentId: identifier }, { admissionNo: identifier }, { registrationNumber: identifier }]
+//     }).lean();
+//     if (!student) {
+//       return res.status(404).json({ status: false, message: 'Student profile not found' });
+//     }
+//     const batchCode = safeTrim(student.batchCode);
+//     const batchId = safeTrim(student.batchId);
+//     const studentId = safeTrim(student.studentId);
+//     const now = Date.now();
+//     const materialQuery = {
+//       tenantId,
+//       status: 'Active',
+//       isdeleted: false,
+//       $and: [{ $or: [{ availableFrom: null }, { availableFrom: { $lte: now } }] }, { $or: [{ availableUntil: null }, { availableUntil: { $gte: now } }] }],
+//       $or: [{ batchIds: batchCode }, { batchIds: batchId }, { studentIds: studentId }]
+//     };
+//     const materials = await StudyMaterial.find(materialQuery)
+//       .sort({ createdAt: -1 })
+//       .populate('subjectId', 'subjectName subjectCode')
+//       .populate({
+//         path: 'topicId',
+//         localField: 'topicId',
+//         foreignField: 'topicId',
+//         model: 'topic',
+//         justOne: true,
+//         select: 'topicId topicName topicCode _id'
+//       })
+//       .populate({
+//         path: 'subTopicId',
+//         localField: 'subTopicId',
+//         foreignField: 'subTopicId',
+//         model: 'subtopic',
+//         justOne: true,
+//         select: 'subTopicName subTopicCode subTopicId _id'
+//       })
+//       .lean();
+//     return res.status(200).json({
+//       status: true,
+//       message: 'Study materials retrieved successfully',
+//       data: {
+//         studentId: student.studentId,
+//         materialsCount: materials.length,
+//         materials: materials
+//       }
+//     });
+//   } catch (err) {
+//     return next(err);
+//   }
+// };
+
+const getStudentMaterials = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const identifier = safeTrim(req.body?.studentNo || req.body?.studentId);
+    const subjectId = safeTrim(req.body?.subjectId);
+
+    if (!tenantId || !identifier) {
+      return res.status(400).json({ status: false, message: 'tenantId and studentNo are required' });
+    }
+    if (!subjectId || !mongoose.Types.ObjectId.isValid(subjectId)) {
+      return res.status(400).json({ status: false, message: 'A valid subjectId is required' });
+    }
+
+    const student = await StudentProfile.findOne({
+      tenantId,
+      status: 'ACTIVE',
+      isdeleted: false,
+      $or: [{ studentId: identifier }, { admissionNo: identifier }, { registrationNumber: identifier }]
+    }).lean();
+
+    if (!student) {
+      return res.status(404).json({ status: false, message: 'Student profile not found' });
+    }
+
+    const batchCode = safeTrim(student.batchCode);
+    const batchId = safeTrim(student.batchId);
+    const studentId = safeTrim(student.studentId);
+    const now = Date.now();
+
+    const materialQuery = {
+      tenantId,
+      status: 'Active',
+      isdeleted: false,
+      subjectId: new mongoose.Types.ObjectId(subjectId), // Force filter by specific subject
+      $and: [{ $or: [{ availableFrom: null }, { availableFrom: { $lte: now } }] }, { $or: [{ availableUntil: null }, { availableUntil: { $gte: now } }] }],
+      $or: [{ batchIds: batchCode }, { batchIds: batchId }, { studentIds: studentId }]
+    };
+
     const materials = await StudyMaterial.find(materialQuery)
       .sort({ createdAt: -1 })
       .populate('subjectId', 'subjectName subjectCode')
@@ -987,13 +1117,103 @@ const getStudentMaterials = async (req, res, next) => {
         select: 'subTopicName subTopicCode subTopicId _id'
       })
       .lean();
+
     return res.status(200).json({
       status: true,
       message: 'Study materials retrieved successfully',
       data: {
         studentId: student.studentId,
+        subjectId: subjectId,
         materialsCount: materials.length,
         materials: materials
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const getStudentAttendanceReport = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const identifier = safeTrim(req.body?.studentNo || req.body?.studentId);
+    const fromDate = toInt(req.body?.fromDate, 0);
+    const toDate = toInt(req.body?.toDate, Date.now());
+    if (!tenantId || !identifier) {
+      return res.status(400).json({ status: false, message: 'tenantId and studentNo are required' });
+    }
+    if (fromDate && toDate && fromDate > toDate) {
+      return res.status(400).json({ status: false, message: 'fromDate must be before or equal to toDate' });
+    }
+    const student = await StudentProfile.findOne({
+      tenantId,
+      status: 'ACTIVE',
+      isdeleted: false,
+      $or: [{ studentId: identifier }, { admissionNo: identifier }, { registrationNumber: identifier }]
+    }).lean();
+    if (!student) {
+      return res.status(404).json({ status: false, message: 'Student profile not found' });
+    }
+    const matchQuery = {
+      tenantId,
+      batchCode: student.batchCode,
+      isdeleted: false
+    };
+    if (fromDate || toDate) {
+      matchQuery.date = {};
+      if (fromDate) matchQuery.date.$gte = fromDate;
+      if (toDate) matchQuery.date.$lte = toDate;
+    }
+    const pipeline = [
+      { $match: matchQuery },
+      { $unwind: '$students' },
+      { $match: { 'students.studentId': student.studentId } },
+      {
+        $project: {
+          _id: 0,
+          attendanceId: 1,
+          date: 1,
+          periodNo: 1,
+          facultyId: 1,
+          subjectId: 1,
+          topicTaught: 1,
+          status: '$students.status',
+          remarks: '$students.remarks'
+        }
+      },
+      { $sort: { date: -1, periodNo: 1 } }
+    ];
+    const detailedRecords = await Attendance.aggregate(pipeline);
+    let totalPeriods = 0;
+    let presentCount = 0;
+    let absentCount = 0;
+    let lateCount = 0;
+    detailedRecords.forEach((record) => {
+      totalPeriods++;
+      if (record.status === 'PRESENT') presentCount++;
+      else if (record.status === 'ABSENT') absentCount++;
+      else if (record.status === 'LATE') lateCount++;
+    });
+    const attended = presentCount + lateCount;
+    const attendancePercentage = totalPeriods > 0 ? Math.round((attended / totalPeriods) * 100 * 100) / 100 : 0;
+    return res.status(200).json({
+      status: true,
+      message: 'Student attendance report generated successfully',
+      data: {
+        student: {
+          studentId: student.studentId,
+          admissionNo: student.admissionNo,
+          name: student.student?.name,
+          batchCode: student.batchCode
+        },
+        summary: {
+          totalPeriods,
+          present: presentCount,
+          absent: absentCount,
+          late: lateCount,
+          attendancePercentage
+        },
+        details: detailedRecords
       }
     });
   } catch (err) {
@@ -1013,5 +1233,7 @@ export default {
   getStudentTimetable,
   getStudentAttendance,
   getStudentProfileView,
-  getStudentMaterials
+  getStudentMaterialSubjects,
+  getStudentMaterials,
+  getStudentAttendanceReport
 };
