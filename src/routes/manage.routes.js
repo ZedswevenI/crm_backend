@@ -10,6 +10,7 @@ import supportCtrl from '../controller/supportTicket.controller.js';
 import circularCtrl from '../controller/circular.controller.js';
 import libraryCtrl from '../controller/material.controller.js';
 import phaseCtrl from '../controller/phaseplan.controller.js';
+import performanceCtrl from '../controller/performance.controller.js';
 
 // Phase Plan
 routes.post('/phase/create', validatetoken, phaseCtrl.createPhase);
@@ -59,6 +60,21 @@ routes.post('/circular/reports', validatetoken, circularCtrl.getCircularReports)
 routes.post('/circular/publish', validatetoken, circularCtrl.publishCircular);
 routes.post('/circular/markasread', circularCtrl.markCircularAsRead);
 routes.post('/circular/getRead/list', validatetoken, circularCtrl.getCircularReadList);
+
+// Staff Performance
+routes.post('/staff/performance/add', validatetoken, performanceCtrl.addStaffFeedback);
+routes.post('/staff/performance/list', validatetoken, performanceCtrl.listStaffFeedback);
+routes.post('/staff/performance/list/all', validatetoken, performanceCtrl.listAllStaffPerf);
+routes.post('/staff/performance/update', validatetoken, performanceCtrl.updateStaffFeedback);
+routes.post('/staff/performance/delete', validatetoken, performanceCtrl.deleteStaffFeedback);
+
+//Student Performance
+routes.post('/student/performance/getstudent', validatetoken, performanceCtrl.getStudentPerformance);
+routes.post('/student/performance/recal', validatetoken, performanceCtrl.recalcStudentPerformance);
+routes.post('/student/performance/overide/assignment', validatetoken, performanceCtrl.overrideAssignmentPerf);
+routes.post('/student/performance/add', validatetoken, performanceCtrl.addStudentFeedback);
+routes.post('/student/performance/delete', validatetoken, performanceCtrl.deleteStudentFeedback);
+routes.post('/student/performance/getbatch', validatetoken, performanceCtrl.getBatchPerformance);
 
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Timetable routes' }));
 
