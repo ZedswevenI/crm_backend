@@ -240,22 +240,182 @@ const revokeEnablement = async (req, res, next) => {
   }
 };
 
-const getStudentPackages = async (req, res, next) => {
+// const getStudentPackages = async (req, res, next) => {
+//   try {
+//     const tenantId = pickTenantId(req);
+//     const identifier = safeTrim(req.body?.studentNo || req.body?.studentId);
+//     if (!tenantId || !identifier) {
+//       return res.status(400).json({ status: false, message: 'tenantId and studentNo are required' });
+//     }
+//     const student = await StudentProfile.findOne({
+//       tenantId,
+//       status: 'ACTIVE',
+//       isdeleted: false,
+//       $or: [{ studentId: identifier }, { admissionNo: identifier }, { registrationNumber: identifier }]
+//     }).lean();
+//     if (!student) {
+//       return res.status(404).json({ status: false, message: 'Student profile not found' });
+//     }
+//     const now = Date.now();
+//     const activeEnablements = await PackageEnablement.find({
+//       tenantId,
+//       isdeleted: false,
+//       status: 'ACTIVE',
+//       enableDate: { $lte: now },
+//       disableDate: { $gte: now },
+//       $or: [
+//         { scope: 'PROGRAM', targetIds: student.programId },
+//         { scope: 'BATCH', targetIds: student.batchCode },
+//         { scope: 'BATCH', targetIds: student.batchId },
+//         { scope: 'STUDENT', targetIds: student.studentId }
+//       ]
+//     }).lean();
+//     if (!activeEnablements.length) {
+//       return res.status(200).json({ status: true, data: { studentId: student.studentId, packagesCount: 0, packages: [] } });
+//     }
+//     const packageIds = [...new Set(activeEnablements.map((e) => e.packageId))];
+//     const masterPackages = await Package.find({
+//       tenantId,
+//       packageId: { $in: packageIds },
+//       isdeleted: false,
+//       status: 'ACTIVE'
+//     }).lean();
+//     const packageMap = new Map(masterPackages.map((p) => [p.packageId, p]));
+//     const availablePackages = [];
+//     for (const e of activeEnablements) {
+//       const pkg = packageMap.get(e.packageId);
+//       if (pkg) {
+//         availablePackages.push({
+//           enablementId: e.enablementId,
+//           scope: e.scope,
+//           validUntil: e.disableDate,
+//           package: pkg
+//         });
+//       }
+//     }
+//     return res.status(200).json({
+//       status: true,
+//       message: 'Student packages retrieved',
+//       data: {
+//         studentId: student.studentId,
+//         packagesCount: availablePackages.length,
+//         packages: availablePackages
+//       }
+//     });
+//   } catch (err) {
+//     return next(err);
+//   }
+// };
+
+const getStudentPackageSubjects = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     const identifier = safeTrim(req.body?.studentNo || req.body?.studentId);
+
     if (!tenantId || !identifier) {
       return res.status(400).json({ status: false, message: 'tenantId and studentNo are required' });
     }
+
     const student = await StudentProfile.findOne({
       tenantId,
       status: 'ACTIVE',
       isdeleted: false,
       $or: [{ studentId: identifier }, { admissionNo: identifier }, { registrationNumber: identifier }]
     }).lean();
+
     if (!student) {
       return res.status(404).json({ status: false, message: 'Student profile not found' });
     }
+
+    const now = Date.now();
+
+    // 1. Get all active enablements mapping to this student
+    const activeEnablements = await PackageEnablement.find({
+      tenantId,
+      isdeleted: false,
+      status: 'ACTIVE',
+      enableDate: { $lte: now },
+      disableDate: { $gte: now },
+      $or: [
+        { scope: 'PROGRAM', targetIds: student.programId },
+        { scope: 'BATCH', targetIds: student.batchCode },
+        { scope: 'BATCH', targetIds: student.batchId },
+        { scope: 'STUDENT', targetIds: student.studentId }
+      ]
+    }).lean();
+
+    if (!activeEnablements.length) {
+      return res.status(200).json({ status: true, data: { studentId: student.studentId, subjectsCount: 0, subjects: [] } });
+    }
+
+    // 2. Fetch only the subject details of the permitted packages
+    const packageIds = [...new Set(activeEnablements.map((e) => e.packageId))];
+    const masterPackages = await Package.find(
+      {
+        tenantId,
+        packageId: { $in: packageIds },
+        isdeleted: false,
+        status: 'ACTIVE'
+      },
+      { subjectId: 1, subjectName: 1 }
+    ).lean();
+
+    // 3. Group and count by subjectId
+    const subjectMap = new Map();
+    for (const pkg of masterPackages) {
+      if (!pkg.subjectId) continue;
+      const subIdStr = String(pkg.subjectId);
+
+      if (!subjectMap.has(subIdStr)) {
+        subjectMap.set(subIdStr, {
+          subjectId: subIdStr,
+          subjectName: pkg.subjectName || 'Unknown Subject',
+          packageCount: 0
+        });
+      }
+      subjectMap.get(subIdStr).packageCount++;
+    }
+
+    const subjects = Array.from(subjectMap.values());
+
+    return res.status(200).json({
+      status: true,
+      message: 'Subjects with packages retrieved successfully',
+      data: {
+        studentId: student.studentId,
+        subjectsCount: subjects.length,
+        subjects: subjects
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const getStudentPackages = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const identifier = safeTrim(req.body?.studentNo || req.body?.studentId);
+    const subjectId = safeTrim(req.body?.subjectId);
+
+    if (!tenantId || !identifier) {
+      return res.status(400).json({ status: false, message: 'tenantId and studentNo are required' });
+    }
+    if (!subjectId) {
+      return res.status(400).json({ status: false, message: 'subjectId is required' });
+    }
+
+    const student = await StudentProfile.findOne({
+      tenantId,
+      status: 'ACTIVE',
+      isdeleted: false,
+      $or: [{ studentId: identifier }, { admissionNo: identifier }, { registrationNumber: identifier }]
+    }).lean();
+
+    if (!student) {
+      return res.status(404).json({ status: false, message: 'Student profile not found' });
+    }
+
     const now = Date.now();
     const activeEnablements = await PackageEnablement.find({
       tenantId,
@@ -270,18 +430,26 @@ const getStudentPackages = async (req, res, next) => {
         { scope: 'STUDENT', targetIds: student.studentId }
       ]
     }).lean();
+
     if (!activeEnablements.length) {
       return res.status(200).json({ status: true, data: { studentId: student.studentId, packagesCount: 0, packages: [] } });
     }
+
     const packageIds = [...new Set(activeEnablements.map((e) => e.packageId))];
+
+    // Filter master packages by BOTH the permitted IDs and the requested subjectId
     const masterPackages = await Package.find({
       tenantId,
       packageId: { $in: packageIds },
+      subjectId: subjectId,
       isdeleted: false,
       status: 'ACTIVE'
     }).lean();
+
     const packageMap = new Map(masterPackages.map((p) => [p.packageId, p]));
     const availablePackages = [];
+
+    // Build final list (will skip any enablements that don't match the subject)
     for (const e of activeEnablements) {
       const pkg = packageMap.get(e.packageId);
       if (pkg) {
@@ -293,11 +461,13 @@ const getStudentPackages = async (req, res, next) => {
         });
       }
     }
+
     return res.status(200).json({
       status: true,
-      message: 'Student packages retrieved',
+      message: 'Student packages retrieved successfully',
       data: {
         studentId: student.studentId,
+        subjectId: subjectId,
         packagesCount: availablePackages.length,
         packages: availablePackages
       }
@@ -316,5 +486,6 @@ export default {
   assignPackage,
   reportPackageEnablement,
   revokeEnablement,
-  getStudentPackages
+  getStudentPackages,
+  getStudentPackageSubjects
 };
