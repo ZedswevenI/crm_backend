@@ -21,6 +21,7 @@ const studentPerformanceSchema = new mongoose.Schema(
     academicYear: { type: String, required: true, trim: true },
     programId: { type: String, default: null, trim: true },
     centerId: { type: String, default: null, trim: true },
+    subjectId: { type: String, default: null, trim: true },
     assignment: {
       cgpa: { type: Number, default: null },
       attempts: { type: Number, default: null },
@@ -41,9 +42,9 @@ const studentPerformanceSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
-
-studentPerformanceSchema.index({ tenantId: 1, studentId: 1, academicYear: 1 }, { unique: true });
-studentPerformanceSchema.index({ tenantId: 1, batchId: 1, academicYear: 1 });
+studentPerformanceSchema.index({ tenantId: 1, studentId: 1, academicYear: 1, subjectId: 1 }, { unique: true });
+studentPerformanceSchema.index({ tenantId: 1, batchId: 1 });
 studentPerformanceSchema.index({ tenantId: 1, performanceId: 1 });
 
-export default mongoose.model('StudentPerformance', studentPerformanceSchema);
+const StudentPerformance = mongoose.model('StudentPerformance', studentPerformanceSchema);
+export default StudentPerformance;

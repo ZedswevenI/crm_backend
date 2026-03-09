@@ -69,8 +69,8 @@ routes.post('/staff/performance/update', validatetoken, performanceCtrl.updateSt
 routes.post('/staff/performance/delete', validatetoken, performanceCtrl.deleteStaffFeedback);
 
 //Student Performance
-routes.post('/student/performance/getstudent', validatetoken, performanceCtrl.getStudentPerformance);
-routes.post('/student/performance/recal', validatetoken, performanceCtrl.recalcStudentPerformance);
+routes.post('/student/performance/getstudent', performanceCtrl.getStudentPerformance);
+routes.post('/student/performance/recal', performanceCtrl.recalcStudentPerformance);
 routes.post('/student/performance/overide/assignment', validatetoken, performanceCtrl.overrideAssignmentPerf);
 routes.post('/student/performance/add', validatetoken, performanceCtrl.addStudentFeedback);
 routes.post('/student/performance/delete', validatetoken, performanceCtrl.deleteStudentFeedback);

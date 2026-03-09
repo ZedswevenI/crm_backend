@@ -155,6 +155,7 @@ routes.post('/package/list', validatetoken, packageCtrl.listPackages);
 routes.post('/package/enable', validatetoken, packageCtrl.assignPackage);
 routes.post('/package/disable', validatetoken, packageCtrl.revokeEnablement);
 routes.post('/package/enable/report', validatetoken, packageCtrl.reportPackageEnablement);
+routes.post('/package/students/report', packageCtrl.getStudentPackageSubjects);
 routes.post('/package/students', packageCtrl.getStudentPackages);
 
 routes.post('/download', tenantCtrl.downloadFile);
