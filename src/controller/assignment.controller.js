@@ -1033,5 +1033,5 @@ export default {
   listResultsByBatch,
   listTopicEnableStatus,
   enabledTestsByTopic,
-  getTestIds: getTestIds
+  getTestIds
 };
