@@ -25,15 +25,15 @@ const toNum = (v) => {
   return Number.isFinite(n) ? n : null;
 };
 
-const WEIGHTS = null;
+const DEFAULT_WEIGHTS = { assignment: 0.4, mockExam: 0.3, schoolExam: 0.3 };
 
-const computeCombinedScore = (assignment, examMarks) => {
-  if (!WEIGHTS) return null;
+const computeCombinedScore = (assignment, examMarks, weights = DEFAULT_WEIGHTS) => {
   const assignmentScore = assignment?.cgpa != null ? (assignment.cgpa / 10) * 100 : null;
-  const mockScore = examMarks?.mock?.score ?? null;
-  const schoolScore = examMarks?.school?.score ?? null;
+  const mockScore = examMarks?.mock?.score != null ? toNum(examMarks.mock.score) : null;
+  const schoolScore = examMarks?.school?.score != null ? toNum(examMarks.school.score) : null;
   if (assignmentScore === null || mockScore === null || schoolScore === null) return null;
-  return assignmentScore * WEIGHTS.assignment + mockScore * WEIGHTS.mockExam + schoolScore * WEIGHTS.schoolExam;
+  const combined = assignmentScore * weights.assignment + mockScore * weights.mockExam + schoolScore * weights.schoolExam;
+  return Math.round(combined * 100) / 100;
 };
 
 const addStaffFeedback = async (req, res, next) => {
@@ -181,34 +181,27 @@ const listAllStaffPerf = async (req, res, next) => {
 };
 
 const pullAssignmentData = async (tenantId, studentId, admissionNo) => {
-  const profile = await StudentProfile.findOne({ tenantId, studentId, isdeleted: false }, { cgpa: 1, admissionNo: 1 }).lean();
-  const cgpa = profile?.cgpa != null ? toNum(profile.cgpa) : null;
-  const enabledTests = await BatchAssignEnable.find(
-    {
-      tenantId,
-      isdeleted: false,
-      status: 'enabled',
-      'students.admissionNo': admissionNo
-    },
-    { 'students.$': 1 }
-  ).lean();
+  const results = await AssignmentResult.find({ tenantId, admissionNo, isdeleted: false, status: 'completed' }, { obtainedMarks: 1, totalMarks: 1, cgpa: 1, numberOfReattempts: 1 }).lean();
   let totalAttempts = 0;
-  let totalMarks = 0;
-  let totalMaxMarks = 0;
+  let totalSecured = 0;
+  let totalMax = 0;
+  let totalCgpa = 0;
   let recordCount = 0;
-  for (const test of enabledTests || []) {
-    const entry = (test.students || []).find((s) => s.admissionNo === admissionNo);
-    if (!entry) continue;
-    totalAttempts += toNum(entry.attempts) || 0;
-    if (entry.marks != null) totalMarks += toNum(entry.marks) || 0;
-    if (entry.maxMarks != null) totalMaxMarks += toNum(entry.maxMarks) || 0;
-    recordCount++;
+  for (const res of results || []) {
+    totalAttempts += toNum(res.numberOfReattempts) || 1;
+    totalSecured += toNum(res.obtainedMarks);
+    totalMax += toNum(res.totalMarks);
+    if (res.cgpa != null) {
+      totalCgpa += toNum(res.cgpa);
+      recordCount++;
+    }
   }
+  const avgCgpa = recordCount > 0 ? Math.round((totalCgpa / recordCount) * 100) / 100 : null;
   return {
-    cgpa,
-    attempts: recordCount > 0 ? Math.round(totalAttempts / recordCount) : null,
-    marksSecured: recordCount > 0 && totalMarks > 0 ? totalMarks : null,
-    marksTotal: recordCount > 0 && totalMaxMarks > 0 ? totalMaxMarks : null,
+    cgpa: avgCgpa,
+    attempts: totalAttempts,
+    marksSecured: recordCount > 0 ? totalSecured : null,
+    marksTotal: recordCount > 0 ? totalMax : null,
     overridden: false,
     lastSyncedAt: Date.now()
   };
@@ -416,6 +409,34 @@ const getBatchPerformance = async (req, res, next) => {
         avgCgpa: avgCgpa !== null ? Math.round(avgCgpa * 100) / 100 : null,
         avgCombinedScore: avgCombinedScore !== null ? Math.round(avgCombinedScore * 100) / 100 : null
       }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const updateExamMarks = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+    const { studentId, academicYear, mockMarks, schoolMarks } = req.body;
+    if (!studentId || !academicYear) {
+      return res.status(400).json({ status: false, message: 'studentId and academicYear are required' });
+    }
+    const existing = await StudentPerformance.findOne({ tenantId, studentId, academicYear, isdeleted: false }).lean();
+    if (!existing) {
+      return res.status(404).json({ status: false, message: 'Performance record not found. Call getStudentPerformance first.' });
+    }
+    const examMarks = {
+      mock: mockMarks !== undefined ? mockMarks : existing.examMarks?.mock,
+      school: schoolMarks !== undefined ? schoolMarks : existing.examMarks?.school
+    };
+    const combinedScore = computeCombinedScore(existing.assignment, examMarks);
+    const updated = await StudentPerformance.findOneAndUpdate({ tenantId, studentId, academicYear, isdeleted: false }, { $set: { examMarks, combinedScore } }, { new: true }).lean();
+    return res.status(constants.HTTPS_SUCCESS).json({
+      status: true,
+      message: 'Exam marks updated successfully',
+      data: updated
     });
   } catch (err) {
     return next(err);
