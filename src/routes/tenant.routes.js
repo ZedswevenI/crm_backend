@@ -158,6 +158,13 @@ routes.post('/package/enable/report', validatetoken, packageCtrl.reportPackageEn
 routes.post('/package/students/report', packageCtrl.getStudentPackageSubjects);
 routes.post('/package/students', packageCtrl.getStudentPackages);
 
+// Package Reports
+routes.post('/school/exam/create', validatetoken, manageCtrl.createSchoolExam);
+routes.post('/school/exam/list', validatetoken, manageCtrl.listSchoolExams);
+routes.post('/school/exam/delete', validatetoken, manageCtrl.deleteSchoolExam);
+routes.post('/school/exam/import', validatetoken, manageCtrl.bulkUploadSchoolExams);
+routes.post('/school/exam/update', validatetoken, manageCtrl.updateSchoolExam);
+
 routes.post('/download', tenantCtrl.downloadFile);
 
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Tenant routes' }));
