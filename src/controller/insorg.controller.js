@@ -6,6 +6,7 @@ import Topic from '../models/topic.model.js';
 import SubTopic from '../models/subtopic.model.js';
 import ExamCategory from '../models/examcategory.model.js';
 import ExamSubCategory from '../models/examsubcategory.model.js';
+import SchoolExam from '../models/schoolexam.model.js';
 
 const pickTenantId = (req) => String(req?.body?.tenantId || req?.body?.entiId || '').trim();
 
@@ -27,6 +28,10 @@ const toNum = (v) => {
             .trim()
         );
   return Number.isFinite(n) ? n : 0;
+};
+const toInt = (v, def = 0) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.trunc(n) : def;
 };
 
 const normName = (s) => safeTrim(s).replace(/\s+/g, ' ').trim();
@@ -1456,6 +1461,200 @@ const bulkUpsertExamSubCategories = async (req, res, next) => {
   }
 };
 
+const createSchoolExam = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const { examName, academicYear, classNo, startDate, endDate } = req.body;
+
+    if (!tenantId || !examName || !academicYear || !classNo) {
+      return res.status(400).json({ status: false, message: 'tenantId, examName, academicYear, and classNo are required' });
+    }
+    const exam = await SchoolExam.create({
+      tenantId,
+      examName: safeTrim(examName),
+      academicYear: safeTrim(academicYear),
+      classNo: toNum(classNo),
+      startDate: startDate ? toNum(startDate) : null,
+      endDate: endDate ? toNum(endDate) : null,
+      createdBy: req.body?.userId || null
+    });
+
+    return res.status(201).json({ status: true, message: 'School exam created successfully', data: exam });
+  } catch (err) {
+    if (err.code === 11000) return res.status(409).json({ status: false, message: 'Exam already exists for this class and academic year' });
+    return next(err);
+  }
+};
+
+// 3c. List School Exams
+const listSchoolExams = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+
+    const { academicYear, classNo, status, page = 1, limit = 20 } = req.body;
+
+    const query = { tenantId, isdeleted: false };
+    if (academicYear) query.academicYear = safeTrim(academicYear);
+    if (classNo) query.classNo = toNum(classNo);
+    if (status) query.status = safeTrim(status);
+
+    const skip = (Math.max(1, toInt(page)) - 1) * Math.min(200, Math.max(1, toInt(limit)));
+
+    const [rows, count] = await Promise.all([SchoolExam.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(), SchoolExam.countDocuments(query)]);
+
+    return res.status(200).json({
+      status: true,
+      message: 'School exams retrieved successfully',
+      data: rows,
+      count,
+      page,
+      limit
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+// 3d. Update/Edit School Exam
+const updateSchoolExam = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const examId = safeTrim(req.body?.examId);
+
+    if (!tenantId || !examId) {
+      return res.status(400).json({ status: false, message: 'tenantId and examId are required' });
+    }
+
+    const exam = await SchoolExam.findOne({ tenantId, examId, isdeleted: false });
+    if (!exam) return res.status(404).json({ status: false, message: 'School exam not found' });
+
+    const updates = {};
+    if (req.body.examName) updates.examName = safeTrim(req.body.examName);
+    if (req.body.academicYear) updates.academicYear = safeTrim(req.body.academicYear);
+    if (req.body.classNo) updates.classNo = toNum(req.body.classNo);
+    if (req.body.startDate !== undefined) updates.startDate = req.body.startDate ? toNum(req.body.startDate) : null;
+    if (req.body.endDate !== undefined) updates.endDate = req.body.endDate ? toNum(req.body.endDate) : null;
+    if (req.body.status) updates.status = safeTrim(req.body.status);
+
+    if (Object.keys(updates).length > 0) {
+      updates.updatedBy = req.body?.userId || null;
+
+      // Check for unique constraint violation if critical fields are changed
+      if (updates.examName || updates.academicYear || updates.classNo) {
+        const checkName = updates.examName || exam.examName;
+        const checkAy = updates.academicYear || exam.academicYear;
+        const checkClass = updates.classNo || exam.classNo;
+
+        const duplicate = await SchoolExam.findOne({
+          tenantId,
+          isdeleted: false,
+          examId: { $ne: examId },
+          examName: checkName,
+          academicYear: checkAy,
+          classNo: checkClass
+        }).lean();
+
+        if (duplicate) {
+          return res.status(409).json({ status: false, message: 'Another exam already exists for this name, class, and academic year' });
+        }
+      }
+
+      const updatedDoc = await SchoolExam.findOneAndUpdate({ tenantId, examId, isdeleted: false }, { $set: updates }, { new: true }).lean();
+
+      return res.status(200).json({ status: true, message: 'School exam updated', data: updatedDoc });
+    }
+
+    return res.status(400).json({ status: false, message: 'No valid fields provided for update' });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+// 3e. Delete School Exam
+const deleteSchoolExam = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const examId = safeTrim(req.body?.examId);
+
+    if (!tenantId || !examId) return res.status(400).json({ status: false, message: 'tenantId and examId are required' });
+
+    const deletedDoc = await SchoolExam.findOneAndUpdate({ tenantId, examId, isdeleted: false }, { $set: { isdeleted: true, updatedBy: req.body?.userId || null } }, { new: true }).lean();
+
+    if (!deletedDoc) return res.status(404).json({ status: false, message: 'School exam not found or already deleted' });
+
+    return res.status(200).json({ status: true, message: 'School exam deleted successfully' });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+// 3f. Bulk Upload School Exams
+const bulkUploadSchoolExams = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+    const userId = safeTrim(req.body?.userId);
+
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+    if (!rows.length) return res.status(400).json({ status: false, message: 'rows array cannot be empty' });
+
+    const ops = [];
+    const errors = [];
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const examName = safeTrim(row.examName);
+      const academicYear = safeTrim(row.academicYear);
+      const classNo = toNum(row.classNo);
+
+      if (!examName || !academicYear || !classNo) {
+        errors.push({ row: i + 1, message: 'examName, academicYear, and classNo are required' });
+        continue;
+      }
+
+      ops.push({
+        updateOne: {
+          filter: { tenantId, examName, academicYear, classNo, isdeleted: false },
+          update: {
+            $set: {
+              tenantId,
+              examName,
+              academicYear,
+              classNo,
+              startDate: row.startDate ? toNum(row.startDate) : null,
+              endDate: row.endDate ? toNum(row.endDate) : null,
+              status: safeTrim(row.status) || 'PLANNED',
+              updatedBy: userId || null
+            },
+            $setOnInsert: {
+              examId: uuid(),
+              createdBy: userId || null
+            }
+          },
+          upsert: true // Creates if it doesn't exist, updates if it does
+        }
+      });
+    }
+
+    if (!ops.length) return res.status(400).json({ status: false, message: 'No valid rows to process', errors });
+
+    const result = await SchoolExam.bulkWrite(ops, { ordered: false });
+
+    return res.status(200).json({
+      status: true,
+      message: 'Bulk upload completed',
+      data: {
+        inserted: result.upsertedCount || 0,
+        updated: result.modifiedCount || 0
+      },
+      errors
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   createDepartment,
   listDepartments,
@@ -1492,5 +1691,10 @@ export default {
   viewSubTopic,
   updateSubTopic,
   viewExamCategory,
-  viewExamSubCategory
+  viewExamSubCategory,
+  createSchoolExam,
+  listSchoolExams,
+  updateSchoolExam,
+  deleteSchoolExam,
+  bulkUploadSchoolExams
 };

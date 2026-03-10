@@ -21,6 +21,12 @@ routes.post('/getmyprofile', studentCtrl.getStudentProfileView);
 routes.post('/getmymaterials', studentCtrl.getStudentMaterials);
 routes.post('/getattendance/report', studentCtrl.getStudentAttendanceReport);
 
+routes.post('/remark/add', studentCtrl.addStudentRemark);
+routes.post('/remark/list', studentCtrl.getStudentRemarks);
+routes.post('/basic-details/update', studentCtrl.updateBasicDetails);
+routes.post('/tablet-access/toggle', studentCtrl.toggleTabletAccess);
+routes.post('/school-exam/marks/add', studentCtrl.addSchoolExamMarks);
+
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Student routes' }));
 
 export default routes;
