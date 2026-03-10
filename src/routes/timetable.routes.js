@@ -27,6 +27,10 @@ routes.post('/late-entry/log', validatetoken, timeTableController.logLateEntry);
 routes.post('/late-entry/list/student', validatetoken, timeTableController.listStudentLateEntries);
 routes.post('/late-entry/list/staff', validatetoken, timeTableController.listStaffLateEntries);
 
+routes.post('/publish', validatetoken, timeTableController.publishTimeTable);
+routes.post('/unpublish', validatetoken, timeTableController.unpublishTimeTable);
+routes.post('/delete', validatetoken, timeTableController.deleteTimeTable);
+
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Timetable routes' }));
 
 export default routes;

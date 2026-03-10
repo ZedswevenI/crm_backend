@@ -2,6 +2,8 @@ import { v4 as uuid } from 'uuid';
 import Package from '../models/package.model.js';
 import PackageEnablement from '../models/packageEnablement.model.js';
 import StudentProfile from '../models/studentProfile.model.js';
+import Program from '../models/program.model.js';
+import Batch from '../models/batch.model.js';
 import { uploadFileToS3 } from '../middlewares/s3.service.js';
 
 const pickTenantId = (req) => String(req?.body?.tenantId || req?.body?.entiId || req?.query?.entiId || '').trim();
@@ -231,9 +233,24 @@ const revokeEnablement = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     const { enablementId, userId } = req.body;
-    if (!tenantId || !enablementId) return res.status(400).json({ status: false, message: 'tenantId and enablementId required' });
-    const updated = await PackageEnablement.findOneAndUpdate({ tenantId, enablementId, isdeleted: false }, { $set: { status: 'REVOKED', updatedBy: safeTrim(userId) } }, { new: true }).lean();
-    if (!updated) return res.status(404).json({ status: false, message: 'Enablement record not found' });
+    if (!tenantId || !enablementId) {
+      return res.status(400).json({ status: false, message: 'tenantId and enablementId required' });
+    }
+    const now = Date.now();
+    const updated = await PackageEnablement.findOneAndUpdate(
+      { tenantId, enablementId, isdeleted: false },
+      {
+        $set: {
+          status: 'REVOKED',
+          disableDate: now,
+          updatedBy: safeTrim(userId)
+        }
+      },
+      { new: true }
+    ).lean();
+    if (!updated) {
+      return res.status(404).json({ status: false, message: 'Enablement record not found' });
+    }
     return res.status(200).json({ status: true, message: 'Package access revoked successfully' });
   } catch (err) {
     return next(err);
@@ -477,6 +494,87 @@ const getStudentPackages = async (req, res, next) => {
   }
 };
 
+// 1. View a single Package
+const viewPackage = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const packageId = safeTrim(req.body?.packageId || req.query?.packageId);
+
+    if (!tenantId || !packageId) {
+      return res.status(400).json({ status: false, message: 'tenantId and packageId are required' });
+    }
+
+    const pkg = await Package.findOne({ tenantId, packageId, isdeleted: false }).lean();
+
+    if (!pkg) {
+      return res.status(404).json({ status: false, message: 'Package not found' });
+    }
+
+    return res.status(200).json({ status: true, message: 'Package retrieved', data: pkg });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+// 2. Get Enabled/Disabled Targets List for a specific Package
+const listPackageTargets = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const packageId = safeTrim(req.body?.packageId);
+    if (!tenantId || !packageId) {
+      return res.status(400).json({ status: false, message: 'tenantId and packageId are required' });
+    }
+    const enablements = await PackageEnablement.find({
+      tenantId,
+      packageId,
+      isdeleted: false
+    })
+      .sort({ enableDate: -1 })
+      .lean();
+    if (!enablements.length) {
+      return res.status(200).json({ status: true, data: [], count: 0 });
+    }
+    const programIds = [];
+    const batchCodes = [];
+    const studentIds = [];
+    enablements.forEach((e) => {
+      if (e.scope === 'PROGRAM') programIds.push(...e.targetIds);
+      if (e.scope === 'BATCH') batchCodes.push(...e.targetIds);
+      if (e.scope === 'STUDENT') studentIds.push(...e.targetIds);
+    });
+    const [programs, batches, students] = await Promise.all([
+      programIds.length ? Program.find({ tenantId, programId: { $in: programIds } }, 'programId programName').lean() : [],
+      batchCodes.length ? Batch.find({ tenantId, batchCode: { $in: batchCodes } }, 'batchCode batchName').lean() : [],
+      studentIds.length ? StudentProfile.find({ tenantId, studentId: { $in: studentIds } }, 'studentId student.name admissionNo').lean() : []
+    ]);
+    const progMap = new Map(programs.map((p) => [p.programId, p.programName]));
+    const batchMap = new Map(batches.map((b) => [b.batchCode, b.batchName]));
+    const studMap = new Map(students.map((s) => [s.studentId, `${s.student?.name} (${s.admissionNo})`]));
+    const enrichedEnablements = enablements.map((e) => {
+      const resolvedTargets = e.targetIds.map((id) => {
+        let name = id; // fallback to ID
+        if (e.scope === 'PROGRAM') name = progMap.get(id) || id;
+        if (e.scope === 'BATCH') name = batchMap.get(id) || id;
+        if (e.scope === 'STUDENT') name = studMap.get(id) || id;
+        return { id, name };
+      });
+      return {
+        ...e,
+        resolvedTargets
+      };
+    });
+
+    return res.status(200).json({
+      status: true,
+      message: 'Package targets retrieved',
+      data: enrichedEnablements,
+      count: enrichedEnablements.length
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   uploadPackageFile,
   createPackage,
@@ -487,5 +585,7 @@ export default {
   reportPackageEnablement,
   revokeEnablement,
   getStudentPackages,
-  getStudentPackageSubjects
+  getStudentPackageSubjects,
+  viewPackage,
+  listPackageTargets
 };
