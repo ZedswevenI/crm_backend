@@ -15,6 +15,7 @@ const phaseSchema = new mongoose.Schema(
   {
     tenantId: { type: String, required: true, index: true },
     phaseId: { type: String, required: true, default: uuid, index: true },
+    programId: { type: String, required: true, index: true },
     phaseName: { type: String, required: true, trim: true },
     classNo: { type: Number, required: true, index: true },
     subjectId: { type: mongoose.Schema.Types.ObjectId, required: true, ref: 'subject', index: true },
@@ -28,7 +29,8 @@ const phaseSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-phaseSchema.index({ tenantId: 1, classNo: 1, subjectId: 1, phaseName: 1 }, { unique: true, partialFilterExpression: { isdeleted: false } });
+// UPDATED UNIQUE INDEX
+phaseSchema.index({ tenantId: 1, programId: 1, classNo: 1, subjectId: 1, phaseName: 1 }, { unique: true, partialFilterExpression: { isdeleted: false } });
 
 const Phase = mongoose.model('phase', phaseSchema);
 export default Phase;

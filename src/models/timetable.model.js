@@ -23,7 +23,6 @@ const PeriodSchema = new mongoose.Schema(
     periodNo: { type: Number, min: 1 },
     time: { type: TimeRangeSchema },
     periodType: { type: String, enum: ['LECTURE', 'EXAM', 'LAB', 'TUTORIAL', 'TEST', 'REVISION'], default: 'LECTURE' },
-    // periodType: { type: String, enum: ['LECTURE', 'EXAM', 'LAB'], default: 'LECTURE' },
     examId: { type: String, default: null, trim: true },
     examDescription: { type: String, default: null, trim: true },
     facultyId: { type: String, trim: true, index: true },
@@ -33,6 +32,10 @@ const PeriodSchema = new mongoose.Schema(
     subjectId: { type: String, default: null, trim: true, index: true },
     subjectCode: { type: String, default: null, trim: true },
     subjectName: { type: String, default: null, trim: true },
+    // ── Phase plan link ──────────────────────────────────────────────────
+    phaseId: { type: String, default: null, trim: true },
+    phaseName: { type: String, default: null, trim: true },
+    // ────────────────────────────────────────────────────────────────────
     topic: { type: String, default: null, trim: true },
     venue: { type: String, default: null, trim: true },
     isCancelled: { type: Boolean, default: false },
@@ -53,15 +56,17 @@ const DaySchema = new mongoose.Schema(
   { _id: false }
 );
 
+// ── Override schema: dayOverrides use CANCEL_DAY | REPLACE_DAY
+//                    periodOverrides use CANCEL_PERIOD | REPLACE_PERIOD | ADD_PERIOD | MOVE_PERIOD
 const OverrideSchema = new mongoose.Schema(
   {
     date: { type: Number, required: true, index: true },
     day: { type: String, enum: DAYS, default: null },
     periodNo: { type: Number, default: null, min: 1 },
-    // action: { type: String, enum: ['CANCEL_DAY', 'CANCEL_PERIOD', 'REPLACE_PERIOD', 'ADD_PERIOD', 'MOVE_PERIOD'], required: true },
-    // period: { type: mongoose.Schema.Types.Mixed, default: null },
-    // reason: { type: String, default: null, trim: true }
     action: { type: String, enum: ['CANCEL_DAY', 'REPLACE_DAY', 'CANCEL_PERIOD', 'REPLACE_PERIOD', 'ADD_PERIOD', 'MOVE_PERIOD'], required: true },
+    // REPLACE_DAY: periods[] holds the new full day schedule
+    periods: { type: [PeriodSchema], default: null },
+    // REPLACE_PERIOD / ADD_PERIOD: single period object
     period: { type: mongoose.Schema.Types.Mixed, default: null },
     toPeriodNo: { type: Number, default: null },
     reason: { type: String, default: null, trim: true },
@@ -73,7 +78,8 @@ const OverrideSchema = new mongoose.Schema(
 const timeTableSchema = new mongoose.Schema(
   {
     tenantId: { type: String, required: true, index: true, trim: true, ref: 'tenant' },
-    status: { type: String, default: 'Active', trim: true },
+    // DRAFT → publish → Active. Unpublish → Active → DRAFT revert not supported from Active.
+    status: { type: String, enum: ['DRAFT', 'Active', 'Inactive'], default: 'DRAFT', trim: true },
     isdeleted: { type: Boolean, default: false, index: true },
     createdBy: { type: String, default: null, trim: true },
     updatedBy: { type: String, default: null, trim: true },
@@ -82,7 +88,7 @@ const timeTableSchema = new mongoose.Schema(
     phase: { type: String, default: null, trim: true },
     wkStartOn: { type: Number, required: true, index: true },
     week: { type: [DaySchema], default: [] },
-    // overrides: { type: [OverrideSchema], default: [] }
+    // Two separate override arrays — never mix day-level and period-level
     dayOverrides: { type: [OverrideSchema], default: [] },
     periodOverrides: { type: [OverrideSchema], default: [] }
   },
@@ -93,7 +99,6 @@ timeTableSchema.index({ tenantId: 1, batchCode: 1, wkStartOn: 1 }, { unique: tru
 
 timeTableSchema.pre('validate', function (next) {
   this.batchCode = safeTrim(this.batchCode);
-  // this.centCode = safeTrim(this.centCode) || null;
   this.centerCode = safeTrim(this.centerCode) || null;
   this.phase = safeTrim(this.phase) || null;
   this.wkStartOn = toInt(this.wkStartOn, 0);

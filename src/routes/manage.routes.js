@@ -47,6 +47,7 @@ routes.post('/support/priority/update', validatetoken, supportCtrl.updateTicketP
 routes.post('/support/status/update', validatetoken, supportCtrl.updateTicketStatus);
 routes.post('/support/view', validatetoken, supportCtrl.viewTicket);
 routes.post('/support/report', validatetoken, supportCtrl.getTicketReports);
+routes.post('/support/reopen', supportCtrl.reopenTicket);
 
 // Circular
 routes.post('/circular/upload', validatetoken, upload.single('file'), circularCtrl.uploadCircularFile);
