@@ -21,4 +21,5 @@ const staffPerformanceSchema = new mongoose.Schema(
 staffPerformanceSchema.index({ tenantId: 1, staffId: 1, isdeleted: 1 });
 staffPerformanceSchema.index({ tenantId: 1, performanceId: 1 });
 
-export default mongoose.model('StaffPerformance', staffPerformanceSchema);
+const StaffPerformance = mongoose.model('StaffPerformance', staffPerformanceSchema);
+export default StaffPerformance;

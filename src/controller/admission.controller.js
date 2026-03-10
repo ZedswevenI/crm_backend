@@ -1333,152 +1333,324 @@ const createStudentProfileFromAdmission = async (req, res, next) => {
   }
 };
 
+// const bulkUploadStudents = async (req, res, next) => {
+//   try {
+//     const tenantId = pickTenantId(req);
+//     const userId = safeTrim(req.body?.userId);
+//     const studentsData = req.body?.students;
+//     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+//     if (!Array.isArray(studentsData) || studentsData.length === 0) {
+//       return res.status(400).json({ status: false, message: 'No student data provided in payload' });
+//     }
+//     const report = {
+//       totalProcessed: studentsData.length,
+//       successCount: 0,
+//       failedCount: 0,
+//       errors: []
+//     };
+//     const enrolmentNumbers = [...new Set(studentsData.map((s) => safeTrim(s['Enrolment Number'])).filter(Boolean))];
+//     const batchCodes = [...new Set(studentsData.map((s) => safeTrim(s['Batch Code'])).filter(Boolean))];
+//     const existingProfiles = await StudentProfile.find(
+//       {
+//         tenantId,
+//         isdeleted: false,
+//         admissionNo: { $in: enrolmentNumbers }
+//       },
+//       { admissionNo: 1 }
+//     ).lean();
+//     const existingSet = new Set(existingProfiles.map((p) => p.admissionNo));
+//     const batches = await Batch.find({
+//       tenantId,
+//       isdeleted: false,
+//       batchCode: { $in: batchCodes }
+//     }).lean();
+//     const batchMap = new Map(batches.map((b) => [b.batchCode, b]));
+//     const affectedBatchIds = new Set();
+//     const now = Date.now();
+//     for (let index = 0; index < studentsData.length; index++) {
+//       const row = studentsData[index];
+//       const rowNum = index + 1;
+//       const enrolmentNo = safeTrim(row['Enrolment Number']);
+//       const fullName = safeTrim(row['Full Name']);
+//       const batchCode = safeTrim(row['Batch Code']);
+//       const mobile = safeTrim(row['Mobile'] || row['Phone']);
+//       const email = safeTrim(row['Email']);
+//       if (!enrolmentNo || !fullName || !batchCode) {
+//         report.failedCount++;
+//         report.errors.push({ row: rowNum, enrolmentNo, reason: 'Missing mandatory fields' });
+//         continue;
+//       }
+//       if (existingSet.has(enrolmentNo)) {
+//         report.failedCount++;
+//         report.errors.push({ row: rowNum, enrolmentNo, reason: `Enrolment Number '${enrolmentNo}' already exists` });
+//         continue;
+//       }
+//       const batch = batchMap.get(batchCode);
+//       if (!batch) {
+//         report.failedCount++;
+//         report.errors.push({ row: rowNum, enrolmentNo, reason: `Batch Code '${batchCode}' not found.` });
+//         continue;
+//       }
+//       existingSet.add(enrolmentNo);
+//       const admissionId = uuid();
+//       const studentId = uuid();
+//       try {
+//         await Admission.create({
+//           tenantId,
+//           admissionId,
+//           admissionNo: enrolmentNo,
+//           sourceType: 'IMPORT',
+//           academicYear: batch.academicYear,
+//           programId: batch.programId,
+//           programName: batch.programName,
+//           centerId: batch.centerId,
+//           centerName: batch.centerName,
+//           batchId: batch.batchId,
+//           batchName: batch.batchName,
+//           batchCode: batch.batchCode,
+//           student: {
+//             name: fullName,
+//             phone: mobile,
+//             email: email
+//           },
+//           workflow: {
+//             stage: 'CONFIRMED',
+//             status: 'APPROVED',
+//             approvedBy: userId,
+//             approvedAt: now
+//           },
+//           isdeleted: false,
+//           createdBy: userId,
+//           updatedBy: userId
+//         });
+//         await StudentProfile.create({
+//           tenantId,
+//           studentId,
+//           admissionId,
+//           admissionNo: enrolmentNo,
+//           registrationNumber: enrolmentNo,
+//           portalStudentId: enrolmentNo,
+//           status: 'ACTIVE',
+//           academicYear: batch.academicYear,
+//           programId: batch.programId,
+//           programName: batch.programName,
+//           centerId: batch.centerId,
+//           centerName: batch.centerName,
+//           batchId: batch.batchId,
+//           batchName: batch.batchName,
+//           batchCode: batch.batchCode,
+//           student: {
+//             name: fullName,
+//             phone: mobile,
+//             email: email
+//           },
+//           ayHistory: [
+//             {
+//               academicYear: batch.academicYear,
+//               programId: batch.programId,
+//               centerId: batch.centerId,
+//               batchId: batch.batchId,
+//               status: 'ACTIVE',
+//               promotedAt: now
+//             }
+//           ],
+//           isdeleted: false,
+//           createdBy: userId,
+//           updatedBy: userId
+//         });
+//         affectedBatchIds.add(batch.batchId);
+//         report.successCount++;
+//       } catch (saveError) {
+//         console.error(`Row ${rowNum} Failed on DB Save:`, saveError.message);
+//         report.failedCount++;
+//         report.errors.push({ row: rowNum, enrolmentNo, reason: saveError.message });
+//         existingSet.delete(enrolmentNo);
+//       }
+//     }
+//     if (affectedBatchIds.size > 0) {
+//       for (const bId of affectedBatchIds) {
+//         const count = await StudentProfile.countDocuments({ tenantId, batchId: bId, status: 'ACTIVE', isdeleted: false });
+//         await Batch.updateOne({ tenantId, batchId: bId, isdeleted: false }, { $set: { studentCount: count } });
+//       }
+//     }
+//     return res.status(200).json({
+//       status: true,
+//       message: `Bulk upload completed. Success: ${report.successCount}, Failed: ${report.failedCount}`,
+//       data: report
+//     });
+//   } catch (err) {
+//     return next(err);
+//   }
+// };
+
 const bulkUploadStudents = async (req, res, next) => {
+  const session = await mongoose.startSession();
+
   try {
     const tenantId = pickTenantId(req);
     const userId = safeTrim(req.body?.userId);
     const studentsData = req.body?.students;
+
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
     if (!Array.isArray(studentsData) || studentsData.length === 0) {
       return res.status(400).json({ status: false, message: 'No student data provided in payload' });
     }
+
     const report = {
       totalProcessed: studentsData.length,
       successCount: 0,
       failedCount: 0,
       errors: []
     };
+
+    // 1. Extract Unique Identifiers for Pre-fetching
     const enrolmentNumbers = [...new Set(studentsData.map((s) => safeTrim(s['Enrolment Number'])).filter(Boolean))];
     const batchCodes = [...new Set(studentsData.map((s) => safeTrim(s['Batch Code'])).filter(Boolean))];
-    const existingProfiles = await StudentProfile.find(
-      {
-        tenantId,
-        isdeleted: false,
-        admissionNo: { $in: enrolmentNumbers }
-      },
-      { admissionNo: 1 }
-    ).lean();
+
+    // 2. Pre-fetch Data
+    const existingProfiles = await StudentProfile.find({ tenantId, isdeleted: false, admissionNo: { $in: enrolmentNumbers } }, { admissionNo: 1 }).lean();
     const existingSet = new Set(existingProfiles.map((p) => p.admissionNo));
+
     const batches = await Batch.find({
       tenantId,
       isdeleted: false,
       batchCode: { $in: batchCodes }
     }).lean();
     const batchMap = new Map(batches.map((b) => [b.batchCode, b]));
+
     const affectedBatchIds = new Set();
     const now = Date.now();
+
+    // Arrays to hold the validated objects for bulk insertion
+    const admissionsToInsert = [];
+    const profilesToInsert = [];
+
+    // 3. In-Memory Validation & Object Construction (No DB calls in this loop)
     for (let index = 0; index < studentsData.length; index++) {
       const row = studentsData[index];
       const rowNum = index + 1;
+
       const enrolmentNo = safeTrim(row['Enrolment Number']);
       const fullName = safeTrim(row['Full Name']);
       const batchCode = safeTrim(row['Batch Code']);
       const mobile = safeTrim(row['Mobile'] || row['Phone']);
       const email = safeTrim(row['Email']);
+
       if (!enrolmentNo || !fullName || !batchCode) {
         report.failedCount++;
         report.errors.push({ row: rowNum, enrolmentNo, reason: 'Missing mandatory fields' });
         continue;
       }
+
       if (existingSet.has(enrolmentNo)) {
         report.failedCount++;
         report.errors.push({ row: rowNum, enrolmentNo, reason: `Enrolment Number '${enrolmentNo}' already exists` });
         continue;
       }
+
       const batch = batchMap.get(batchCode);
       if (!batch) {
         report.failedCount++;
         report.errors.push({ row: rowNum, enrolmentNo, reason: `Batch Code '${batchCode}' not found.` });
         continue;
       }
+
+      // Mark as processed so duplicates inside the *same* Excel sheet also fail
       existingSet.add(enrolmentNo);
+
       const admissionId = uuid();
       const studentId = uuid();
-      try {
-        await Admission.create({
-          tenantId,
-          admissionId,
-          admissionNo: enrolmentNo,
-          sourceType: 'IMPORT',
-          academicYear: batch.academicYear,
-          programId: batch.programId,
-          programName: batch.programName,
-          centerId: batch.centerId,
-          centerName: batch.centerName,
-          batchId: batch.batchId,
-          batchName: batch.batchName,
-          batchCode: batch.batchCode,
-          student: {
-            name: fullName,
-            phone: mobile,
-            email: email
-          },
-          workflow: {
-            stage: 'CONFIRMED',
-            status: 'APPROVED',
-            approvedBy: userId,
-            approvedAt: now
-          },
-          isdeleted: false,
-          createdBy: userId,
-          updatedBy: userId
-        });
-        await StudentProfile.create({
-          tenantId,
-          studentId,
-          admissionId,
-          admissionNo: enrolmentNo,
-          registrationNumber: enrolmentNo,
-          portalStudentId: enrolmentNo,
-          status: 'ACTIVE',
-          academicYear: batch.academicYear,
-          programId: batch.programId,
-          programName: batch.programName,
-          centerId: batch.centerId,
-          centerName: batch.centerName,
-          batchId: batch.batchId,
-          batchName: batch.batchName,
-          batchCode: batch.batchCode,
-          student: {
-            name: fullName,
-            phone: mobile,
-            email: email
-          },
-          ayHistory: [
-            {
-              academicYear: batch.academicYear,
-              programId: batch.programId,
-              centerId: batch.centerId,
-              batchId: batch.batchId,
-              status: 'ACTIVE',
-              promotedAt: now
-            }
-          ],
-          isdeleted: false,
-          createdBy: userId,
-          updatedBy: userId
-        });
-        affectedBatchIds.add(batch.batchId);
-        report.successCount++;
-      } catch (saveError) {
-        console.error(`Row ${rowNum} Failed on DB Save:`, saveError.message);
-        report.failedCount++;
-        report.errors.push({ row: rowNum, enrolmentNo, reason: saveError.message });
-        existingSet.delete(enrolmentNo);
-      }
+
+      admissionsToInsert.push({
+        tenantId,
+        admissionId,
+        admissionNo: enrolmentNo,
+        sourceType: 'IMPORT',
+        academicYear: batch.academicYear,
+        programId: batch.programId,
+        programName: batch.programName,
+        centerId: batch.centerId,
+        centerName: batch.centerName,
+        batchId: batch.batchId,
+        batchName: batch.batchName,
+        batchCode: batch.batchCode,
+        student: { name: fullName, phone: mobile, email: email },
+        workflow: { stage: 'CONFIRMED', status: 'APPROVED', approvedBy: userId, approvedAt: now },
+        isdeleted: false,
+        createdBy: userId,
+        updatedBy: userId
+      });
+
+      profilesToInsert.push({
+        tenantId,
+        studentId,
+        admissionId,
+        admissionNo: enrolmentNo,
+        registrationNumber: enrolmentNo,
+        portalStudentId: enrolmentNo,
+        status: 'ACTIVE',
+        academicYear: batch.academicYear,
+        currentAcademicYear: batch.academicYear, // Set Current AY
+        classNo: batch.classNo, // FIX: Inherit classNo from the batch
+        yearNo: batch.yearNo, // FIX: Inherit yearNo from the batch
+        programId: batch.programId,
+        programName: batch.programName,
+        centerId: batch.centerId,
+        centerName: batch.centerName,
+        batchId: batch.batchId,
+        batchName: batch.batchName,
+        batchCode: batch.batchCode,
+        student: { name: fullName, phone: mobile, email: email },
+        ayHistory: [
+          {
+            academicYear: batch.academicYear,
+            programId: batch.programId,
+            centerId: batch.centerId,
+            batchId: batch.batchId,
+            classNo: batch.classNo, // FIX: Save classNo to history
+            yearNo: batch.yearNo, // FIX: Save yearNo to history
+            status: 'ACTIVE',
+            promotedAt: now
+          }
+        ],
+        isdeleted: false,
+        createdBy: userId,
+        updatedBy: userId
+      });
+
+      affectedBatchIds.add(batch.batchId);
+      report.successCount++;
     }
-    if (affectedBatchIds.size > 0) {
+
+    // 4. Execute Bulk Insertion safely using Transactions
+    session.startTransaction();
+
+    if (admissionsToInsert.length > 0) {
+      await Admission.insertMany(admissionsToInsert, { session });
+      await StudentProfile.insertMany(profilesToInsert, { session });
+
+      // Update student counts for affected batches
       for (const bId of affectedBatchIds) {
-        const count = await StudentProfile.countDocuments({ tenantId, batchId: bId, status: 'ACTIVE', isdeleted: false });
-        await Batch.updateOne({ tenantId, batchId: bId, isdeleted: false }, { $set: { studentCount: count } });
+        const count = await StudentProfile.countDocuments({
+          tenantId,
+          batchId: bId,
+          status: 'ACTIVE',
+          isdeleted: false
+        }).session(session);
+
+        await Batch.updateOne({ tenantId, batchId: bId, isdeleted: false }, { $set: { studentCount: count } }, { session });
       }
     }
+    await session.commitTransaction();
+    session.endSession();
     return res.status(200).json({
       status: true,
       message: `Bulk upload completed. Success: ${report.successCount}, Failed: ${report.failedCount}`,
       data: report
     });
   } catch (err) {
+    await session.abortTransaction();
+    session.endSession();
     return next(err);
   }
 };
