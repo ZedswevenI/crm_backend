@@ -18,6 +18,9 @@ import Phase from '../models/phaseplan.model.js';
 import TimeTable from '../models/timetable.model.js';
 import Attendance from '../models/attandence.model.js';
 import StudyMaterial from '../models/studymaterial.model.js';
+import SchoolExam from '../models/schoolexam.model.js';
+import SchoolExamResult from '../models/schoolexamresult.model.js';
+import StudentRemark from '../models/studentremark.model.js';
 
 const pickTenantId = (req) => String(req?.body?.tenantId || req?.body?.entiId || '').trim();
 const safeTrim = (v) => (v === undefined || v === null ? '' : String(v).trim());
@@ -1221,6 +1224,168 @@ const getStudentAttendanceReport = async (req, res, next) => {
   }
 };
 
+// 1. Change Student Basic Details
+const updateBasicDetails = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const studentId = safeTrim(req.body?.studentId);
+
+    if (!tenantId || !studentId) {
+      return res.status(400).json({ status: false, message: 'tenantId and studentId are required' });
+    }
+
+    const profile = await StudentProfile.findOne({ tenantId, studentId, isdeleted: false });
+    if (!profile) return res.status(404).json({ status: false, message: 'Student profile not found' });
+
+    const admissionId = profile.admissionId;
+
+    // Update Student Profile Details
+    const profileUpdate = {};
+    if (req.body.name) profileUpdate['student.name'] = safeTrim(req.body.name);
+    if (req.body.phone) profileUpdate['student.phone'] = safeTrim(req.body.phone);
+    if (req.body.email) profileUpdate['student.email'] = safeTrim(req.body.email);
+    if (req.body.parentName) profileUpdate['student.parentName'] = safeTrim(req.body.parentName);
+    if (req.body.parentMobile) profileUpdate['student.parentPhone'] = safeTrim(req.body.parentMobile);
+
+    if (Object.keys(profileUpdate).length > 0) {
+      await StudentProfile.updateOne({ tenantId, studentId }, { $set: profileUpdate });
+    }
+
+    // Update Admission Collection Details (Address, DOB, Gender, etc.)
+    const admissionUpdate = {};
+    if (req.body.addressLine1) admissionUpdate['student.address'] = safeTrim(req.body.addressLine1);
+    if (req.body.city) admissionUpdate['student.city'] = safeTrim(req.body.city);
+    if (req.body.gender) admissionUpdate['student.gender'] = safeTrim(req.body.gender);
+    if (req.body.dob) admissionUpdate['student.dateOfBirth'] = toNum(req.body.dob);
+
+    if (Object.keys(admissionUpdate).length > 0) {
+      await Admission.updateOne({ tenantId, admissionId }, { $set: admissionUpdate });
+    }
+
+    return res.status(200).json({ status: true, message: 'Student basic details updated successfully' });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+// 2. Block/Unblock Tablet Access
+const toggleTabletAccess = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const studentId = safeTrim(req.body?.studentId);
+    const isTabletBlocked = req.body?.isTabletBlocked === true;
+
+    if (!tenantId || !studentId) {
+      return res.status(400).json({ status: false, message: 'tenantId and studentId are required' });
+    }
+
+    const updated = await StudentProfile.findOneAndUpdate(
+      { tenantId, studentId, isdeleted: false },
+      { $set: { isTabletBlocked } }, // Make sure isTabletBlocked is added to your StudentProfileSchema
+      { new: true }
+    ).lean();
+
+    if (!updated) return res.status(404).json({ status: false, message: 'Student not found' });
+
+    return res.status(200).json({
+      status: true,
+      message: `Tablet access ${isTabletBlocked ? 'blocked' : 'unblocked'} successfully`,
+      isTabletBlocked: updated.isTabletBlocked
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+// 3b. Add School Exam Marks for a Student
+const addSchoolExamMarks = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const { examId, studentId, subjects, remarks } = req.body; // subjects is an array of objects
+
+    if (!tenantId || !examId || !studentId || !Array.isArray(subjects)) {
+      return res.status(400).json({ status: false, message: 'tenantId, examId, studentId, and subjects array are required' });
+    }
+
+    const student = await StudentProfile.findOne({ tenantId, studentId, isdeleted: false }, { admissionNo: 1 }).lean();
+    if (!student) return res.status(404).json({ status: false, message: 'Student not found' });
+    let totalMaxMarks = 0;
+    let totalObtainedMarks = 0;
+    const formattedSubjects = subjects.map((s) => {
+      const max = toNum(s.maxMarks);
+      const obtained = toNum(s.obtainedMarks);
+      totalMaxMarks += max;
+      totalObtainedMarks += obtained;
+      return {
+        subjectName: safeTrim(s.subjectName),
+        maxMarks: max,
+        obtainedMarks: obtained,
+        grade: safeTrim(s.grade)
+      };
+    });
+    const percentage = totalMaxMarks > 0 ? Math.round((totalObtainedMarks / totalMaxMarks) * 100 * 100) / 100 : 0;
+    const result = await SchoolExamResult.findOneAndUpdate(
+      { tenantId, examId, studentId, isdeleted: false },
+      {
+        $set: {
+          admissionNo: student.admissionNo,
+          subjects: formattedSubjects,
+          totalMaxMarks,
+          totalObtainedMarks,
+          percentage,
+          remarks: safeTrim(remarks),
+          updatedBy: req.body?.userId || null
+        },
+        $setOnInsert: { createdBy: req.body?.userId || null }
+      },
+      { new: true, upsert: true }
+    );
+    return res.status(200).json({ status: true, message: 'School exam marks recorded successfully', data: result });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const addStudentRemark = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const { admissionNo, type, dateOfIncident, remark, reportedByParent } = req.body;
+    if (!tenantId || !admissionNo || !type || !dateOfIncident || !remark) {
+      return res.status(400).json({ status: false, message: 'tenantId, admissionNo, type, dateOfIncident, and remark are required' });
+    }
+    const student = await StudentProfile.findOne({ tenantId, admissionNo, isdeleted: false }, { studentId: 1 }).lean();
+    if (!student) return res.status(404).json({ status: false, message: 'Student not found with this admission number' });
+    const newRemark = await StudentRemark.create({
+      tenantId,
+      admissionNo: safeTrim(admissionNo),
+      studentId: student.studentId,
+      type: safeTrim(type),
+      dateOfIncident: toNum(dateOfIncident),
+      remark: safeTrim(remark),
+      reportedByParent: reportedByParent !== undefined ? reportedByParent : true,
+      createdBy: req.body?.userId || null
+    });
+    return res.status(201).json({ status: true, message: 'Remark recorded successfully', data: newRemark });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const getStudentRemarks = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const admissionNo = safeTrim(req.body?.admissionNo || req.query?.admissionNo);
+
+    if (!tenantId || !admissionNo) {
+      return res.status(400).json({ status: false, message: 'tenantId and admissionNo are required' });
+    }
+    const remarks = await StudentRemark.find({ tenantId, admissionNo, isdeleted: false }).sort({ dateOfIncident: -1 }).lean();
+    return res.status(200).json({ status: true, data: remarks, count: remarks.length });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   listStudents,
   viewProfile,
@@ -1235,5 +1400,10 @@ export default {
   getStudentProfileView,
   getStudentMaterialSubjects,
   getStudentMaterials,
-  getStudentAttendanceReport
+  getStudentAttendanceReport,
+  updateBasicDetails,
+  toggleTabletAccess,
+  addSchoolExamMarks,
+  addStudentRemark,
+  getStudentRemarks
 };
