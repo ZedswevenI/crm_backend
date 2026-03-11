@@ -16,6 +16,7 @@ const toInt = (v, def = 0) => {
 };
 
 const DAYS = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY', 'SUNDAY'];
+const DAY_ORDER = { MONDAY: 0, TUESDAY: 1, WEDNESDAY: 2, THURSDAY: 3, FRIDAY: 4, SATURDAY: 5, SUNDAY: 6 };
 const isValidDay = (d) => DAYS.includes(String(d || '').toUpperCase());
 const normDay = (d) => String(d || '').toUpperCase();
 
@@ -29,9 +30,8 @@ const getPreviousMonday = (epochMs) => {
 };
 
 const getOffsetDate = (wkStartOn, dayName) => {
-  const offsets = { MONDAY: 0, TUESDAY: 1, WEDNESDAY: 2, THURSDAY: 3, FRIDAY: 4, SATURDAY: 5, SUNDAY: 6 };
   const d = new Date(wkStartOn);
-  d.setUTCDate(d.getUTCDate() + (offsets[dayName] ?? 0));
+  d.setUTCDate(d.getUTCDate() + (DAY_ORDER[dayName] ?? 0));
   d.setUTCHours(0, 0, 0, 0);
   return d.getTime();
 };
@@ -45,26 +45,21 @@ const validateTimeRange = (t) => {
   return { ok: true, startMin, endMin };
 };
 
+// ─── Is timetable published? ──────────────────────────────────────────────────
+const isPublished = (tt) => tt?.status === 'Active';
+
 // ─── Phase validation helper ──────────────────────────────────────────────────
-// Fetches the programId from the batch, then checks the phase exists for that program.
 const resolvePhaseForPeriod = async (tenantId, batchCode, phaseId, phaseName) => {
   if (!phaseId && !phaseName) return { ok: true, phaseId: null, phaseName: null };
-
-  // Get programId from batch
   const batch = await Batch.findOne({ tenantId, batchCode, isdeleted: false }).lean();
   if (!batch) return { ok: false, msg: `Batch ${batchCode} not found` };
   const programId = safeTrim(batch.programId || batch.program || batch.programCode);
   if (!programId) return { ok: false, msg: `Batch ${batchCode} has no programId` };
-
-  // Find phase
   const query = { tenantId, programId, isdeleted: false };
   if (phaseId) query.phaseId = phaseId;
   else if (phaseName) query.phaseName = new RegExp(`^${escapeRegex(phaseName)}$`, 'i');
-
   const phase = await Phase.findOne(query).lean();
-  if (!phase) {
-    return { ok: false, msg: `Phase "${phaseId || phaseName}" not found for program ${programId}` };
-  }
+  if (!phase) return { ok: false, msg: `Phase "${phaseId || phaseName}" not found for program ${programId}` };
   return { ok: true, phaseId: phase.phaseId, phaseName: phase.phaseName };
 };
 
@@ -79,13 +74,10 @@ const normalizePeriod = (p) => {
   if (!facultyId) return { ok: false, msg: 'facultyId is required' };
   if (periodNo <= 0) return { ok: false, msg: 'periodNo must be >= 1' };
   if (p?.day !== undefined && !isValidDay(day)) return { ok: false, msg: 'Invalid day' };
-
   const periodType = safeTrim(p?.periodType) || 'LECTURE';
-  if (!['LECTURE', 'EXAM', 'LAB', 'TUTORIAL', 'TEST', 'REVISION'].includes(periodType)) return { ok: false, msg: `periodType must be LECTURE|EXAM|LAB|TUTORIAL|TEST|REVISION` };
-
+  if (!['LECTURE', 'EXAM', 'LAB', 'TUTORIAL', 'TEST', 'REVISION'].includes(periodType)) return { ok: false, msg: 'periodType must be LECTURE|EXAM|LAB|TUTORIAL|TEST|REVISION' };
   const mode = safeTrim(p?.mode) || 'OFFLINE';
   if (!['OFFLINE', 'ONLINE'].includes(mode)) return { ok: false, msg: 'mode must be OFFLINE or ONLINE' };
-
   return {
     ok: true,
     period: {
@@ -122,6 +114,26 @@ const findTemplatePeriod = (tt, day, periodNo) => {
   return (d?.periods || []).find((x) => toInt(x?.periodNo) === toInt(periodNo)) || null;
 };
 
+/**
+ * FIX G1: Also look for a period that was added via ADD_PERIOD override.
+ * Used by replacePeriod, cancelPeriod, rearrangeStaff — anywhere we need "current effective period".
+ * Does NOT need a date because for template lookup date is irrelevant;
+ * for ADD_PERIOD overrides we pick the most recent one for that day+periodNo.
+ */
+const findEffectivePeriodBase = (tt, day, periodNo, date = null) => {
+  // 1. Check template first
+  const template = findTemplatePeriod(tt, day, periodNo);
+  if (template) return template.toObject?.() ?? template;
+
+  // 2. Fall back to ADD_PERIOD overrides (most recent for this day+periodNo)
+  const addOverrides = (tt.periodOverrides || []).filter((o) => normDay(o?.day) === day && toInt(o?.periodNo) === periodNo && o.action === 'ADD_PERIOD');
+  if (!addOverrides.length) return null;
+  // If date provided, prefer the exact-date one; otherwise take last
+  const exact = date ? addOverrides.find((o) => toInt(o?.date) === toInt(date)) : null;
+  const best = exact ?? addOverrides[addOverrides.length - 1];
+  return best?.period ? (best.period.toObject?.() ?? best.period) : null;
+};
+
 const upsertDayOverride = (tt, ov) => {
   const date = toInt(ov?.date, 0);
   const day = normDay(ov?.day);
@@ -141,26 +153,27 @@ const upsertPeriodOverride = (tt, ov) => {
   else tt.periodOverrides.push(ov);
 };
 
-// ─── Build actual rendered schedule for a date (used by conflict checker + viewbybatch) ──
+// ─── Build rendered schedule for a date ──────────────────────────────────────
 const buildDaySchedule = (tt, dateEpochMs) => {
   const d = new Date(dateEpochMs);
   const dayName = DAYS[d.getUTCDay() === 0 ? 6 : d.getUTCDay() - 1];
   const baseDay = (tt.week || []).find((w) => w.day === dayName);
   let periods = baseDay ? JSON.parse(JSON.stringify(baseDay.periods || [])) : [];
 
-  // Day-level override takes priority
+  // Day-level override takes full priority
   const dayOv = (tt.dayOverrides || []).find((o) => toInt(o?.date) === toInt(dateEpochMs) && normDay(o?.day) === dayName);
   if (dayOv) {
     if (dayOv.action === 'CANCEL_DAY') return { date: dateEpochMs, day: dayName, isHoliday: true, holidayReason: dayOv.reason || 'Holiday', periods: [] };
-    if (dayOv.action === 'REPLACE_DAY') periods = Array.isArray(dayOv.periods) ? JSON.parse(JSON.stringify(dayOv.periods)) : [];
+    if (dayOv.action === 'REPLACE_DAY') periods = Array.isArray(dayOv.periods) && dayOv.periods.length ? JSON.parse(JSON.stringify(dayOv.periods)) : [];
   }
 
-  // Period-level overrides on top
+  // Period-level overrides — apply non-MOVE ones first
   const povs = (tt.periodOverrides || []).filter((o) => toInt(o?.date) === toInt(dateEpochMs) && normDay(o?.day) === dayName);
 
   for (const ov of povs) {
     const pno = toInt(ov?.periodNo, 0);
     if (!pno) continue;
+
     if (ov.action === 'CANCEL_PERIOD') {
       const idx = periods.findIndex((p) => toInt(p?.periodNo) === pno);
       if (idx !== -1) periods[idx] = { ...periods[idx], isCancelled: true, cancelReason: ov.reason || null };
@@ -177,7 +190,8 @@ const buildDaySchedule = (tt, dateEpochMs) => {
     }
   }
 
-  // MOVE_PERIOD: atomic swap — collect all moves first, then apply
+  // FIX G8: MOVE_PERIOD — take snapshot AFTER cancel/replace/add are applied,
+  // but only move non-cancelled periods. A cancelled period cannot be a valid move source.
   const moves = povs.filter((x) => x.action === 'MOVE_PERIOD');
   if (moves.length) {
     const snapshot = periods.map((p) => ({ ...p }));
@@ -186,11 +200,11 @@ const buildDaySchedule = (tt, dateEpochMs) => {
       const toNo = toInt(ov?.toPeriodNo, 0);
       if (!fromNo || !toNo) continue;
       const src = snapshot.find((p) => toInt(p?.periodNo) === fromNo);
-      if (!src) continue;
+      // FIX G8: skip if source period is cancelled
+      if (!src || src.isCancelled) continue;
       const destIdx = periods.findIndex((p) => toInt(p?.periodNo) === toNo);
       if (destIdx !== -1) periods[destIdx] = { ...src, periodNo: toNo };
       else periods.push({ ...src, periodNo: toNo });
-      // remove from-slot if nothing swapped into it
       const movedIntoFrom = moves.some((m) => toInt(m?.toPeriodNo) === fromNo);
       if (!movedIntoFrom) {
         const fromIdx = periods.findIndex((p) => toInt(p?.periodNo) === fromNo);
@@ -204,12 +218,26 @@ const buildDaySchedule = (tt, dateEpochMs) => {
 };
 
 // ─── Staff conflict checker ───────────────────────────────────────────────────
-const checkStaffConflicts = async (tenantId, facultyId, date, day, startMin, endMin, excludeTimetableId = null) => {
+/**
+ * FIX G9: Added `includeDrafts` param (default false).
+ * During publish → check against Active timetables only (other drafts don't count yet).
+ * During validate → also only check Active by default (drafts haven't committed).
+ * During editWholeDay for Published timetable → Active only.
+ * Pass includeDrafts=true only if you explicitly want cross-draft conflict detection.
+ */
+const checkStaffConflicts = async (tenantId, facultyId, date, day, startMin, endMin, excludeTimetableId = null, includeDrafts = false) => {
+  // Check week-off
   const staff = await Staff.findOne({ staffId: facultyId, tenantId, isdeleted: false }).lean();
-  if (staff?.weekoff?.includes(day)) return { conflict: true, message: `Faculty ${staff.name || facultyId} has a week-off on ${day}.` };
+  if (staff?.weekoff?.includes(day))
+    return {
+      conflict: true,
+      message: `Faculty ${staff.staffName || staff.name || facultyId} has a week-off on ${day}.`,
+      facultyName: staff.staffName || staff.name || null
+    };
 
   const wkStartOn = getPreviousMonday(date);
   const query = { tenantId, wkStartOn, isdeleted: false };
+  if (!includeDrafts) query.status = 'Active'; // FIX G9: only check published timetables by default
   if (excludeTimetableId) query._id = { $ne: excludeTimetableId };
 
   const timetables = await TimeTable.find(query).lean();
@@ -222,33 +250,22 @@ const checkStaffConflicts = async (tenantId, facultyId, date, day, startMin, end
       if (currentFaculty === String(facultyId)) {
         const pStart = toInt(p.time?.startMin);
         const pEnd = toInt(p.time?.endMin);
-        if (startMin < pEnd && endMin > pStart) return { conflict: true, message: `Faculty already booked in batch ${tt.batchCode} from ${p.time?.startLabel || pStart} to ${p.time?.endLabel || pEnd}.` };
+        if (startMin < pEnd && endMin > pStart)
+          return {
+            conflict: true,
+            message: `Faculty already booked in batch ${tt.batchCode} from ${p.time?.startLabel || pStart} to ${p.time?.endLabel || pEnd}.`,
+            facultyName: staff?.staffName || staff?.name || null
+          };
       }
     }
   }
-  return { conflict: false };
-};
-
-// ─── Is timetable published? ──────────────────────────────────────────────────
-const isPublished = (tt) => tt?.status === 'Active';
-
-// ─── Write a day: DRAFT → mutate week[], Published → REPLACE_DAY override ────
-const writeDayToTimetable = (tt, day, normalizedPeriods, userId) => {
-  if (!isPublished(tt)) {
-    // DRAFT: update week[] directly
-    const idx = (tt.week || []).findIndex((d) => d.day === day);
-    if (idx >= 0) tt.week[idx].periods = normalizedPeriods;
-    else tt.week.push({ day, periods: normalizedPeriods });
-    const dayOrder = { MONDAY: 0, TUESDAY: 1, WEDNESDAY: 2, THURSDAY: 3, FRIDAY: 4, SATURDAY: 5, SUNDAY: 6 };
-    tt.week.sort((a, b) => (dayOrder[a.day] ?? 7) - (dayOrder[b.day] ?? 7));
-    tt.markModified('week');
-  }
-  // Published: caller must also provide date epoch — handled in editWholeDay
+  return { conflict: false, facultyName: staff?.staffName || staff?.name || null };
 };
 
 // ─── ENDPOINTS ────────────────────────────────────────────────────────────────
 
 // POST /timetable/create
+// FIX G10: Single DB fetch — reuse the same doc for both check and mutation.
 const createTimeTable = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
@@ -263,69 +280,56 @@ const createTimeTable = async (req, res, next) => {
     const weekIn = Array.isArray(payload.week) ? payload.week : [];
     const week = [];
 
-    const existingDoc = await TimeTable.findOne({ tenantId, batchCode, wkStartOn: correctedMonday, isdeleted: false }).lean();
-    // DRAFT timetables: block conflict checks so you can freely draft
-    // Published: check conflicts
-    const skipConflicts = !isPublished(existingDoc);
-    const excludeId = existingDoc?._id || null;
+    // FIX G10: single fetch — used for both the published check and the doc mutation below
+    const existingDoc = await TimeTable.findOne({ tenantId, batchCode, wkStartOn: correctedMonday, isdeleted: false });
+    if (existingDoc && isPublished(existingDoc)) return res.status(400).json({ status: false, message: 'Timetable is published. Use day/edit to modify individual days.' });
 
+    // DRAFT-first: skip staff conflict checks while drafting (conflicts checked at publish time)
     for (const d of weekIn) {
       const day = normDay(d?.day);
       if (!isValidDay(day)) return res.status(400).json({ status: false, message: `Invalid day: ${d?.day}` });
-
-      const exactDate = getOffsetDate(correctedMonday, day);
       const periodsIn = Array.isArray(d?.periods) ? d.periods : [];
       const periods = [];
-
       for (const p of periodsIn) {
         const np = normalizePeriod({ ...p, day });
         if (!np.ok) return res.status(400).json({ status: false, message: np.msg });
-
-        // Phase validation
         if (np.period.phaseId || np.period.phaseName) {
           const pv = await resolvePhaseForPeriod(tenantId, batchCode, np.period.phaseId, np.period.phaseName);
           if (!pv.ok) return res.status(400).json({ status: false, message: pv.msg });
           np.period.phaseId = pv.phaseId;
           np.period.phaseName = pv.phaseName;
         }
-
-        if (!skipConflicts) {
-          const check = await checkStaffConflicts(tenantId, np.period.facultyId, exactDate, day, np.period.time.startMin, np.period.time.endMin, excludeId);
-          if (check.conflict) return res.status(400).json({ status: false, message: `Conflict on ${day} Period ${np.period.periodNo}: ${check.message}` });
-        }
-
         periods.push(np.period);
       }
       week.push({ day, periods });
     }
 
-    let doc = await TimeTable.findOne({ tenantId, batchCode, wkStartOn: correctedMonday, isdeleted: false });
-    if (!doc) {
-      doc = await TimeTable.create({
+    if (!existingDoc) {
+      const doc = await TimeTable.create({
         tenantId,
         batchCode,
         wkStartOn: correctedMonday,
         centerCode: safeTrim(payload.centerCode) || null,
         phase: safeTrim(payload.phase) || null,
-        status: 'DRAFT', // always start as DRAFT
+        status: 'DRAFT',
         week,
         createdBy: payload.userId || null,
         updatedBy: payload.userId || null,
         isdeleted: false
       });
-    } else {
-      if (isPublished(doc)) return res.status(400).json({ status: false, message: 'Timetable is published. Use day/edit to modify individual days.' });
-      const incomingDays = new Set(week.map((d) => d.day));
-      const dayOrder = { MONDAY: 0, TUESDAY: 1, WEDNESDAY: 2, THURSDAY: 3, FRIDAY: 4, SATURDAY: 5, SUNDAY: 6 };
-      const mergedWeek = [...doc.week.filter((d) => !incomingDays.has(d.day)), ...week].sort((a, b) => (dayOrder[a.day] ?? 7) - (dayOrder[b.day] ?? 7));
-      doc.week = mergedWeek;
-      doc.centerCode = safeTrim(payload.centerCode) || doc.centerCode || null;
-      doc.phase = safeTrim(payload.phase) || doc.phase || null;
-      doc.updatedBy = payload.userId || null;
-      await doc.save();
+      return res.status(200).json({ status: true, message: 'Timetable created', data: doc });
     }
 
-    return res.status(200).json({ status: true, message: 'Timetable saved', data: doc });
+    // Merge incoming days into existing DRAFT
+    const incomingDays = new Set(week.map((d) => d.day));
+    const mergedWeek = [...existingDoc.week.filter((d) => !incomingDays.has(d.day)), ...week].sort((a, b) => (DAY_ORDER[a.day] ?? 7) - (DAY_ORDER[b.day] ?? 7));
+
+    existingDoc.week = mergedWeek;
+    existingDoc.centerCode = safeTrim(payload.centerCode) || existingDoc.centerCode || null;
+    existingDoc.phase = safeTrim(payload.phase) || existingDoc.phase || null;
+    existingDoc.updatedBy = payload.userId || null;
+    await existingDoc.save();
+    return res.status(200).json({ status: true, message: 'Timetable updated', data: existingDoc });
   } catch (err) {
     return next(err);
   }
@@ -342,18 +346,22 @@ const publishTimeTable = async (req, res, next) => {
     const tt = await TimeTable.findOne({ _id: timetableId, tenantId, isdeleted: false });
     if (!tt) return res.status(404).json({ status: false, message: 'Timetable not found' });
     if (isPublished(tt)) return res.status(400).json({ status: false, message: 'Timetable is already published' });
+    if (!tt.week?.length) return res.status(400).json({ status: false, message: 'Cannot publish an empty timetable' });
 
-    // Run conflict checks for all periods now that it's being activated
+    // Run conflict checks against Active timetables only (FIX G9 — drafts excluded)
     for (const dayObj of tt.week || []) {
       const day = dayObj.day;
       const exactDate = getOffsetDate(tt.wkStartOn, day);
       for (const p of dayObj.periods || []) {
-        const check = await checkStaffConflicts(tenantId, p.facultyId, exactDate, day, p.time?.startMin, p.time?.endMin, tt._id);
+        if (p.isCancelled) continue;
+        const check = await checkStaffConflicts(tenantId, p.facultyId, exactDate, day, p.time?.startMin, p.time?.endMin, tt._id, false);
         if (check.conflict) return res.status(400).json({ status: false, message: `Publish blocked — conflict on ${day} Period ${p.periodNo}: ${check.message}` });
       }
     }
 
     tt.status = 'Active';
+    tt.publishedAt = Date.now(); // audit trail (model should have this field — added below)
+    tt.publishedBy = userId || null;
     tt.updatedBy = userId || null;
     await tt.save();
     return res.json({ status: true, message: 'Timetable published successfully', data: { status: tt.status } });
@@ -363,6 +371,7 @@ const publishTimeTable = async (req, res, next) => {
 };
 
 // POST /timetable/unpublish
+// FIX G4: Clears all overrides when reverting to DRAFT so stale overrides don't re-apply on re-publish.
 const unpublishTimeTable = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
@@ -374,177 +383,26 @@ const unpublishTimeTable = async (req, res, next) => {
     if (!tt) return res.status(404).json({ status: false, message: 'Timetable not found' });
     if (tt.status === 'DRAFT') return res.status(400).json({ status: false, message: 'Timetable is already a draft' });
 
+    const hadOverrides = (tt.dayOverrides?.length || 0) + (tt.periodOverrides?.length || 0);
+
+    // FIX G4: wipe all overrides — they were tied to the previous publish cycle.
+    // week[] (the base template) is preserved so the user can continue editing.
+    tt.dayOverrides = [];
+    tt.periodOverrides = [];
     tt.status = 'DRAFT';
     tt.updatedBy = userId || null;
-    await tt.save();
-    return res.json({ status: true, message: 'Timetable reverted to DRAFT', data: { status: tt.status } });
-  } catch (err) {
-    return next(err);
-  }
-};
-
-// POST /timetable/day/cancel
-const cancelWholeDay = async (req, res, next) => {
-  try {
-    const tenantId = pickTenantId(req);
-    const timetableId = safeTrim(req.body?.timetableId);
-    const date = toInt(req.body?.date, 0);
-    const reason = safeTrim(req.body?.reason) || 'Holiday';
-    const userId = safeTrim(req.body?.userId);
-    if (!tenantId || !timetableId || !date) return res.status(400).json({ status: false, message: 'tenantId, timetableId and date required' });
-
-    const tt = await TimeTable.findOne({ _id: timetableId, tenantId, isdeleted: false });
-    if (!tt) return res.status(404).json({ status: false, message: 'Timetable not found' });
-
-    const d = new Date(date);
-    const day = DAYS[d.getUTCDay() === 0 ? 6 : d.getUTCDay() - 1];
-
-    if (!isPublished(tt)) {
-      // DRAFT: mark each period in week[] as cancelled for this day
-      const dayIdx = (tt.week || []).findIndex((wd) => wd.day === day);
-      if (dayIdx >= 0) {
-        tt.week[dayIdx].periods = tt.week[dayIdx].periods.map((p) => ({ ...(p.toObject?.() ?? p), isCancelled: true, cancelReason: reason }));
-        tt.markModified('week');
-      }
-      tt.updatedBy = userId || null;
-      await tt.save();
-      return res.json({ status: true, message: 'Day cancelled (draft)' });
-    }
-
-    // Published: use dayOverride
-    upsertDayOverride(tt, { date, day, action: 'CANCEL_DAY', periods: null, reason, updatedBy: userId || null });
     tt.markModified('dayOverrides');
-    tt.updatedBy = userId || null;
+    tt.markModified('periodOverrides');
     await tt.save();
-    return res.json({ status: true, message: 'Holiday declared' });
-  } catch (err) {
-    return next(err);
-  }
-};
 
-// POST /timetable/day/edit
-// DRAFT → updates week[] directly. Published → REPLACE_DAY override.
-const editWholeDay = async (req, res, next) => {
-  try {
-    const tenantId = pickTenantId(req);
-    const timetableId = safeTrim(req.body?.timetableId);
-    const date = toInt(req.body?.date, 0);
-    const day = normDay(req.body?.day);
-    const periodsIn = Array.isArray(req.body?.periods) ? req.body.periods : [];
-    const userId = safeTrim(req.body?.userId);
-
-    if (!tenantId || !timetableId || !day) return res.status(400).json({ status: false, message: 'tenantId, timetableId, and day are required' });
-    if (!isValidDay(day)) return res.status(400).json({ status: false, message: `Invalid day: ${day}` });
-
-    const tt = await TimeTable.findOne({ _id: timetableId, tenantId, isdeleted: false });
-    if (!tt) return res.status(404).json({ status: false, message: 'Timetable not found' });
-
-    const batchCode = tt.batchCode;
-
-    // For published timetable, date is required
-    if (isPublished(tt) && !date) return res.status(400).json({ status: false, message: 'date is required for published timetable' });
-
-    const exactDate = isPublished(tt) ? date : getOffsetDate(tt.wkStartOn, day);
-
-    const normalizedPeriods = [];
-    for (const p of periodsIn) {
-      const np = normalizePeriod({ ...p, day });
-      if (!np.ok) return res.status(400).json({ status: false, message: np.msg });
-
-      // Phase validation
-      if (np.period.phaseId || np.period.phaseName) {
-        const pv = await resolvePhaseForPeriod(tenantId, batchCode, np.period.phaseId, np.period.phaseName);
-        if (!pv.ok) return res.status(400).json({ status: false, message: pv.msg });
-        np.period.phaseId = pv.phaseId;
-        np.period.phaseName = pv.phaseName;
+    return res.json({
+      status: true,
+      message: 'Timetable reverted to DRAFT',
+      data: {
+        status: tt.status,
+        overridesCleared: hadOverrides // tells frontend how many overrides were wiped
       }
-
-      const activeFacultyId = np.period.replacementFacultyId || np.period.facultyId;
-      const check = await checkStaffConflicts(tenantId, activeFacultyId, exactDate, day, np.period.time.startMin, np.period.time.endMin, timetableId);
-      if (check.conflict) return res.status(400).json({ status: false, message: check.message });
-
-      normalizedPeriods.push(np.period);
-    }
-
-    if (!isPublished(tt)) {
-      // DRAFT: write straight into week[]
-      const dayOrder = { MONDAY: 0, TUESDAY: 1, WEDNESDAY: 2, THURSDAY: 3, FRIDAY: 4, SATURDAY: 5, SUNDAY: 6 };
-      const idx = (tt.week || []).findIndex((d) => d.day === day);
-      if (idx >= 0) tt.week[idx].periods = normalizedPeriods;
-      else {
-        tt.week.push({ day, periods: normalizedPeriods });
-        tt.week.sort((a, b) => (dayOrder[a.day] ?? 7) - (dayOrder[b.day] ?? 7));
-      }
-      tt.markModified('week');
-    } else {
-      // Published: REPLACE_DAY override
-      upsertDayOverride(tt, { date, day, action: 'REPLACE_DAY', periods: normalizedPeriods, reason: 'Day edited', updatedBy: userId || null });
-      tt.markModified('dayOverrides');
-    }
-
-    tt.updatedBy = userId || null;
-    await tt.save();
-    return res.json({ status: true, message: 'Day schedule updated successfully' });
-  } catch (err) {
-    return next(err);
-  }
-};
-
-// POST /timetable/list
-const listTimeTables = async (req, res, next) => {
-  try {
-    const tenantId = pickTenantId(req);
-    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-
-    const page = Math.max(parseInt(req.query.page || '1', 10), 1);
-    const limit = Math.min(Math.max(parseInt(req.query.limit || '20', 10), 1), 200);
-    const skip = (page - 1) * limit;
-
-    const { list, search, batchCode, centerCode, phase, wkFrom, wkTo, status } = req.query;
-    const query = { tenantId, isdeleted: false };
-    if (batchCode) query.batchCode = safeTrim(batchCode);
-    if (centerCode) query.centerCode = safeTrim(centerCode);
-    if (phase) query.phase = safeTrim(phase);
-    if (status) query.status = safeTrim(status);
-    if (wkFrom) query.wkStartOn = { ...(query.wkStartOn || {}), $gte: toInt(wkFrom) };
-    if (wkTo) query.wkStartOn = { ...(query.wkStartOn || {}), $lte: toInt(wkTo) };
-    if (search) {
-      const rx = new RegExp(escapeRegex(search), 'i');
-      query.$or = [{ batchCode: rx }, { centerCode: rx }, { phase: rx }];
-    }
-
-    if (list === 'full') {
-      const rows = await TimeTable.find(query).sort({ wkStartOn: -1 }).lean();
-      return res.json({ status: true, data: rows, count: rows.length });
-    }
-
-    const [rows, count] = await Promise.all([TimeTable.find(query).sort({ wkStartOn: -1 }).skip(skip).limit(limit).lean(), TimeTable.countDocuments(query)]);
-    return res.json({ status: true, data: rows, count });
-  } catch (err) {
-    return next(err);
-  }
-};
-
-// POST /timetable/view
-const viewTimeTable = async (req, res, next) => {
-  try {
-    const tenantId = pickTenantId(req);
-    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-    const timetableId = safeTrim(req.body?.timetableId);
-    const batchCode = safeTrim(req.body?.batchCode);
-    const wkStartOn = toInt(req.body?.wkStartOn, 0);
-
-    const query = { tenantId, isdeleted: false };
-    if (timetableId) query._id = timetableId;
-    else {
-      if (!batchCode || !wkStartOn) return res.status(400).json({ status: false, message: 'Provide timetableId OR (batchCode + wkStartOn)' });
-      query.batchCode = batchCode;
-      query.wkStartOn = wkStartOn;
-    }
-
-    const doc = await TimeTable.findOne(query).lean();
-    if (!doc) return res.status(404).json({ status: false, message: 'Timetable not found' });
-    return res.json({ status: true, data: doc });
+    });
   } catch (err) {
     return next(err);
   }
@@ -571,21 +429,118 @@ const deleteTimeTable = async (req, res, next) => {
   }
 };
 
-// POST /timetable/listbybatch
-const listTimeTablesByBatch = async (req, res, next) => {
+// POST /timetable/day/cancel
+// FIX G6: For DRAFT, validate that the provided date belongs to this timetable's week.
+const cancelWholeDay = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
-    const batchCode = safeTrim(req.body?.batchCode || req.query?.batchCode);
-    if (!tenantId || !batchCode) return res.status(400).json({ status: false, message: 'tenantId and batchCode required' });
+    const timetableId = safeTrim(req.body?.timetableId);
+    const date = toInt(req.body?.date, 0);
+    const reason = safeTrim(req.body?.reason) || 'Holiday';
+    const userId = safeTrim(req.body?.userId);
+    if (!tenantId || !timetableId || !date) return res.status(400).json({ status: false, message: 'tenantId, timetableId and date required' });
 
-    const query = { tenantId, batchCode, isdeleted: false };
-    const wkFrom = toInt(req.query.wkFrom, 0);
-    const wkTo = toInt(req.query.wkTo, 0);
-    if (wkFrom) query.wkStartOn = { ...(query.wkStartOn || {}), $gte: wkFrom };
-    if (wkTo) query.wkStartOn = { ...(query.wkStartOn || {}), $lte: wkTo };
+    const tt = await TimeTable.findOne({ _id: timetableId, tenantId, isdeleted: false });
+    if (!tt) return res.status(404).json({ status: false, message: 'Timetable not found' });
 
-    const rows = await TimeTable.find(query).sort({ wkStartOn: -1 }).lean();
-    return res.json({ status: true, data: rows, count: rows.length });
+    // FIX G6: Validate the date belongs to this timetable's week
+    const dateWkStart = getPreviousMonday(date);
+    if (dateWkStart !== toInt(tt.wkStartOn)) return res.status(400).json({ status: false, message: `Date does not belong to this timetable's week (wkStartOn: ${tt.wkStartOn})` });
+
+    const d = new Date(date);
+    const day = DAYS[d.getUTCDay() === 0 ? 6 : d.getUTCDay() - 1];
+
+    if (!isPublished(tt)) {
+      const dayIdx = (tt.week || []).findIndex((wd) => wd.day === day);
+      if (dayIdx >= 0) {
+        tt.week[dayIdx].periods = tt.week[dayIdx].periods.map((p) => ({
+          ...(p.toObject?.() ?? p),
+          isCancelled: true,
+          cancelReason: reason
+        }));
+        tt.markModified('week');
+      }
+      tt.updatedBy = userId || null;
+      await tt.save();
+      return res.json({ status: true, message: 'Day cancelled (draft)' });
+    }
+
+    upsertDayOverride(tt, { date, day, action: 'CANCEL_DAY', periods: [], reason, updatedBy: userId || null });
+    tt.markModified('dayOverrides');
+    tt.updatedBy = userId || null;
+    await tt.save();
+    return res.json({ status: true, message: 'Holiday declared' });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+// POST /timetable/day/edit
+// FIX G5: DRAFT edits skip staff conflict checks (consistent with createTimeTable).
+const editWholeDay = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const timetableId = safeTrim(req.body?.timetableId);
+    const date = toInt(req.body?.date, 0);
+    const day = normDay(req.body?.day);
+    const periodsIn = Array.isArray(req.body?.periods) ? req.body.periods : [];
+    const userId = safeTrim(req.body?.userId);
+
+    if (!tenantId || !timetableId || !day) return res.status(400).json({ status: false, message: 'tenantId, timetableId, and day are required' });
+    if (!isValidDay(day)) return res.status(400).json({ status: false, message: `Invalid day: ${day}` });
+
+    const tt = await TimeTable.findOne({ _id: timetableId, tenantId, isdeleted: false });
+    if (!tt) return res.status(404).json({ status: false, message: 'Timetable not found' });
+
+    if (isPublished(tt) && !date) return res.status(400).json({ status: false, message: 'date is required for published timetable' });
+
+    // FIX G6 (also applies here): validate date belongs to this week for published path
+    if (isPublished(tt)) {
+      const dateWkStart = getPreviousMonday(date);
+      if (dateWkStart !== toInt(tt.wkStartOn)) return res.status(400).json({ status: false, message: `Date does not belong to this timetable's week` });
+    }
+
+    const exactDate = isPublished(tt) ? date : getOffsetDate(tt.wkStartOn, day);
+    const batchCode = tt.batchCode;
+
+    const normalizedPeriods = [];
+    for (const p of periodsIn) {
+      const np = normalizePeriod({ ...p, day });
+      if (!np.ok) return res.status(400).json({ status: false, message: np.msg });
+
+      if (np.period.phaseId || np.period.phaseName) {
+        const pv = await resolvePhaseForPeriod(tenantId, batchCode, np.period.phaseId, np.period.phaseName);
+        if (!pv.ok) return res.status(400).json({ status: false, message: pv.msg });
+        np.period.phaseId = pv.phaseId;
+        np.period.phaseName = pv.phaseName;
+      }
+
+      // FIX G5: Only run conflict check for published timetable edits, not for DRAFT
+      if (isPublished(tt)) {
+        const activeFacultyId = np.period.replacementFacultyId || np.period.facultyId;
+        const check = await checkStaffConflicts(tenantId, activeFacultyId, exactDate, day, np.period.time.startMin, np.period.time.endMin, timetableId, false);
+        if (check.conflict) return res.status(400).json({ status: false, message: check.message });
+      }
+
+      normalizedPeriods.push(np.period);
+    }
+
+    if (!isPublished(tt)) {
+      const idx = (tt.week || []).findIndex((d) => d.day === day);
+      if (idx >= 0) tt.week[idx].periods = normalizedPeriods;
+      else {
+        tt.week.push({ day, periods: normalizedPeriods });
+        tt.week.sort((a, b) => (DAY_ORDER[a.day] ?? 7) - (DAY_ORDER[b.day] ?? 7));
+      }
+      tt.markModified('week');
+    } else {
+      upsertDayOverride(tt, { date, day, action: 'REPLACE_DAY', periods: normalizedPeriods, reason: 'Day edited', updatedBy: userId || null });
+      tt.markModified('dayOverrides');
+    }
+
+    tt.updatedBy = userId || null;
+    await tt.save();
+    return res.json({ status: true, message: 'Day schedule updated successfully' });
   } catch (err) {
     return next(err);
   }
@@ -607,7 +562,6 @@ const cancelPeriod = async (req, res, next) => {
     if (!tt) return res.status(404).json({ status: false, message: 'Timetable not found' });
 
     if (!isPublished(tt)) {
-      // DRAFT: cancel in week[] directly
       const dayIdx = (tt.week || []).findIndex((d) => d.day === day);
       if (dayIdx < 0) return res.status(400).json({ status: false, message: `Day ${day} not found in timetable` });
       const pIdx = tt.week[dayIdx].periods.findIndex((p) => toInt(p?.periodNo) === periodNo);
@@ -622,7 +576,8 @@ const cancelPeriod = async (req, res, next) => {
 
     if (!date) return res.status(400).json({ status: false, message: 'date is required for published timetable' });
 
-    const base = findTemplatePeriod(tt, day, periodNo) ?? (tt.periodOverrides || []).find((o) => normDay(o?.day) === day && toInt(o?.periodNo) === periodNo && o.action === 'ADD_PERIOD')?.period;
+    // Uses findEffectivePeriodBase so ADD_PERIOD periods can also be cancelled
+    const base = findEffectivePeriodBase(tt, day, periodNo, date);
     if (!base) return res.status(400).json({ status: false, message: 'Period not found in template or overrides' });
 
     upsertPeriodOverride(tt, { date, day, periodNo, action: 'CANCEL_PERIOD', period: null, toPeriodNo: null, reason, updatedBy: userId || null });
@@ -653,7 +608,6 @@ const rearrangeStaff = async (req, res, next) => {
     if (!tt) return res.status(404).json({ status: false, message: 'Timetable not found' });
 
     if (!isPublished(tt)) {
-      // DRAFT: update week[] directly
       const dayIdx = (tt.week || []).findIndex((d) => d.day === day);
       if (dayIdx < 0) return res.status(400).json({ status: false, message: `Day ${day} not found` });
       const pIdx = tt.week[dayIdx].periods.findIndex((p) => toInt(p?.periodNo) === periodNo);
@@ -669,11 +623,11 @@ const rearrangeStaff = async (req, res, next) => {
 
     if (!date) return res.status(400).json({ status: false, message: 'date required for published timetable' });
 
-    const base = findTemplatePeriod(tt, day, periodNo) ?? (tt.periodOverrides || []).find((o) => normDay(o?.day) === day && toInt(o?.periodNo) === periodNo && o.action === 'ADD_PERIOD')?.period;
-    if (!base) return res.status(400).json({ status: false, message: 'Period not found' });
+    // Uses findEffectivePeriodBase so ADD_PERIOD periods can also have staff rearranged
+    const baseObj = findEffectivePeriodBase(tt, day, periodNo, date);
+    if (!baseObj) return res.status(400).json({ status: false, message: 'Period not found' });
 
-    const baseObj = base.toObject?.() ?? base;
-    const check = await checkStaffConflicts(tenantId, newFacultyId, date, day, toInt(baseObj?.time?.startMin), toInt(baseObj?.time?.endMin), timetableId);
+    const check = await checkStaffConflicts(tenantId, newFacultyId, date, day, toInt(baseObj?.time?.startMin), toInt(baseObj?.time?.endMin), timetableId, false);
     if (check.conflict) return res.status(400).json({ status: false, message: check.message });
 
     upsertPeriodOverride(tt, {
@@ -695,6 +649,7 @@ const rearrangeStaff = async (req, res, next) => {
 };
 
 // POST /timetable/period/move
+// FIX G2: DRAFT path now swaps full period CONTENT (including time) — consistent with Published path.
 const changePeriod = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
@@ -712,17 +667,30 @@ const changePeriod = async (req, res, next) => {
     if (!tt) return res.status(404).json({ status: false, message: 'Timetable not found' });
 
     if (!isPublished(tt)) {
-      // DRAFT: swap period numbers in week[]
       const dayIdx = (tt.week || []).findIndex((d) => d.day === day);
       if (dayIdx < 0) return res.status(400).json({ status: false, message: `Day ${day} not found` });
       const periods = tt.week[dayIdx].periods;
       const fromIdx = periods.findIndex((p) => toInt(p?.periodNo) === fromPeriodNo);
       const toIdx = periods.findIndex((p) => toInt(p?.periodNo) === toPeriodNo);
       if (fromIdx < 0) return res.status(400).json({ status: false, message: 'Source period not found' });
-      // Swap period numbers (content stays, slot numbers swap)
-      const temp = periods[fromIdx].periodNo;
-      periods[fromIdx].periodNo = periods[toIdx]?.periodNo ?? toPeriodNo;
-      if (toIdx >= 0) periods[toIdx].periodNo = temp;
+
+      // FIX G2: swap full period OBJECTS (content + time), keep periodNo labels in place.
+      // This means slot 1 always shows what was slot 1's time, but with slot 2's content — i.e. a true swap.
+      const fromObj = { ...(periods[fromIdx].toObject?.() ?? periods[fromIdx]) };
+      const fromNo = fromObj.periodNo;
+
+      if (toIdx >= 0) {
+        const toObj = { ...(periods[toIdx].toObject?.() ?? periods[toIdx]) };
+        const toNo = toObj.periodNo;
+        // Swap: put toObj content into fromIdx slot (keeping fromNo), put fromObj content into toIdx slot (keeping toNo)
+        periods[fromIdx] = { ...toObj, periodNo: fromNo };
+        periods[toIdx] = { ...fromObj, periodNo: toNo };
+      } else {
+        // Target slot doesn't exist — move fromObj into toPeriodNo, remove from original slot
+        periods.splice(fromIdx, 1);
+        periods.push({ ...fromObj, periodNo: toPeriodNo });
+      }
+
       periods.sort((a, b) => toInt(a?.periodNo) - toInt(b?.periodNo));
       tt.markModified('week');
       tt.updatedBy = userId || null;
@@ -732,21 +700,18 @@ const changePeriod = async (req, res, next) => {
 
     if (!date) return res.status(400).json({ status: false, message: 'date required for published timetable' });
 
-    const fromBase = findTemplatePeriod(tt, day, fromPeriodNo);
+    const fromBase = findEffectivePeriodBase(tt, day, fromPeriodNo, date);
     if (!fromBase) return res.status(400).json({ status: false, message: 'Source period not found' });
-    const toBase = findTemplatePeriod(tt, day, toPeriodNo);
+    const toBase = findEffectivePeriodBase(tt, day, toPeriodNo, date);
 
-    const fromBaseObj = fromBase.toObject?.() ?? fromBase;
-    const toBaseObj = toBase ? (toBase.toObject?.() ?? toBase) : null;
-
-    if (toBaseObj) {
-      const checkFrom = await checkStaffConflicts(tenantId, fromBaseObj.replacementFacultyId || fromBaseObj.facultyId, date, day, toInt(toBaseObj.time?.startMin), toInt(toBaseObj.time?.endMin), timetableId);
+    // Conflict checks: verify each faculty is free in the time slot they're moving INTO
+    if (toBase) {
+      const checkFrom = await checkStaffConflicts(tenantId, fromBase.replacementFacultyId || fromBase.facultyId, date, day, toInt(toBase.time?.startMin), toInt(toBase.time?.endMin), timetableId, false);
       if (checkFrom.conflict) return res.status(400).json({ status: false, message: `Swap conflict (source faculty): ${checkFrom.message}` });
-      const checkTo = await checkStaffConflicts(tenantId, toBaseObj.replacementFacultyId || toBaseObj.facultyId, date, day, toInt(fromBaseObj.time?.startMin), toInt(fromBaseObj.time?.endMin), timetableId);
+      const checkTo = await checkStaffConflicts(tenantId, toBase.replacementFacultyId || toBase.facultyId, date, day, toInt(fromBase.time?.startMin), toInt(fromBase.time?.endMin), timetableId, false);
       if (checkTo.conflict) return res.status(400).json({ status: false, message: `Swap conflict (target faculty): ${checkTo.message}` });
     }
 
-    // Store both sides of the swap atomically
     upsertPeriodOverride(tt, { date, day, periodNo: fromPeriodNo, action: 'MOVE_PERIOD', period: null, toPeriodNo, reason: 'Period moved', updatedBy: userId || null });
     if (toBase) upsertPeriodOverride(tt, { date, day, periodNo: toPeriodNo, action: 'MOVE_PERIOD', period: null, toPeriodNo: fromPeriodNo, reason: 'Period swapped', updatedBy: userId || null });
 
@@ -760,6 +725,7 @@ const changePeriod = async (req, res, next) => {
 };
 
 // POST /timetable/period/replace
+// FIX G1: Now uses findEffectivePeriodBase instead of findTemplatePeriod so ADD_PERIOD periods can be replaced.
 const replacePeriod = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
@@ -775,13 +741,13 @@ const replacePeriod = async (req, res, next) => {
     const tt = await TimeTable.findOne({ _id: timetableId, tenantId, isdeleted: false });
     if (!tt) return res.status(404).json({ status: false, message: 'Timetable not found' });
 
-    const base = findTemplatePeriod(tt, day, periodNo);
-    if (!base) return res.status(400).json({ status: false, message: 'Template period not found' });
+    // FIX G1: findEffectivePeriodBase checks template first, then ADD_PERIOD overrides
+    const base = findEffectivePeriodBase(tt, day, periodNo, date);
+    if (!base) return res.status(400).json({ status: false, message: 'Period not found in template or overrides' });
 
-    const np = normalizePeriod({ ...(base.toObject?.() ?? base), ...periodIn, periodNo, day });
+    const np = normalizePeriod({ ...base, ...periodIn, periodNo, day });
     if (!np.ok) return res.status(400).json({ status: false, message: np.msg });
 
-    // Phase validation if provided
     if (np.period.phaseId || np.period.phaseName) {
       const pv = await resolvePhaseForPeriod(tenantId, tt.batchCode, np.period.phaseId, np.period.phaseName);
       if (!pv.ok) return res.status(400).json({ status: false, message: pv.msg });
@@ -790,7 +756,6 @@ const replacePeriod = async (req, res, next) => {
     }
 
     if (!isPublished(tt)) {
-      // DRAFT: update week[] directly
       const dayIdx = (tt.week || []).findIndex((d) => d.day === day);
       if (dayIdx < 0) return res.status(400).json({ status: false, message: `Day ${day} not found` });
       const pIdx = tt.week[dayIdx].periods.findIndex((p) => toInt(p?.periodNo) === periodNo);
@@ -805,7 +770,7 @@ const replacePeriod = async (req, res, next) => {
     if (!date) return res.status(400).json({ status: false, message: 'date required for published timetable' });
 
     const activeFacultyId = np.period.replacementFacultyId || np.period.facultyId;
-    const check = await checkStaffConflicts(tenantId, activeFacultyId, date, day, np.period.time.startMin, np.period.time.endMin, timetableId);
+    const check = await checkStaffConflicts(tenantId, activeFacultyId, date, day, np.period.time.startMin, np.period.time.endMin, timetableId, false);
     if (check.conflict) return res.status(400).json({ status: false, message: check.message });
 
     upsertPeriodOverride(tt, { date, day, periodNo, action: 'REPLACE_PERIOD', period: np.period, toPeriodNo: null, reason: 'Period replaced', updatedBy: userId || null });
@@ -813,6 +778,79 @@ const replacePeriod = async (req, res, next) => {
     tt.updatedBy = userId || null;
     await tt.save();
     return res.json({ status: true, message: 'Period replaced' });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+// POST /timetable/period/add  ← NEW ENDPOINT (FIX G3)
+// Adds a brand-new period to a published timetable that wasn't in the original template.
+const addPeriod = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const timetableId = safeTrim(req.body?.timetableId);
+    const date = toInt(req.body?.date, 0);
+    const day = normDay(req.body?.day);
+    const periodIn = req.body?.period || {};
+    const userId = safeTrim(req.body?.userId);
+
+    if (!tenantId || !timetableId || !day) return res.status(400).json({ status: false, message: 'tenantId, timetableId, and day are required' });
+    if (!isValidDay(day)) return res.status(400).json({ status: false, message: `Invalid day: ${day}` });
+
+    const tt = await TimeTable.findOne({ _id: timetableId, tenantId, isdeleted: false });
+    if (!tt) return res.status(404).json({ status: false, message: 'Timetable not found' });
+
+    const np = normalizePeriod({ ...periodIn, day });
+    if (!np.ok) return res.status(400).json({ status: false, message: np.msg });
+
+    if (np.period.phaseId || np.period.phaseName) {
+      const pv = await resolvePhaseForPeriod(tenantId, tt.batchCode, np.period.phaseId, np.period.phaseName);
+      if (!pv.ok) return res.status(400).json({ status: false, message: pv.msg });
+      np.period.phaseId = pv.phaseId;
+      np.period.phaseName = pv.phaseName;
+    }
+
+    if (!isPublished(tt)) {
+      // DRAFT: just push into week[] directly
+      if (!date) return res.status(400).json({ status: false, message: 'date required to determine the day' });
+      const idx = (tt.week || []).findIndex((d) => d.day === day);
+      if (idx < 0) {
+        tt.week.push({ day, periods: [np.period] });
+        tt.week.sort((a, b) => (DAY_ORDER[a.day] ?? 7) - (DAY_ORDER[b.day] ?? 7));
+      } else {
+        // Check no duplicate periodNo on this day
+        const exists = tt.week[idx].periods.some((p) => toInt(p?.periodNo) === np.period.periodNo);
+        if (exists) return res.status(400).json({ status: false, message: `Period ${np.period.periodNo} already exists on ${day}` });
+        tt.week[idx].periods.push(np.period);
+        tt.week[idx].periods.sort((a, b) => toInt(a?.periodNo) - toInt(b?.periodNo));
+      }
+      tt.markModified('week');
+      tt.updatedBy = userId || null;
+      await tt.save();
+      return res.json({ status: true, message: 'Period added (draft)' });
+    }
+
+    if (!date) return res.status(400).json({ status: false, message: 'date is required for published timetable' });
+
+    // Validate date belongs to this week
+    const dateWkStart = getPreviousMonday(date);
+    if (dateWkStart !== toInt(tt.wkStartOn)) return res.status(400).json({ status: false, message: `Date does not belong to this timetable's week` });
+
+    // Check periodNo doesn't already exist for this date
+    const rendered = buildDaySchedule(tt, date);
+    const alreadyExists = rendered.periods.some((p) => toInt(p?.periodNo) === np.period.periodNo && !p.isCancelled);
+    if (alreadyExists) return res.status(400).json({ status: false, message: `Period ${np.period.periodNo} already exists on this date` });
+
+    // Conflict check
+    const activeFacultyId = np.period.replacementFacultyId || np.period.facultyId;
+    const check = await checkStaffConflicts(tenantId, activeFacultyId, date, day, np.period.time.startMin, np.period.time.endMin, timetableId, false);
+    if (check.conflict) return res.status(400).json({ status: false, message: check.message });
+
+    upsertPeriodOverride(tt, { date, day, periodNo: np.period.periodNo, action: 'ADD_PERIOD', period: np.period, toPeriodNo: null, reason: 'Period added', updatedBy: userId || null });
+    tt.markModified('periodOverrides');
+    tt.updatedBy = userId || null;
+    await tt.save();
+    return res.json({ status: true, message: 'Period added', data: { periodNo: np.period.periodNo } });
   } catch (err) {
     return next(err);
   }
@@ -849,14 +887,9 @@ const updateZoomLink = async (req, res, next) => {
 
     if (!date) return res.status(400).json({ status: false, message: 'date required for published timetable' });
 
-    const existing = (tt.periodOverrides || []).find((o) => toInt(o?.date) === date && normDay(o?.day) === day && toInt(o?.periodNo) === periodNo && ['REPLACE_PERIOD', 'ADD_PERIOD'].includes(o.action));
-    let baseObj;
-    if (existing?.period) baseObj = existing.period.toObject?.() ?? existing.period;
-    else {
-      const base = findTemplatePeriod(tt, day, periodNo);
-      if (!base) return res.status(400).json({ status: false, message: 'Template period not found' });
-      baseObj = base.toObject?.() ?? base;
-    }
+    // Uses findEffectivePeriodBase to support ADD_PERIOD periods too
+    const baseObj = findEffectivePeriodBase(tt, day, periodNo, date);
+    if (!baseObj) return res.status(400).json({ status: false, message: 'Period not found' });
 
     upsertPeriodOverride(tt, { date, day, periodNo, action: 'REPLACE_PERIOD', period: { ...baseObj, zoomUrl, mode: zoomUrl ? 'ONLINE' : baseObj.mode, periodNo }, reason: 'Zoom link updated', updatedBy: userId || null });
     tt.markModified('periodOverrides');
@@ -883,13 +916,6 @@ const convertToExam = async (req, res, next) => {
     const tt = await TimeTable.findOne({ _id: timetableId, tenantId, isdeleted: false });
     if (!tt) return res.status(404).json({ status: false, message: 'Timetable not found' });
 
-    const getPeriodBase = () => {
-      const existing = (tt.periodOverrides || []).find((o) => toInt(o?.date) === date && normDay(o?.day) === day && toInt(o?.periodNo) === periodNo && ['REPLACE_PERIOD', 'ADD_PERIOD'].includes(o.action));
-      if (existing?.period) return { ...(existing.period.toObject?.() ?? existing.period) };
-      const base = findTemplatePeriod(tt, day, periodNo);
-      return base ? { ...(base.toObject?.() ?? base) } : null;
-    };
-
     if (!isPublished(tt)) {
       const dayIdx = (tt.week || []).findIndex((d) => d.day === day);
       if (dayIdx < 0) return res.status(400).json({ status: false, message: `Day ${day} not found` });
@@ -913,7 +939,8 @@ const convertToExam = async (req, res, next) => {
 
     if (!date) return res.status(400).json({ status: false, message: 'date required for published timetable' });
 
-    const periodToSave = getPeriodBase();
+    // Uses findEffectivePeriodBase to support ADD_PERIOD periods too
+    const periodToSave = findEffectivePeriodBase(tt, day, periodNo, date);
     if (!periodToSave) return res.status(400).json({ status: false, message: 'Period not found' });
 
     periodToSave.periodNo = periodNo;
@@ -931,7 +958,7 @@ const convertToExam = async (req, res, next) => {
     const startMin = toInt(periodToSave?.time?.startMin, -1);
     const endMin = toInt(periodToSave?.time?.endMin, -1);
     if (activeFacultyId && startMin >= 0 && endMin >= 0) {
-      const check = await checkStaffConflicts(tenantId, activeFacultyId, date, day, startMin, endMin, timetableId);
+      const check = await checkStaffConflicts(tenantId, activeFacultyId, date, day, startMin, endMin, timetableId, false);
       if (check.conflict) return res.status(400).json({ status: false, message: check.message });
     }
 
@@ -945,7 +972,85 @@ const convertToExam = async (req, res, next) => {
   }
 };
 
-// POST /timetable/bulk
+// POST /timetable/list
+const listTimeTables = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+
+    const page = Math.max(parseInt(req.query.page || req.body.page || '1', 10), 1);
+    const limit = Math.min(Math.max(parseInt(req.query.limit || req.body.limit || '20', 10), 1), 200);
+    const skip = (page - 1) * limit;
+
+    const { list, search, batchCode, centerCode, phase, wkFrom, wkTo, status } = { ...req.query, ...req.body }; // FIX G14: accept filters from both query and body
+
+    const query = { tenantId, isdeleted: false };
+    if (batchCode) query.batchCode = safeTrim(batchCode);
+    if (centerCode) query.centerCode = safeTrim(centerCode);
+    if (phase) query.phase = safeTrim(phase);
+    if (status) query.status = safeTrim(status);
+    if (wkFrom) query.wkStartOn = { ...(query.wkStartOn || {}), $gte: toInt(wkFrom) };
+    if (wkTo) query.wkStartOn = { ...(query.wkStartOn || {}), $lte: toInt(wkTo) };
+    if (search) {
+      const rx = new RegExp(escapeRegex(search), 'i');
+      query.$or = [{ batchCode: rx }, { centerCode: rx }, { phase: rx }];
+    }
+
+    if (list === 'full') {
+      const rows = await TimeTable.find(query).sort({ wkStartOn: -1 }).lean();
+      return res.json({ status: true, data: rows, count: rows.length });
+    }
+
+    const [rows, count] = await Promise.all([TimeTable.find(query).sort({ wkStartOn: -1 }).skip(skip).limit(limit).lean(), TimeTable.countDocuments(query)]);
+    return res.json({ status: true, data: rows, count });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+// POST /timetable/view
+const viewTimeTable = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+    const timetableId = safeTrim(req.body?.timetableId);
+    const batchCode = safeTrim(req.body?.batchCode);
+    const wkStartOn = toInt(req.body?.wkStartOn, 0);
+    const query = { tenantId, isdeleted: false };
+    if (timetableId) query._id = timetableId;
+    else {
+      if (!batchCode || !wkStartOn) return res.status(400).json({ status: false, message: 'Provide timetableId OR (batchCode + wkStartOn)' });
+      query.batchCode = batchCode;
+      query.wkStartOn = wkStartOn;
+    }
+    const doc = await TimeTable.findOne(query).lean();
+    if (!doc) return res.status(404).json({ status: false, message: 'Timetable not found' });
+    return res.json({ status: true, data: doc });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+// POST /timetable/list-by-batch
+const listTimeTablesByBatch = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const batchCode = safeTrim(req.body?.batchCode || req.query?.batchCode);
+    if (!tenantId || !batchCode) return res.status(400).json({ status: false, message: 'tenantId and batchCode required' });
+    const query = { tenantId, batchCode, isdeleted: false };
+    const wkFrom = toInt(req.query.wkFrom || req.body.wkFrom, 0);
+    const wkTo = toInt(req.query.wkTo || req.body.wkTo, 0);
+    if (wkFrom) query.wkStartOn = { ...(query.wkStartOn || {}), $gte: wkFrom };
+    if (wkTo) query.wkStartOn = { ...(query.wkStartOn || {}), $lte: wkTo };
+    const rows = await TimeTable.find(query).sort({ wkStartOn: -1 }).lean();
+    return res.json({ status: true, data: rows, count: rows.length });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+// POST /timetable/import (bulk)
+// FIX G11: Single findOne per item instead of two.
 const bulkUploadTimeTables = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
@@ -954,8 +1059,8 @@ const bulkUploadTimeTables = async (req, res, next) => {
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
     if (!data.length) return res.status(400).json({ status: false, message: 'No data provided' });
 
-    const ops = [],
-      bulkErrors = [];
+    const ops = [];
+    const bulkErrors = [];
 
     for (let i = 0; i < data.length; i++) {
       const item = data[i];
@@ -966,66 +1071,68 @@ const bulkUploadTimeTables = async (req, res, next) => {
       const correctedMonday = getPreviousMonday(wkStart);
       const weekIn = Array.isArray(item.week) ? item.week : [];
       const week = [];
-      let rowHasConflict = false;
+      let rowHasError = false;
 
+      // FIX G11: single fetch — reused for both published check and merge
       const existingDoc = await TimeTable.findOne({ tenantId, batchCode, wkStartOn: correctedMonday, isdeleted: false }).lean();
       if (existingDoc && isPublished(existingDoc)) {
         bulkErrors.push({ batchCode, row: i + 1, message: 'Timetable is published; cannot bulk-overwrite it.' });
-        rowHasConflict = true;
+        continue; // skip to next item immediately — no need to process periods
       }
-      const excludeId = existingDoc?._id || null;
 
       for (const d of weekIn) {
         const day = normDay(d?.day);
         if (!isValidDay(day)) continue;
-        const exactDate = getOffsetDate(correctedMonday, day);
         const periods = [];
         for (const p of d?.periods || []) {
           const np = normalizePeriod({ ...p, day });
-          if (!np.ok) continue;
-          // Phase validation
+          if (!np.ok) continue; // skip bad rows silently in bulk
           if (np.period.phaseId || np.period.phaseName) {
             const pv = await resolvePhaseForPeriod(tenantId, batchCode, np.period.phaseId, np.period.phaseName);
             if (!pv.ok) {
               bulkErrors.push({ batchCode, row: i + 1, message: pv.msg });
-              rowHasConflict = true;
-              continue;
+              rowHasError = true;
+              break;
             }
             np.period.phaseId = pv.phaseId;
             np.period.phaseName = pv.phaseName;
           }
-          // Bulk uploads are DRAFT-first — skip conflict check; resolved on publish
           periods.push(np.period);
         }
+        if (rowHasError) break;
         week.push({ day, periods });
       }
 
-      if (!rowHasConflict) {
-        const existingForMerge = await TimeTable.findOne({ tenantId, batchCode, wkStartOn: correctedMonday, isdeleted: false }).lean();
-        let mergedWeek = week;
-        if (existingForMerge?.week?.length) {
-          const incomingDays = new Set(week.map((d) => d.day));
-          const dayOrder = { MONDAY: 0, TUESDAY: 1, WEDNESDAY: 2, THURSDAY: 3, FRIDAY: 4, SATURDAY: 5, SUNDAY: 6 };
-          mergedWeek = [...existingForMerge.week.filter((d) => !incomingDays.has(d.day)), ...week].sort((a, b) => (dayOrder[a.day] ?? 7) - (dayOrder[b.day] ?? 7));
-        }
-        ops.push({
-          updateOne: {
-            filter: { tenantId, batchCode, wkStartOn: correctedMonday, isdeleted: false },
-            update: {
-              $set: { centerCode: safeTrim(item.centerCode) || null, phase: safeTrim(item.phase) || null, status: 'DRAFT', week: mergedWeek, updatedBy: userId || null },
-              $setOnInsert: { createdBy: userId || null }
-            },
-            upsert: true
-          }
-        });
+      if (rowHasError) continue;
+
+      // FIX G11: reuse existingDoc for merge instead of a second findOne
+      let mergedWeek = week;
+      if (existingDoc?.week?.length) {
+        const incomingDays = new Set(week.map((d) => d.day));
+        mergedWeek = [...existingDoc.week.filter((d) => !incomingDays.has(d.day)), ...week].sort((a, b) => (DAY_ORDER[a.day] ?? 7) - (DAY_ORDER[b.day] ?? 7));
       }
+
+      ops.push({
+        updateOne: {
+          filter: { tenantId, batchCode, wkStartOn: correctedMonday, isdeleted: false },
+          update: {
+            $set: { centerCode: safeTrim(item.centerCode) || null, phase: safeTrim(item.phase) || null, status: 'DRAFT', week: mergedWeek, updatedBy: userId || null },
+            $setOnInsert: { createdBy: userId || null }
+          },
+          upsert: true
+        }
+      });
     }
 
     if (bulkErrors.length) return res.status(400).json({ status: false, message: 'Bulk upload errors', conflicts: bulkErrors });
     if (!ops.length) return res.status(400).json({ status: false, message: 'No valid timetable data found' });
 
     const result = await TimeTable.bulkWrite(ops, { ordered: false });
-    return res.status(200).json({ status: true, message: 'Bulk upload completed', data: { matchedCount: result.matchedCount, modifiedCount: result.modifiedCount, upsertedCount: result.upsertedCount } });
+    return res.status(200).json({
+      status: true,
+      message: 'Bulk upload completed',
+      data: { matchedCount: result.matchedCount, modifiedCount: result.modifiedCount, upsertedCount: result.upsertedCount }
+    });
   } catch (err) {
     return next(err);
   }
@@ -1038,6 +1145,7 @@ const viewBatchScheduleByDate = async (req, res, next) => {
     const batchCode = safeTrim(req.body?.batchCode);
     const fromDate = toInt(req.body?.fromDate, 0);
     const toDate = toInt(req.body?.toDate, fromDate);
+    const activeOnly = req.body?.activeOnly !== false; // default true — only show published timetables
 
     if (!tenantId || !batchCode || !fromDate) return res.status(400).json({ status: false, message: 'tenantId, batchCode, and fromDate are required' });
     if (toDate < fromDate) return res.status(400).json({ status: false, message: 'toDate cannot be before fromDate' });
@@ -1052,7 +1160,10 @@ const viewBatchScheduleByDate = async (req, res, next) => {
       curr += msPerDay;
     }
 
-    const timetables = await TimeTable.find({ tenantId, batchCode, wkStartOn: { $in: [...weekStarts] }, isdeleted: false }).lean();
+    const ttQuery = { tenantId, batchCode, wkStartOn: { $in: [...weekStarts] }, isdeleted: false };
+    if (activeOnly) ttQuery.status = 'Active'; // FIX G10 variant: student-safe view only shows Active
+
+    const timetables = await TimeTable.find(ttQuery).lean();
     const ttMap = {};
     for (const tt of timetables) ttMap[tt.wkStartOn] = tt;
 
@@ -1076,6 +1187,7 @@ const viewBatchScheduleByDate = async (req, res, next) => {
 };
 
 // POST /timetable/validate
+// FIX G7: conflict objects now include facultyName.
 const validateSchedule = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
@@ -1083,8 +1195,8 @@ const validateSchedule = async (req, res, next) => {
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
     if (!data.length) return res.status(400).json({ status: false, message: 'No schedule data provided' });
 
-    const conflicts = [],
-      proposed = [];
+    const conflicts = [];
+    const proposed = [];
 
     for (let i = 0; i < data.length; i++) {
       const item = data[i];
@@ -1107,13 +1219,31 @@ const validateSchedule = async (req, res, next) => {
           const endMin = toInt(p?.time?.endMin, -1);
           if (!facultyId || startMin < 0 || endMin < 0) continue;
 
-          const dbCheck = await checkStaffConflicts(tenantId, facultyId, exactDate, day, startMin, endMin, timetableId);
+          // FIX G7: checkStaffConflicts now returns facultyName in its result
+          const dbCheck = await checkStaffConflicts(tenantId, facultyId, exactDate, day, startMin, endMin, timetableId, false);
           if (dbCheck.conflict) {
-            conflicts.push({ batchCode, day, periodNo: p.periodNo, facultyId, message: dbCheck.message });
+            conflicts.push({
+              batchCode,
+              day,
+              periodNo: p.periodNo,
+              facultyId,
+              facultyName: dbCheck.facultyName || safeTrim(p?.facultyName) || null, // FIX G7
+              message: dbCheck.message
+            });
           } else {
             const internal = proposed.find((pa) => pa.facultyId === facultyId && pa.exactDate === exactDate && startMin < pa.endMin && endMin > pa.startMin);
-            if (internal) conflicts.push({ batchCode, day, periodNo: p.periodNo, facultyId, message: `Internal conflict with batch ${internal.batchCode}` });
-            else proposed.push({ facultyId, exactDate, startMin, endMin, batchCode });
+            if (internal) {
+              conflicts.push({
+                batchCode,
+                day,
+                periodNo: p.periodNo,
+                facultyId,
+                facultyName: safeTrim(p?.facultyName) || null,
+                message: `Internal conflict with batch ${internal.batchCode}`
+              });
+            } else {
+              proposed.push({ facultyId, exactDate, startMin, endMin, batchCode, facultyName: safeTrim(p?.facultyName) || null });
+            }
           }
         }
       }
@@ -1126,7 +1256,7 @@ const validateSchedule = async (req, res, next) => {
   }
 };
 
-// POST /timetable/lateentry/log
+// POST /timetable/late-entry/log
 const logLateEntry = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
@@ -1182,7 +1312,7 @@ const listLateEntries = (type) => async (req, res, next) => {
   }
 };
 
-// POST /timetable/bulk/zoomlinks
+// POST /timetable/bulk/zoomlink/upload
 const bulkUpdateZoomLinks = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
@@ -1218,14 +1348,8 @@ const bulkUpdateZoomLinks = async (req, res, next) => {
           tt.markModified('week');
           modified = true;
         } else {
-          const existing = (tt.periodOverrides || []).find((o) => toInt(o?.date) === date && normDay(o?.day) === day && toInt(o?.periodNo) === periodNo && ['REPLACE_PERIOD', 'ADD_PERIOD'].includes(o.action));
-          let baseObj;
-          if (existing?.period) baseObj = existing.period.toObject?.() ?? existing.period;
-          else {
-            const base = findTemplatePeriod(tt, day, periodNo);
-            if (!base) continue;
-            baseObj = base.toObject?.() ?? base;
-          }
+          const baseObj = findEffectivePeriodBase(tt, day, periodNo, date);
+          if (!baseObj) continue;
           upsertPeriodOverride(tt, { date, day, periodNo, action: 'REPLACE_PERIOD', period: { ...baseObj, periodNo, zoomUrl, mode: zoomUrl ? 'ONLINE' : baseObj.mode }, reason: 'Bulk Zoom', updatedBy: userId || null });
           tt.markModified('periodOverrides');
           modified = true;
@@ -1251,9 +1375,7 @@ export default {
   deleteTimeTable,
   cancelWholeDay,
   editWholeDay,
-  listTimeTables,
-  viewTimeTable,
-  listTimeTablesByBatch,
+  addPeriod, // NEW — FIX G3
   cancelPeriod,
   rearrangeStaff,
   changePeriod,
@@ -1266,5 +1388,8 @@ export default {
   updateZoomLink,
   convertToExam,
   bulkUpdateZoomLinks,
-  validateSchedule
+  validateSchedule,
+  listTimeTables,
+  viewTimeTable,
+  listTimeTablesByBatch
 };
