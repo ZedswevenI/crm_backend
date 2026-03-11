@@ -13,6 +13,7 @@ routes.post('/view', validatetoken, timeTableController.viewTimeTable);
 routes.post('/viewbybatch', validatetoken, timeTableController.viewBatchScheduleByDate);
 routes.post('/list-by-batch', validatetoken, timeTableController.listTimeTablesByBatch);
 routes.post('/list', validatetoken, timeTableController.listTimeTables);
+routes.post('/period/add', validatetoken, timeTableController.addPeriod);
 routes.post('/period/cancel', validatetoken, timeTableController.cancelPeriod);
 routes.post('/period/rearrange-staff', validatetoken, timeTableController.rearrangeStaff);
 routes.post('/period/move', validatetoken, timeTableController.changePeriod);

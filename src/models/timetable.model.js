@@ -32,10 +32,8 @@ const PeriodSchema = new mongoose.Schema(
     subjectId: { type: String, default: null, trim: true, index: true },
     subjectCode: { type: String, default: null, trim: true },
     subjectName: { type: String, default: null, trim: true },
-    // ── Phase plan link ──────────────────────────────────────────────────
     phaseId: { type: String, default: null, trim: true },
     phaseName: { type: String, default: null, trim: true },
-    // ────────────────────────────────────────────────────────────────────
     topic: { type: String, default: null, trim: true },
     venue: { type: String, default: null, trim: true },
     isCancelled: { type: Boolean, default: false },
@@ -56,17 +54,13 @@ const DaySchema = new mongoose.Schema(
   { _id: false }
 );
 
-// ── Override schema: dayOverrides use CANCEL_DAY | REPLACE_DAY
-//                    periodOverrides use CANCEL_PERIOD | REPLACE_PERIOD | ADD_PERIOD | MOVE_PERIOD
 const OverrideSchema = new mongoose.Schema(
   {
     date: { type: Number, required: true, index: true },
     day: { type: String, enum: DAYS, default: null },
     periodNo: { type: Number, default: null, min: 1 },
     action: { type: String, enum: ['CANCEL_DAY', 'REPLACE_DAY', 'CANCEL_PERIOD', 'REPLACE_PERIOD', 'ADD_PERIOD', 'MOVE_PERIOD'], required: true },
-    // REPLACE_DAY: periods[] holds the new full day schedule
     periods: { type: [PeriodSchema], default: null },
-    // REPLACE_PERIOD / ADD_PERIOD: single period object
     period: { type: mongoose.Schema.Types.Mixed, default: null },
     toPeriodNo: { type: Number, default: null },
     reason: { type: String, default: null, trim: true },
@@ -78,17 +72,17 @@ const OverrideSchema = new mongoose.Schema(
 const timeTableSchema = new mongoose.Schema(
   {
     tenantId: { type: String, required: true, index: true, trim: true, ref: 'tenant' },
-    // DRAFT → publish → Active. Unpublish → Active → DRAFT revert not supported from Active.
     status: { type: String, enum: ['DRAFT', 'Active', 'Inactive'], default: 'DRAFT', trim: true },
     isdeleted: { type: Boolean, default: false, index: true },
     createdBy: { type: String, default: null, trim: true },
     updatedBy: { type: String, default: null, trim: true },
+    publishedAt: { type: Number, default: null },
+    publishedBy: { type: String, default: null, trim: true },
     batchCode: { type: String, required: true, trim: true, index: true },
     centerCode: { type: String, default: null, trim: true, index: true },
     phase: { type: String, default: null, trim: true },
     wkStartOn: { type: Number, required: true, index: true },
     week: { type: [DaySchema], default: [] },
-    // Two separate override arrays — never mix day-level and period-level
     dayOverrides: { type: [OverrideSchema], default: [] },
     periodOverrides: { type: [OverrideSchema], default: [] }
   },
