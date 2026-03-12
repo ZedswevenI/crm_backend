@@ -28,6 +28,7 @@ routes.post('/activity/list', validatetoken, phaseCtrl.listActivities);
 routes.post('/activity/view', validatetoken, phaseCtrl.viewActivity);
 routes.post('/activity/bulkupload', validatetoken, phaseCtrl.bulkUploadActivities);
 routes.post('/activity/changeStatus', validatetoken, phaseCtrl.changeStatus);
+routes.post('/activity/list/student', phaseCtrl.listStudentActivities);
 
 // library
 routes.post('/library/upload', validatetoken, upload.single('file'), libraryCtrl.uploadMaterialFile);
@@ -47,6 +48,7 @@ routes.post('/support/priority/update', validatetoken, supportCtrl.updateTicketP
 routes.post('/support/status/update', validatetoken, supportCtrl.updateTicketStatus);
 routes.post('/support/view', validatetoken, supportCtrl.viewTicket);
 routes.post('/support/report', validatetoken, supportCtrl.getTicketReports);
+routes.post('/support/reopen', supportCtrl.reopenTicket);
 
 // Circular
 routes.post('/circular/upload', validatetoken, upload.single('file'), circularCtrl.uploadCircularFile);

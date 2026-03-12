@@ -413,8 +413,12 @@ const viewBatch = async (req, res, next) => {
     const tenantId = pickTenantId(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
     const batchId = safeTrim(req.body.batchId);
-    if (!batchId) return res.status(400).json({ status: false, message: 'batchId is required' });
-    const doc = await Batch.findOne({ tenantId, batchId, isdeleted: false }).lean();
+    const batchCode = safeTrim(req.body.batchCode);
+    if (!batchId && !batchCode) return res.status(400).json({ status: false, message: 'batchId or batch Code is required' });
+    const query = { tenantId, isdeleted: false };
+    if (batchCode) query.batchCode;
+    if (batchId) query.batchId;
+    const doc = await Batch.findOne(query).lean();
     if (!doc) return res.status(404).json({ status: false, message: 'Batch not found' });
     const includeStudents = toBool(req.body?.includeStudents);
     if (!includeStudents) {

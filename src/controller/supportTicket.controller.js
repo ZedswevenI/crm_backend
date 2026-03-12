@@ -127,8 +127,8 @@ const listTickets = async (req, res, next) => {
         .populate({
           path: 'studentNo',
           localField: 'studentNo',
-          foreignField: 'staffId',
-          model: 'admissionNo',
+          foreignField: 'admissionNo', // Fixed
+          model: 'studentprofile', // Fixed
           justOne: true,
           select: 'student.name student.email student.parentName student.parentPhone _id'
         })
@@ -326,6 +326,47 @@ const getTicketReports = async (req, res, next) => {
   }
 };
 
+const reopenTicket = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const ticketId = safeTrim(req.body?.ticketId);
+    const studentNo = safeTrim(req.body?.studentNo);
+    const userId = safeTrim(req.body?.userId);
+    const reason = safeTrim(req.body?.reason);
+    if (!tenantId || !ticketId || !studentNo) {
+      return res.status(400).json({ status: false, message: 'tenantId, ticketId, and studentNo are required' });
+    }
+    const ticket = await SupportTicket.findOne({
+      tenantId,
+      ticketId,
+      studentNo,
+      isdeleted: false
+    }).lean();
+    if (!ticket) {
+      return res.status(404).json({ status: false, message: 'Ticket not found or you are not authorized to access it' });
+    }
+    if (ticket.status !== 'RESOLVED' && ticket.status !== 'CLOSED') {
+      return res.status(400).json({ status: false, message: `Ticket is currently ${ticket.status}. Only RESOLVED or CLOSED tickets can be reopened.` });
+    }
+    const updatedFeedback = reason ? (ticket.feedback ? `${ticket.feedback} | [Reopened]: ${reason}` : `[Reopened]: ${reason}`) : ticket.feedback;
+    const updatedTicket = await SupportTicket.findOneAndUpdate(
+      { tenantId, ticketId, studentNo },
+      {
+        $set: {
+          status: 'OPEN',
+          completedAt: null,
+          feedback: updatedFeedback,
+          updatedBy: userId || studentNo
+        }
+      },
+      { new: true }
+    ).lean();
+    return res.status(200).json({ status: true, message: 'Ticket reopened successfully', data: updatedTicket });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   createTicket,
   listTickets,
@@ -334,5 +375,6 @@ export default {
   updateTicketStatus,
   assignTicket,
   updateTicketPriority,
-  getTicketReports
+  getTicketReports,
+  reopenTicket
 };
