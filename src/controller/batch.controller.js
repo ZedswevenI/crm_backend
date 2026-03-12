@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { v4 as uuid } from 'uuid';
 import constants from '../helpers/constants.js';
 import Batch from '../models/batch.model.js';
 import StudentProfile from '../models/studentProfile.model.js';
@@ -7,7 +8,6 @@ import AcademicYearConfig from '../models/academicYear.model.js';
 import BatchAssignEnable from '../models/batchenabledAssignment.model.js';
 import Topic from '../models/topic.model.js';
 import Assignment from '../models/assignment.model.js';
-
 const pickTenantId = (req) => String(req?.body?.tenantId || req?.body?.entiId || '').trim();
 const safeTrim = (v) => (v === undefined || v === null ? '' : String(v).trim());
 const escapeRegex = (s) => String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -416,8 +416,8 @@ const viewBatch = async (req, res, next) => {
     const batchCode = safeTrim(req.body.batchCode);
     if (!batchId && !batchCode) return res.status(400).json({ status: false, message: 'batchId or batch Code is required' });
     const query = { tenantId, isdeleted: false };
-    if (batchCode) query.batchCode;
-    if (batchId) query.batchId;
+    if (batchCode) query.batchCode = batchCode;
+    if (batchId) query.batchId = batchId;
     const doc = await Batch.findOne(query).lean();
     if (!doc) return res.status(404).json({ status: false, message: 'Batch not found' });
     const includeStudents = toBool(req.body?.includeStudents);
@@ -429,7 +429,7 @@ const viewBatch = async (req, res, next) => {
       });
     }
     const students = await StudentProfile.find(
-      { tenantId, isdeleted: false, status: 'ACTIVE', batchId },
+      { tenantId, isdeleted: false, status: 'ACTIVE', batchId: doc.batchId },
       {
         studentId: 1,
         admissionNo: 1,
@@ -1200,6 +1200,33 @@ const promoteBatch = async (req, res, next) => {
     }
     const updated = await Batch.findOneAndUpdate({ tenantId, batchId, isdeleted: false }, { $set: patch }, { new: true }).lean();
     if (!updated) return res.status(404).json({ status: false, message: 'Batch not found during update' });
+    const historyEntry = {
+      academicYear: batch.academicYear,
+      yearNo: batch.yearNo,
+      classNo: batch.classNo,
+      changedOn: Date.now(),
+      changedBy: updatedBy
+    };
+
+    await StudentProfile.updateMany(
+      {
+        tenantId,
+        isdeleted: false,
+        status: 'ACTIVE',
+        batchId: batch.batchId
+      },
+      {
+        $set: {
+          currentAcademicYear: nextAcademicYear,
+          yearNo: nextYearNo,
+          classNo: nextClassNo,
+          updatedBy
+        },
+        $push: {
+          ayHistory: historyEntry
+        }
+      }
+    );
     await pushYearToAyConfigIfMissing({
       tenantId,
       programId: batch.programId,
