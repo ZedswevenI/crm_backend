@@ -11,6 +11,7 @@ import manageCtrl from '../controller/insorg.controller.js';
 import programCtrl from '../controller/program.controller.js';
 import academicYearCtrl from '../controller/academicyear.controller.js';
 import packageCtrl from '../controller/package.controller.js';
+import userCtrl from '../controller/user.controller.js';
 
 routes.post('/register', tenantCtrl.createInstitute);
 routes.post('/view', validatetoken, tenantCtrl.viewInstitute);
@@ -31,17 +32,17 @@ routes.post('/venue/delete', validatetoken, tenantCtrl.deleteVenue);
 routes.post('/venue/view', validatetoken, tenantCtrl.viewVenue);
 
 // User Routes
-routes.post('/user/login', tenantCtrl.Loginuser);
-routes.post('/user/auth/refresh', tenantCtrl.refreshToken);
-routes.post('/user/logout', validatetoken, tenantCtrl.logout);
-routes.post('/user/change', validatetoken, tenantCtrl.changePassword);
-routes.post('/user/create', validatetoken, tenantCtrl.createUser);
-routes.post('/user/list', validatetoken, tenantCtrl.listUsers);
-routes.post('/user/edit', validatetoken, tenantCtrl.updateUser);
-routes.post('/user/delete', validatetoken, tenantCtrl.deleteUser);
-routes.post('/user/view', validatetoken, tenantCtrl.viewUser);
-routes.post('/user/import', validatetoken, tenantCtrl.importUsers);
-routes.post('/user/link/staff', validatetoken, tenantCtrl.syncExistingUsersAndStaff);
+routes.post('/user/login', userCtrl.Loginuser);
+routes.post('/user/auth/refresh', userCtrl.refreshToken);
+routes.post('/user/logout', validatetoken, userCtrl.logout);
+routes.post('/user/change', validatetoken, userCtrl.changePassword);
+routes.post('/user/create', validatetoken, userCtrl.createUser);
+routes.post('/user/list', validatetoken, userCtrl.listUsers);
+routes.post('/user/edit', validatetoken, userCtrl.updateUser);
+routes.post('/user/delete', validatetoken, userCtrl.deleteUser);
+routes.post('/user/view', validatetoken, userCtrl.viewUser);
+routes.post('/user/import', validatetoken, userCtrl.importUsers);
+routes.post('/user/link/staff', validatetoken, userCtrl.syncExistingUsersAndStaff);
 
 // program Routes
 routes.post('/program/create', validatetoken, programCtrl.createProgram);

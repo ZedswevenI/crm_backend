@@ -1274,15 +1274,11 @@ const validateSchedule = async (req, res, next) => {
       }
 
       const correctedMonday = getPreviousMonday(wkStart);
-
-      // FIX: Check if a published timetable already exists for this batch and week
-      // A published timetable may have wkStartOn <= correctedMonday (published in a previous week)
       const publishedTT = await TimeTable.findOne({
         tenantId,
         batchCode,
         isdeleted: false,
-        status: 'Active',
-        wkStartOn: { $lte: correctedMonday }
+        status: 'Active'
       })
         .sort({ wkStartOn: -1 })
         .lean();
@@ -1298,25 +1294,25 @@ const validateSchedule = async (req, res, next) => {
       }
 
       // Also check if a DRAFT already exists for this exact week (different timetableId)
-      if (batchCode) {
-        const existingDraft = await TimeTable.findOne({
-          tenantId,
-          batchCode,
-          isdeleted: false,
-          status: { $ne: 'Active' },
-          wkStartOn: correctedMonday,
-          ...(timetableId ? { _id: { $ne: timetableId } } : {})
-        }).lean();
+      // if (batchCode) {
+      //   const existingDraft = await TimeTable.findOne({
+      //     tenantId,
+      //     batchCode,
+      //     isdeleted: false,
+      //     status: { $ne: 'Active' },
+      //     wkStartOn: correctedMonday,
+      //     ...(timetableId ? { _id: { $ne: timetableId } } : {})
+      //   }).lean();
 
-        if (existingDraft) {
-          conflicts.push({
-            batchCode,
-            message: `A draft timetable already exists for batch ${batchCode} for this week.`,
-            draftTimetableId: existingDraft._id
-          });
-          continue;
-        }
-      }
+      //   if (existingDraft) {
+      //     conflicts.push({
+      //       batchCode,
+      //       message: `A draft timetable already exists for batch ${batchCode} for this week.`,
+      //       draftTimetableId: existingDraft._id
+      //     });
+      //     continue;
+      //   }
+      // }
 
       // Existing conflict checks — staff availability per period
       for (const d of item.week || []) {

@@ -1,22 +1,24 @@
 import mongoose from 'mongoose';
 import { v4 as uuid } from 'uuid';
-uuid();
 
-/**
- * Role Levels (4)
- * L1 - Academic Head
- * L2 - Admission Manager
- * L3 - Accounts Manager
- * L4 - Academic Operations
- * L5 - Faculty
- */
-const ROLE_LEVELS = ['L1', 'L2', 'L3', 'L4', 'L5'];
+const ROLE_LEVELS = ['L1', 'L2', 'L3', 'L4', 'L5', 'L6', 'L7'];
+
+export const ROLE_MAP = {
+  L1: 'Super Admin',
+  L2: 'Admissions',
+  L3: 'AO',
+  L4: 'Teacher',
+  L5: 'Exam',
+  L6: 'Account',
+  L7: 'EDP'
+};
 
 const userSchema = new mongoose.Schema(
   {
     tenantId: { type: String, required: true, ref: 'tenant', trim: true, index: true },
     userId: { type: String, required: true, default: uuid, trim: true },
     staffId: { type: String, default: null, index: true },
+    empCode: { type: String, default: null, trim: true },
     name: { type: String, required: true, trim: true },
     email: {
       type: String,
@@ -32,67 +34,38 @@ const userSchema = new mongoose.Schema(
     },
     password: { type: String, required: true },
     roleLevel: { type: String, required: true, enum: ROLE_LEVELS, default: 'L4' },
-    roleLabel: { type: String, required: true, default: 'Academic Operations', trim: true },
-    centerId: { type: String, required: false, trim: true },
-    centerName: { type: String, required: false, trim: true },
+    roleLabel: { type: String, required: true, default: 'Teacher', trim: true },
+    centerId: { type: String, default: null, trim: true },
+    centerName: { type: String, default: null, trim: true },
     status: { type: String, enum: ['Active', 'Inactive'], default: 'Active' },
     lastLoginAt: { type: Date, default: null },
     isdeleted: { type: Boolean, required: true, default: false }
   },
-  {
-    timestamps: true
-  }
+  { timestamps: true }
 );
 
+// ── Indexes ────────────────────────────────────────────────────────────────────
 userSchema.index({ tenantId: 1, userId: 1, isdeleted: 1 }, { unique: true });
 userSchema.index({ tenantId: 1, email: 1 }, { unique: true, partialFilterExpression: { isdeleted: false } });
 userSchema.index({ tenantId: 1, phone: 1 }, { unique: true, partialFilterExpression: { isdeleted: false } });
-userSchema.index({ tenantId: 1, empCode: 1 }, { unique: true, partialFilterExpression: { isdeleted: false, empCode: { $type: 'string', $ne: '' } } });
+userSchema.index(
+  { tenantId: 1, empCode: 1 },
+  {
+    unique: true,
+    sparse: true,
+    partialFilterExpression: { isdeleted: false, empCode: { $type: 'string', $ne: '' } }
+  }
+);
 userSchema.index({ tenantId: 1, roleLevel: 1, isdeleted: 1, createdAt: -1 });
 userSchema.index({ tenantId: 1, name: 1, isdeleted: 1 });
 
-userSchema.pre('validate', async function (next) {
-  try {
-    const map = {
-      L1: 'Academic Head',
-      L2: 'Admission Manager',
-      L3: 'Accounts Manager',
-      L4: 'Academic Operations',
-      L5: 'Faculty'
-    };
-    this.roleLabel = map[this.roleLevel] || this.roleLabel || 'Academic Operations';
-    const existingEmail = await this.constructor.exists(
-      {
-        tenantId: this.tenantId,
-        email: this.email,
-        _id: { $ne: this._id }
-      },
-      { session: this.$session() }
-    );
-    if (existingEmail) {
-      const err = new Error('Email already exists');
-      err.statusCode = 400;
-      return next(err);
-    }
-    const existingPhone = await this.constructor.exists(
-      {
-        tenantId: this.tenantId,
-        phone: this.phone,
-        _id: { $ne: this._id }
-      },
-      { session: this.$session() }
-    );
-    if (existingPhone) {
-      const err = new Error('Phone number already exists');
-      err.statusCode = 400;
-      return next(err);
-    }
-    next();
-  } catch (err) {
-    return next(err);
-  }
+// ── Pre-validate: only sync roleLabel from roleLevel ──────────────────────────
+// FIX: removed manual duplicate email/phone checks — unique indexes handle this.
+// Manual checks caused race conditions and double-fault errors.
+userSchema.pre('validate', function (next) {
+  this.roleLabel = ROLE_MAP[this.roleLevel] || this.roleLevel;
+  next();
 });
 
 const User = mongoose.model('user', userSchema);
-
 export default User;
