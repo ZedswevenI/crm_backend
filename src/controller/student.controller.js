@@ -900,7 +900,8 @@ const getStudentTimetable = async (req, res, next) => {
       tenantId,
       batchCode: student.batchCode,
       isdeleted: false,
-      $or: [{ wkStartOn: mondayMs }, { status: 'Active', wkStartOn: { $lte: mondayMs } }]
+      status: 'Active',
+      wkStartOn: { $lte: mondayMs }
     })
       .sort({ wkStartOn: -1 }) // most recent wins — DRAFT for this week over old published
       .lean();
