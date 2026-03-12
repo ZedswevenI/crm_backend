@@ -1244,25 +1244,168 @@ const listTestsForEnablement = async (req, res, next) => {
 //   }
 // };
 
+// const promoteBatch = async (req, res, next) => {
+//   try {
+//     const tenantId = pickTenantId(req);
+//     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+//     const payload = req.body || {};
+//     const batchId = safeTrim(payload.batchId);
+//     const updatedBy = payload.userId || null;
+//     if (!batchId) return res.status(400).json({ status: false, message: 'batchId is required' });
+
+//     const batch = await Batch.findOne({ tenantId, batchId, isdeleted: false });
+//     if (!batch) return res.status(404).json({ status: false, message: 'Batch not found' });
+//     if (batch.status !== 'ACTIVE') return res.status(400).json({ status: false, message: `Batch must be ACTIVE to promote. Current status: ${batch.status}` });
+
+//     const program = await Program.findOne({ tenantId, programId: batch.programId, isdeleted: false }, { duration: 1, startingClass: 1 }).lean();
+//     if (!program) return res.status(400).json({ status: false, message: 'Program not found' });
+
+//     const duration = toIntYear(program.duration);
+//     if (batch.yearNo >= duration) return res.status(400).json({ status: false, message: `Cannot promote: batch is already in final year (year ${batch.yearNo} of ${duration}). Close the batch instead.` });
+
+//     const startAyMatch = String(batch.programStartAy).match(/^(\d{4})/);
+//     const cohortStartYear = startAyMatch ? toIntYear(startAyMatch[1]) : 0;
+//     if (!cohortStartYear) return res.status(400).json({ status: false, message: 'Cannot determine cohort start year from programStartAy' });
+
+//     const calc = buildCohortAndRunningYears({ startYear: cohortStartYear, duration });
+//     if (!calc) return res.status(400).json({ status: false, message: 'Unable to compute cohort academic years' });
+
+//     const nextIdx = batch.yearNo;
+//     if (nextIdx >= calc.runningYears.length) return res.status(400).json({ status: false, message: 'Next academic year not available in cohort configuration' });
+
+//     const nextAcademicYear = calc.runningYears[nextIdx];
+//     const nextYearNo = batch.yearNo + 1;
+//     const nextClassNo = batch.classNo + 1;
+
+//     const patch = { academicYear: nextAcademicYear, yearNo: nextYearNo, classNo: nextClassNo, updatedBy };
+//     if (payload.startDate !== undefined) {
+//       const sd = toEpoch(payload.startDate);
+//       if (sd) patch.startDate = sd;
+//     }
+//     if (payload.endDate !== undefined) {
+//       const ed = toEpoch(payload.endDate);
+//       if (ed) patch.endDate = ed;
+//     }
+
+//     const effStart = patch.startDate ?? batch.startDate;
+//     const effEnd = patch.endDate ?? batch.endDate;
+//     if (effStart && effEnd && effStart >= effEnd) return res.status(400).json({ status: false, message: 'startDate must be before endDate' });
+
+//     const updated = await Batch.findOneAndUpdate({ tenantId, batchId, isdeleted: false }, { $set: patch }, { new: true }).lean();
+//     if (!updated) return res.status(404).json({ status: false, message: 'Batch not found during update' });
+
+//     // ── Student profiles ──────────────────────────────────────────────────────
+//     const historyEntry = {
+//       academicYear: batch.academicYear, // OLD values — archive before overwrite
+//       yearNo: batch.yearNo,
+//       classNo: batch.classNo,
+//       changedOn: Date.now(),
+//       changedBy: updatedBy
+//     };
+
+//     // Step 1: update current fields on all batch students
+//     await StudentProfile.updateMany(
+//       { tenantId, isdeleted: false, status: 'ACTIVE', batchId: batch.batchId },
+//       {
+//         $set: {
+//           currentAcademicYear: nextAcademicYear,
+//           yearNo: nextYearNo,
+//           classNo: nextClassNo,
+//           updatedBy
+//         }
+//       }
+//     );
+
+//     // Step 2: push history only if this old AY entry not already recorded
+//     // ✅ FIX: prevents duplicate history entries on retry/double-call
+//     await StudentProfile.updateMany(
+//       {
+//         tenantId,
+//         isdeleted: false,
+//         status: 'ACTIVE',
+//         batchId: batch.batchId,
+//         ayHistory: {
+//           $not: {
+//             $elemMatch: {
+//               academicYear: batch.academicYear,
+//               yearNo: batch.yearNo,
+//               classNo: batch.classNo
+//             }
+//           }
+//         }
+//       },
+//       { $push: { ayHistory: historyEntry } }
+//     );
+
+//     // ── AcademicYearConfig ────────────────────────────────────────────────────
+//     // ✅ FIX: pushYearToAyConfigIfMissing has a `y1 > getCurrentAyStartYear()`
+//     //         guard that blocks future AYs — bypass it with a direct upsert
+//     const ayMatch = String(nextAcademicYear).match(/^(\d{4})-(\d{4})$/);
+//     const nextYearStart = ayMatch ? Number(ayMatch[1]) : 0;
+//     const nextYearEnd = ayMatch ? Number(ayMatch[2]) : 0;
+
+//     if (nextYearStart && nextYearEnd) {
+//       await AcademicYearConfig.updateOne(
+//         {
+//           tenantId,
+//           programId: batch.programId,
+//           cohortAy: calc.cohortAy,
+//           isdeleted: false,
+//           'years.academicYear': { $ne: nextAcademicYear } // only push if missing
+//         },
+//         {
+//           $push: {
+//             years: {
+//               academicYear: nextAcademicYear,
+//               classNo: nextClassNo,
+//               startOn: startOfAcademicYearEpoch(nextYearStart),
+//               endOn: endOfAcademicYearEpoch(nextYearEnd)
+//             }
+//           },
+//           $set: { updatedBy }
+//         }
+//       );
+//     }
+//     return res.status(constants.HTTPS_SUCCESS).json({
+//       status: true,
+//       message: `Batch promoted to ${nextAcademicYear} (Year ${nextYearNo}, Class ${nextClassNo})`,
+//       data: updated
+//     });
+//   } catch (err) {
+//     return next(err);
+//   }
+// };
+
 const promoteBatch = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+
     const payload = req.body || {};
     const batchId = safeTrim(payload.batchId);
     const updatedBy = payload.userId || null;
+
     if (!batchId) return res.status(400).json({ status: false, message: 'batchId is required' });
 
+    // ── Fetch batch ───────────────────────────────────────────────────────────
     const batch = await Batch.findOne({ tenantId, batchId, isdeleted: false });
     if (!batch) return res.status(404).json({ status: false, message: 'Batch not found' });
     if (batch.status !== 'ACTIVE') return res.status(400).json({ status: false, message: `Batch must be ACTIVE to promote. Current status: ${batch.status}` });
 
+    // ── Fetch program ─────────────────────────────────────────────────────────
     const program = await Program.findOne({ tenantId, programId: batch.programId, isdeleted: false }, { duration: 1, startingClass: 1 }).lean();
     if (!program) return res.status(400).json({ status: false, message: 'Program not found' });
 
     const duration = toIntYear(program.duration);
-    if (batch.yearNo >= duration) return res.status(400).json({ status: false, message: `Cannot promote: batch is already in final year (year ${batch.yearNo} of ${duration}). Close the batch instead.` });
 
+    // ── Final year guard ──────────────────────────────────────────────────────
+    if (batch.yearNo >= duration)
+      return res.status(400).json({
+        status: false,
+        message: `Cannot promote: batch is already in final year (year ${batch.yearNo} of ${duration}). Close the batch instead.`
+      });
+
+    // ── Compute next AY from cohort ───────────────────────────────────────────
     const startAyMatch = String(batch.programStartAy).match(/^(\d{4})/);
     const cohortStartYear = startAyMatch ? toIntYear(startAyMatch[1]) : 0;
     if (!cohortStartYear) return res.status(400).json({ status: false, message: 'Cannot determine cohort start year from programStartAy' });
@@ -1270,13 +1413,14 @@ const promoteBatch = async (req, res, next) => {
     const calc = buildCohortAndRunningYears({ startYear: cohortStartYear, duration });
     if (!calc) return res.status(400).json({ status: false, message: 'Unable to compute cohort academic years' });
 
-    const nextIdx = batch.yearNo;
+    const nextIdx = batch.yearNo; // yearNo is 1-based, so yearNo=1 → index 1 → second AY
     if (nextIdx >= calc.runningYears.length) return res.status(400).json({ status: false, message: 'Next academic year not available in cohort configuration' });
 
     const nextAcademicYear = calc.runningYears[nextIdx];
     const nextYearNo = batch.yearNo + 1;
     const nextClassNo = batch.classNo + 1;
 
+    // ── Optional date override from payload ───────────────────────────────────
     const patch = { academicYear: nextAcademicYear, yearNo: nextYearNo, classNo: nextClassNo, updatedBy };
     if (payload.startDate !== undefined) {
       const sd = toEpoch(payload.startDate);
@@ -1291,19 +1435,47 @@ const promoteBatch = async (req, res, next) => {
     const effEnd = patch.endDate ?? batch.endDate;
     if (effStart && effEnd && effStart >= effEnd) return res.status(400).json({ status: false, message: 'startDate must be before endDate' });
 
+    // ── Update Batch ──────────────────────────────────────────────────────────
     const updated = await Batch.findOneAndUpdate({ tenantId, batchId, isdeleted: false }, { $set: patch }, { new: true }).lean();
     if (!updated) return res.status(404).json({ status: false, message: 'Batch not found during update' });
 
-    // ── Student profiles ──────────────────────────────────────────────────────
-    const historyEntry = {
-      academicYear: batch.academicYear, // OLD values — archive before overwrite
-      yearNo: batch.yearNo,
-      classNo: batch.classNo,
-      changedOn: Date.now(),
-      changedBy: updatedBy
-    };
+    // ── Compute new AY epoch dates ────────────────────────────────────────────
+    const ayMatch = String(nextAcademicYear).match(/^(\d{4})-(\d{4})$/);
+    const nextYearStart = ayMatch ? Number(ayMatch[1]) : 0;
+    const nextYearEnd = ayMatch ? Number(ayMatch[2]) : 0;
+    const newStartOn = nextYearStart ? startOfAcademicYearEpoch(nextYearStart) : null;
+    const newEndOn = nextYearEnd ? endOfAcademicYearEpoch(nextYearEnd) : null;
 
-    // Step 1: update current fields on all batch students
+    // ── Update AcademicYearConfig ─────────────────────────────────────────────
+    // Direct upsert — bypasses pushYearToAyConfigIfMissing which blocks future AYs
+    // via `y1 > getCurrentAyStartYear()` guard
+    if (nextYearStart && nextYearEnd) {
+      await AcademicYearConfig.updateOne(
+        {
+          tenantId,
+          programId: batch.programId,
+          cohortAy: calc.cohortAy,
+          isdeleted: false,
+          'years.academicYear': { $ne: nextAcademicYear } // only push if missing
+        },
+        {
+          $push: {
+            years: {
+              academicYear: nextAcademicYear,
+              classNo: nextClassNo,
+              startOn: newStartOn,
+              endOn: newEndOn
+            }
+          },
+          $set: { updatedBy }
+        }
+      );
+    }
+
+    // ── Update StudentProfiles ────────────────────────────────────────────────
+    const now = Date.now();
+
+    // Step 1: update current standing fields on all batch students
     await StudentProfile.updateMany(
       { tenantId, isdeleted: false, status: 'ACTIVE', batchId: batch.batchId },
       {
@@ -1316,8 +1488,7 @@ const promoteBatch = async (req, res, next) => {
       }
     );
 
-    // Step 2: push history only if this old AY entry not already recorded
-    // ✅ FIX: prevents duplicate history entries on retry/double-call
+    // Step 2: push OLD AY into ayHistory — duplicate guard makes it safe on retry
     await StudentProfile.updateMany(
       {
         tenantId,
@@ -1334,38 +1505,54 @@ const promoteBatch = async (req, res, next) => {
           }
         }
       },
-      { $push: { ayHistory: historyEntry } }
+      {
+        $push: {
+          ayHistory: {
+            academicYear: batch.academicYear, // OLD values — archived before overwrite
+            yearNo: batch.yearNo,
+            classNo: batch.classNo,
+            startOn: null, // old AY dates not tracked retroactively
+            endOn: null,
+            changedOn: now,
+            changedBy: updatedBy
+          }
+        }
+      }
     );
 
-    // ── AcademicYearConfig ────────────────────────────────────────────────────
-    // ✅ FIX: pushYearToAyConfigIfMissing has a `y1 > getCurrentAyStartYear()`
-    //         guard that blocks future AYs — bypass it with a direct upsert
-    const ayMatch = String(nextAcademicYear).match(/^(\d{4})-(\d{4})$/);
-    const nextYearStart = ayMatch ? Number(ayMatch[1]) : 0;
-    const nextYearEnd = ayMatch ? Number(ayMatch[2]) : 0;
-
-    if (nextYearStart && nextYearEnd) {
-      await AcademicYearConfig.updateOne(
-        {
-          tenantId,
-          programId: batch.programId,
-          cohortAy: calc.cohortAy,
-          isdeleted: false,
-          'years.academicYear': { $ne: nextAcademicYear } // only push if missing
-        },
-        {
-          $push: {
-            years: {
+    // Step 3: push NEW AY into ayHistory WITH startOn/endOn from AcademicYearConfig
+    // This mirrors exactly what was pushed into AcademicYearConfig.years above
+    await StudentProfile.updateMany(
+      {
+        tenantId,
+        isdeleted: false,
+        status: 'ACTIVE',
+        batchId: batch.batchId,
+        ayHistory: {
+          $not: {
+            $elemMatch: {
               academicYear: nextAcademicYear,
-              classNo: nextClassNo,
-              startOn: startOfAcademicYearEpoch(nextYearStart),
-              endOn: endOfAcademicYearEpoch(nextYearEnd)
+              yearNo: nextYearNo,
+              classNo: nextClassNo
             }
-          },
-          $set: { updatedBy }
+          }
         }
-      );
-    }
+      },
+      {
+        $push: {
+          ayHistory: {
+            academicYear: nextAcademicYear, // NEW values with dates
+            yearNo: nextYearNo,
+            classNo: nextClassNo,
+            startOn: newStartOn, // ✅ mirrors AcademicYearConfig.years entry
+            endOn: newEndOn, // ✅ mirrors AcademicYearConfig.years entry
+            changedOn: now,
+            changedBy: updatedBy
+          }
+        }
+      }
+    );
+
     return res.status(constants.HTTPS_SUCCESS).json({
       status: true,
       message: `Batch promoted to ${nextAcademicYear} (Year ${nextYearNo}, Class ${nextClassNo})`,
