@@ -95,12 +95,20 @@ const DAYS = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 
 //   return Array.from(baseMap.values()).sort((a, b) => (a.periodNo || 0) - (b.periodNo || 0));
 // };
 
+// Add this near the top of student.controller.js with your other utility functions
+const getPreviousMonday = (dateMs) => {
+  const d = new Date(dateMs);
+  const utcDay = d.getUTCDay(); // 0=Sun
+  const diffDays = utcDay === 0 ? -6 : 1 - utcDay;
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + diffDays);
+};
+
 const getEffectivePeriods = (tt, dateMs) => {
   if (!tt || !Array.isArray(tt.week)) return [];
   const targetMs = Number(dateMs);
   if (isNaN(targetMs)) return [];
   const targetDate = new Date(targetMs);
-  const utcDay = targetDate.getUTCDay(); // 0=Sun
+  const utcDay = targetDate.getUTCDay();
   const dayStr = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'][utcDay];
   const targetUTCMidnight = Date.UTC(targetDate.getUTCFullYear(), targetDate.getUTCMonth(), targetDate.getUTCDate());
   const matchesDate = (oDateMs) => {
@@ -123,19 +131,15 @@ const getEffectivePeriods = (tt, dateMs) => {
     if (p.periodNo != null) baseMap.set(Number(p.periodNo), p);
   });
   const periodOvs = (Array.isArray(tt.periodOverrides) ? tt.periodOverrides : []).filter((o) => matchesDate(o.date));
+  // Pass 1: CANCEL, REPLACE, ADD
   for (const ov of periodOvs) {
     const fromNo = Number(ov.periodNo);
     if (!fromNo) continue;
-    if (ov.action === 'CANCEL_PERIOD') {
-      baseMap.delete(fromNo);
-    }
-    if (ov.action === 'REPLACE_PERIOD' && ov.period) {
-      baseMap.set(fromNo, { ...ov.period, periodNo: fromNo });
-    }
-    if (ov.action === 'ADD_PERIOD' && ov.period) {
-      baseMap.set(fromNo, { ...ov.period, periodNo: fromNo });
-    }
+    if (ov.action === 'CANCEL_PERIOD') baseMap.delete(fromNo);
+    if (ov.action === 'REPLACE_PERIOD' && ov.period) baseMap.set(fromNo, { ...ov.period, periodNo: fromNo });
+    if (ov.action === 'ADD_PERIOD' && ov.period) baseMap.set(fromNo, { ...ov.period, periodNo: fromNo });
   }
+  // Pass 2: MOVE — snapshot after pass 1, process pairs once only
   const moves = periodOvs.filter((o) => o.action === 'MOVE_PERIOD');
   if (moves.length) {
     const snapshot = new Map(baseMap);
@@ -157,7 +161,6 @@ const getEffectivePeriods = (tt, dateMs) => {
       else baseMap.delete(fromNo);
     }
   }
-
   return Array.from(baseMap.values()).sort((a, b) => (a.periodNo || 0) - (b.periodNo || 0));
 };
 
@@ -934,45 +937,32 @@ const getStudentAttendance = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     const identifier = safeTrim(req.body?.studentNo || req.body?.studentId);
-
-    // FIX: UTC midnight fallback — no local timezone
     const now = new Date();
     const targetDate = req.body?.date ? toInt(req.body.date, 0) : Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-
     if (!tenantId || !identifier || !req.body?.date) {
       return res.status(400).json({
         status: false,
         message: 'tenantId, studentNo/studentId, and date are required'
       });
     }
-
-    // Find student by studentId, admissionNo, or registrationNumber
     const student = await StudentProfile.findOne({
       tenantId,
       status: 'ACTIVE',
       isdeleted: false,
       $or: [{ studentId: identifier }, { admissionNo: identifier }, { registrationNumber: identifier }]
     }).lean();
-
     if (!student) {
       return res.status(404).json({ status: false, message: 'Student profile not found' });
     }
-
-    // FIX: plain .lean() — populate() doesn't work for non-ObjectId string refs
     const attendanceRecords = await Attendance.find({
       tenantId,
       batchCode: student.batchCode,
       date: targetDate,
       isdeleted: false
     }).lean();
-
-    // FIX: Manual staff lookup instead of broken populate()
     const facultyIds = [...new Set(attendanceRecords.map((r) => r.facultyId).filter(Boolean))];
     const staffList = facultyIds.length ? await Staff.find({ tenantId, staffId: { $in: facultyIds }, isdeleted: false }, { staffId: 1, staffName: 1, staffCode: 1, facultyType: 1 }).lean() : [];
     const staffById = Object.fromEntries(staffList.map((s) => [s.staffId, s]));
-
-    // FIX: Get timetable for this date to show all scheduled periods
-    // (including ones with no attendance marked yet)
     const mondayMs = getPreviousMonday(targetDate);
     const tt = await TimeTable.findOne({
       tenantId,
@@ -982,21 +972,14 @@ const getStudentAttendance = async (req, res, next) => {
     })
       .sort({ wkStartOn: -1 })
       .lean();
-
     const scheduledPeriods = tt ? getEffectivePeriods(tt, targetDate) : [];
-
-    // Index attendance records by periodNo for quick lookup
     const attendanceByPeriod = Object.fromEntries(attendanceRecords.map((r) => [toInt(r.periodNo), r]));
-
-    // Build response — one entry per scheduled period
     const studentAttendance = scheduledPeriods.map((period) => {
       const record = attendanceByPeriod[toInt(period.periodNo)];
       const studentData = record?.students?.find((s) => s.studentId === student.studentId);
-
-      let status = 'NO_RECORD'; // period scheduled but attendance never saved
+      let status = 'NO_RECORD';
       if (record && studentData) status = studentData.status;
-      else if (record && !studentData) status = 'NOT_MARKED'; // attendance saved but student missing
-
+      else if (record && !studentData) status = 'NOT_MARKED';
       return {
         periodNo: period.periodNo,
         time: period.time || null,
@@ -1006,19 +989,16 @@ const getStudentAttendance = async (req, res, next) => {
         periodType: period.periodType || null,
         mode: period.mode || null,
         faculty: staffById[record?.facultyId] || staffById[period.facultyId] || null,
-        updatedBy: record?.updatedBy || null, // raw userId string — no User model available
+        updatedBy: record?.updatedBy || null,
         topicTaught: record?.topicTaught || null,
         status,
         remarks: studentData?.remarks || null
       };
     });
-
-    // Also include any attendance records for periods NOT in timetable
-    // (e.g. ADD_PERIOD that getEffectivePeriods missed, or data inconsistency)
     const scheduledPeriodNos = new Set(scheduledPeriods.map((p) => toInt(p.periodNo)));
     for (const record of attendanceRecords) {
       const pNo = toInt(record.periodNo);
-      if (scheduledPeriodNos.has(pNo)) continue; // already included above
+      if (scheduledPeriodNos.has(pNo)) continue;
       const studentData = record.students?.find((s) => s.studentId === student.studentId);
       studentAttendance.push({
         periodNo: pNo,
@@ -1035,9 +1015,7 @@ const getStudentAttendance = async (req, res, next) => {
         remarks: studentData?.remarks || null
       });
     }
-
     studentAttendance.sort((a, b) => (a.periodNo || 0) - (b.periodNo || 0));
-
     return res.status(200).json({
       status: true,
       message: 'Attendance retrieved successfully',
