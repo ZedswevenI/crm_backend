@@ -157,6 +157,8 @@ routes.post('/package/disable', validatetoken, packageCtrl.revokeEnablement);
 routes.post('/package/enable/report', validatetoken, packageCtrl.reportPackageEnablement);
 routes.post('/package/students/report', packageCtrl.getStudentPackageSubjects);
 routes.post('/package/students', packageCtrl.getStudentPackages);
+routes.post('/package/view', validatetoken, packageCtrl.viewPackage);
+routes.post('/package/list/enadisa', validatetoken, packageCtrl.listPackageTargets);
 
 // Package Reports
 routes.post('/school/exam/create', validatetoken, manageCtrl.createSchoolExam);

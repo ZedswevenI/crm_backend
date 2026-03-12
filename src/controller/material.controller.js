@@ -18,7 +18,7 @@ const uploadMaterialFile = async (req, res, next) => {
       return res.status(400).json({ status: false, message: 'Only PDF files are allowed for study materials.' });
     }
     const attachmentUrl = await uploadFileToS3(req.file, 'library');
-    (console.log('attachmentUrl '), attachmentUrl);
+
     if (!attachmentUrl) {
       return res.status(500).json({ status: false, message: 'Failed to upload to S3' });
     }
@@ -52,8 +52,8 @@ const createMaterial = async (req, res, next) => {
       attachmentUrl: formattedAttachments,
       classNo: Number(classNo),
       subjectId: safeTrim(subjectId),
-      topicId: safeTrim(topicId),
-      subTopicId: safeTrim(subTopicId),
+      topicId: safeTrim(topicId), // Now accepts straight strings natively
+      subTopicId: safeTrim(subTopicId), // Now accepts straight strings natively
       batchIds: Array.isArray(batchIds) ? batchIds : [],
       studentIds: Array.isArray(studentIds) ? studentIds : [],
       availableFrom: availableFrom ? Number(availableFrom) : null,
@@ -146,6 +146,7 @@ const listMaterials = async (req, res, next) => {
     const startDate = req.query.startDate;
     const endDate = req.query.endDate;
     const query = { tenantId, isdeleted: false };
+
     if (classNo) query.classNo = Number(classNo);
     if (subjectId) query.subjectId = safeTrim(subjectId);
     if (status) query.status = safeTrim(status);
@@ -161,51 +162,19 @@ const listMaterials = async (req, res, next) => {
       const rx = { $regex: safeTrim(search), $options: 'i' };
       query.$or = [{ title: rx }, { description: rx }];
     }
+
     const listMode = String(req.query.list || req.body.list || '').toLowerCase();
+
     if (listMode === 'full') {
-      const rows = await StudyMaterial.find(query)
-        .sort(sort)
-        .populate('subjectId', 'subjectName subjectCode')
-        .populate({
-          path: 'topicId',
-          model: 'topic',
-          localField: 'topicId',
-          foreignField: 'topicId',
-          select: 'topicName topicCode'
-        })
-        .populate({
-          path: 'subTopicId',
-          model: 'subtopic',
-          localField: 'subTopicId',
-          foreignField: 'subTopicId',
-          select: 'subTopicName subTopicCode'
-        })
-        .lean();
+      const rows = await StudyMaterial.find(query).sort(sort).populate('subjectId', 'subjectName subjectCode').lean(); // Removed topic and subtopic populates
       return res.status(constants.HTTPS_SUCCESS).send({ status: true, data: rows, count: rows.length, message: 'Materials retrieved' });
     }
+
     const [rows, count] = await Promise.all([
-      StudyMaterial.find(query)
-        .sort(sort)
-        .skip(skip)
-        .limit(limit)
-        .populate('subjectId', 'subjectName subjectCode')
-        .populate({
-          path: 'topicId',
-          model: 'topic',
-          localField: 'topicId',
-          foreignField: 'topicId',
-          select: 'topicName topicCode'
-        })
-        .populate({
-          path: 'subTopicId',
-          model: 'subtopic',
-          localField: 'subTopicId',
-          foreignField: 'subTopicId',
-          select: 'subTopicName subTopicCode'
-        })
-        .lean(),
+      StudyMaterial.find(query).sort(sort).skip(skip).limit(limit).populate('subjectId', 'subjectName subjectCode').lean(), // Removed topic and subtopic populates
       StudyMaterial.countDocuments(query)
     ]);
+
     return res.status(constants.HTTPS_SUCCESS).send({
       status: true,
       data: rows,
@@ -227,23 +196,8 @@ const viewMaterial = async (req, res, next) => {
     if (!tenantId || !materialId) {
       return res.status(400).json({ status: false, message: 'tenantId and materialId are required' });
     }
-    const material = await StudyMaterial.findOne({ tenantId, materialId, isdeleted: false })
-      .populate('subjectId', 'subjectName subjectCode')
-      .populate({
-        path: 'topicId',
-        model: 'topic',
-        localField: 'topicId',
-        foreignField: 'topicId',
-        select: 'topicName topicCode'
-      })
-      .populate({
-        path: 'subTopicId',
-        model: 'subtopic',
-        localField: 'subTopicId',
-        foreignField: 'subTopicId',
-        select: 'subTopicName subTopicCode'
-      })
-      .lean();
+    const material = await StudyMaterial.findOne({ tenantId, materialId, isdeleted: false }).populate('subjectId', 'subjectName subjectCode').lean(); // Removed topic and subtopic populates
+
     if (!material) {
       return res.status(404).json({ status: false, message: 'Study material not found' });
     }

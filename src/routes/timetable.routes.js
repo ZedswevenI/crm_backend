@@ -13,6 +13,7 @@ routes.post('/view', validatetoken, timeTableController.viewTimeTable);
 routes.post('/viewbybatch', validatetoken, timeTableController.viewBatchScheduleByDate);
 routes.post('/list-by-batch', validatetoken, timeTableController.listTimeTablesByBatch);
 routes.post('/list', validatetoken, timeTableController.listTimeTables);
+routes.post('/period/add', validatetoken, timeTableController.addPeriod);
 routes.post('/period/cancel', validatetoken, timeTableController.cancelPeriod);
 routes.post('/period/rearrange-staff', validatetoken, timeTableController.rearrangeStaff);
 routes.post('/period/move', validatetoken, timeTableController.changePeriod);
@@ -26,6 +27,10 @@ routes.post('/bulk/zoomlink/upload', validatetoken, timeTableController.bulkUpda
 routes.post('/late-entry/log', validatetoken, timeTableController.logLateEntry);
 routes.post('/late-entry/list/student', validatetoken, timeTableController.listStudentLateEntries);
 routes.post('/late-entry/list/staff', validatetoken, timeTableController.listStaffLateEntries);
+
+routes.post('/publish', validatetoken, timeTableController.publishTimeTable);
+routes.post('/unpublish', validatetoken, timeTableController.unpublishTimeTable);
+routes.post('/delete', validatetoken, timeTableController.deleteTimeTable);
 
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Timetable routes' }));
 
