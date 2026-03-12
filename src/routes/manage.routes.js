@@ -28,6 +28,7 @@ routes.post('/activity/list', validatetoken, phaseCtrl.listActivities);
 routes.post('/activity/view', validatetoken, phaseCtrl.viewActivity);
 routes.post('/activity/bulkupload', validatetoken, phaseCtrl.bulkUploadActivities);
 routes.post('/activity/changeStatus', validatetoken, phaseCtrl.changeStatus);
+routes.post('/activity/list/student', phaseCtrl.listStudentActivities);
 
 // library
 routes.post('/library/upload', validatetoken, upload.single('file'), libraryCtrl.uploadMaterialFile);

@@ -450,6 +450,21 @@ const cancelWholeDay = async (req, res, next) => {
     const d = new Date(date);
     const day = DAYS[d.getUTCDay() === 0 ? 6 : d.getUTCDay() - 1];
 
+    // if (!isPublished(tt)) {
+    //   const dayIdx = (tt.week || []).findIndex((wd) => wd.day === day);
+    //   if (dayIdx >= 0) {
+    //     tt.week[dayIdx].periods = tt.week[dayIdx].periods.map((p) => ({
+    //       ...(p.toObject?.() ?? p),
+    //       isCancelled: true,
+    //       cancelReason: reason
+    //     }));
+    //     tt.markModified('week');
+    //   }
+    //   tt.updatedBy = userId || null;
+    //   await tt.save();
+    //   return res.json({ status: true, message: 'Day cancelled (draft)' });
+    // }
+
     if (!isPublished(tt)) {
       const dayIdx = (tt.week || []).findIndex((wd) => wd.day === day);
       if (dayIdx >= 0) {
@@ -460,6 +475,8 @@ const cancelWholeDay = async (req, res, next) => {
         }));
         tt.markModified('week');
       }
+      upsertDayOverride(tt, { date, day, action: 'CANCEL_DAY', periods: [], reason, updatedBy: userId || null });
+      tt.markModified('dayOverrides');
       tt.updatedBy = userId || null;
       await tt.save();
       return res.json({ status: true, message: 'Day cancelled (draft)' });
@@ -659,13 +676,10 @@ const changePeriod = async (req, res, next) => {
     const fromPeriodNo = toInt(req.body?.fromPeriodNo, 0);
     const toPeriodNo = toInt(req.body?.toPeriodNo, 0);
     const userId = safeTrim(req.body?.userId);
-
     if (!tenantId || !timetableId || !fromPeriodNo || !toPeriodNo || !day) return res.status(400).json({ status: false, message: 'Missing required fields' });
     if (fromPeriodNo === toPeriodNo) return res.status(400).json({ status: false, message: 'fromPeriodNo and toPeriodNo must differ' });
-
     const tt = await TimeTable.findOne({ _id: timetableId, tenantId, isdeleted: false });
     if (!tt) return res.status(404).json({ status: false, message: 'Timetable not found' });
-
     if (!isPublished(tt)) {
       const dayIdx = (tt.week || []).findIndex((d) => d.day === day);
       if (dayIdx < 0) return res.status(400).json({ status: false, message: `Day ${day} not found` });
@@ -673,48 +687,37 @@ const changePeriod = async (req, res, next) => {
       const fromIdx = periods.findIndex((p) => toInt(p?.periodNo) === fromPeriodNo);
       const toIdx = periods.findIndex((p) => toInt(p?.periodNo) === toPeriodNo);
       if (fromIdx < 0) return res.status(400).json({ status: false, message: 'Source period not found' });
-
-      // FIX G2: swap full period OBJECTS (content + time), keep periodNo labels in place.
-      // This means slot 1 always shows what was slot 1's time, but with slot 2's content — i.e. a true swap.
       const fromObj = { ...(periods[fromIdx].toObject?.() ?? periods[fromIdx]) };
       const fromNo = fromObj.periodNo;
-
       if (toIdx >= 0) {
         const toObj = { ...(periods[toIdx].toObject?.() ?? periods[toIdx]) };
         const toNo = toObj.periodNo;
-        // Swap: put toObj content into fromIdx slot (keeping fromNo), put fromObj content into toIdx slot (keeping toNo)
-        periods[fromIdx] = { ...toObj, periodNo: fromNo };
-        periods[toIdx] = { ...fromObj, periodNo: toNo };
+        const fromTime = fromObj.time;
+        const toTime = toObj.time;
+        periods[fromIdx] = { ...toObj, periodNo: fromNo, time: fromTime };
+        periods[toIdx] = { ...fromObj, periodNo: toNo, time: toTime };
       } else {
-        // Target slot doesn't exist — move fromObj into toPeriodNo, remove from original slot
         periods.splice(fromIdx, 1);
         periods.push({ ...fromObj, periodNo: toPeriodNo });
       }
-
       periods.sort((a, b) => toInt(a?.periodNo) - toInt(b?.periodNo));
       tt.markModified('week');
       tt.updatedBy = userId || null;
       await tt.save();
       return res.json({ status: true, message: 'Period moved (draft)' });
     }
-
     if (!date) return res.status(400).json({ status: false, message: 'date required for published timetable' });
-
     const fromBase = findEffectivePeriodBase(tt, day, fromPeriodNo, date);
     if (!fromBase) return res.status(400).json({ status: false, message: 'Source period not found' });
     const toBase = findEffectivePeriodBase(tt, day, toPeriodNo, date);
-
-    // Conflict checks: verify each faculty is free in the time slot they're moving INTO
     if (toBase) {
       const checkFrom = await checkStaffConflicts(tenantId, fromBase.replacementFacultyId || fromBase.facultyId, date, day, toInt(toBase.time?.startMin), toInt(toBase.time?.endMin), timetableId, false);
       if (checkFrom.conflict) return res.status(400).json({ status: false, message: `Swap conflict (source faculty): ${checkFrom.message}` });
       const checkTo = await checkStaffConflicts(tenantId, toBase.replacementFacultyId || toBase.facultyId, date, day, toInt(fromBase.time?.startMin), toInt(fromBase.time?.endMin), timetableId, false);
       if (checkTo.conflict) return res.status(400).json({ status: false, message: `Swap conflict (target faculty): ${checkTo.message}` });
     }
-
     upsertPeriodOverride(tt, { date, day, periodNo: fromPeriodNo, action: 'MOVE_PERIOD', period: null, toPeriodNo, reason: 'Period moved', updatedBy: userId || null });
     if (toBase) upsertPeriodOverride(tt, { date, day, periodNo: toPeriodNo, action: 'MOVE_PERIOD', period: null, toPeriodNo: fromPeriodNo, reason: 'Period swapped', updatedBy: userId || null });
-
     tt.markModified('periodOverrides');
     tt.updatedBy = userId || null;
     await tt.save();
@@ -724,8 +727,6 @@ const changePeriod = async (req, res, next) => {
   }
 };
 
-// POST /timetable/period/replace
-// FIX G1: Now uses findEffectivePeriodBase instead of findTemplatePeriod so ADD_PERIOD periods can be replaced.
 const replacePeriod = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
