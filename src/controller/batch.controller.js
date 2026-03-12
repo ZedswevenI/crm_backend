@@ -1207,7 +1207,6 @@ const promoteBatch = async (req, res, next) => {
       changedOn: Date.now(),
       changedBy: updatedBy
     };
-
     await StudentProfile.updateMany(
       {
         tenantId,
