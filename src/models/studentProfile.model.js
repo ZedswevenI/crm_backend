@@ -6,6 +6,8 @@ const ayHistorySchema = new mongoose.Schema(
     academicYear: { type: String, trim: true, default: null },
     yearNo: { type: Number, default: null },
     classNo: { type: Number, default: null },
+    startOn: { type: Number, default: null }, // ✅ ADD
+    endOn: { type: Number, default: null },
     changedOn: { type: Number, default: () => Date.now() },
     changedBy: { type: String, trim: true, default: null }
   },
