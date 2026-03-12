@@ -728,68 +728,6 @@ const viewUser = async (req, res, next) => {
   }
 };
 
-// const updateUser = async (req, res, next) => {
-//   try {
-//     const tenantId = pickTenantId(req);
-//     const { recId } = req.body;
-//     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-//     if (!recId) return res.status(400).json({ status: false, message: 'recId is required' });
-//     const updateDoc = {};
-//     if (req.body.name !== undefined) updateDoc.name = safeTrim(req.body.name);
-//     if (req.body.email !== undefined) updateDoc.email = safeLower(req.body.email);
-//     if (req.body.phone !== undefined) updateDoc.phone = safeTrim(req.body.phone);
-//     if (req.body.centerId !== undefined) updateDoc.centerId = req.body.centerId ? safeTrim(req.body.centerId) : null;
-//     if (req.body.centerName !== undefined) updateDoc.centerName = req.body.centerName ? safeTrim(req.body.centerName) : null;
-//     if (req.body.roleLevel !== undefined) {
-//       const lvl = safeTrim(req.body.roleLevel) || 'L4';
-//       updateDoc.roleLevel = lvl;
-//       updateDoc.roleLabel = ROLE_MAP[lvl] || safeTrim(req.body.roleLabel) || ROLE_MAP.L4;
-//     } else if (req.body.roleLabel !== undefined) {
-//       updateDoc.roleLabel = safeTrim(req.body.roleLabel);
-//     }
-//     if (req.body.status !== undefined) updateDoc.status = req.body.status;
-//     if (req.body.password !== undefined && req.body.password !== null && req.body.password !== '') {
-//       updateDoc.password = await bcrypt.hash(String(req.body.password), Rounds);
-//     }
-//     let mappedStaffIdToSync = null;
-//     if (req.body.empCode !== undefined) {
-//       const newEmpCode = req.body.empCode ? safeTrim(req.body.empCode) : null;
-//       updateDoc.empCode = newEmpCode;
-//       if (newEmpCode) {
-//         const escaped = newEmpCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-//         const staffMatch = await Staff.findOne({
-//           tenantId,
-//           employeeId: new RegExp(`^${escaped}$`, 'i'),
-//           isdeleted: false
-//         }).lean();
-//         if (staffMatch) {
-//           updateDoc.staffId = staffMatch.staffId;
-//           mappedStaffIdToSync = staffMatch.staffId;
-//         } else {
-//           updateDoc.staffId = null;
-//         }
-//       } else {
-//         updateDoc.staffId = null;
-//       }
-//     }
-//     if (Object.keys(updateDoc).length === 0) {
-//       return res.status(400).json({ status: false, message: 'No fields to update' });
-//     }
-//     const updated = await User.findOneAndUpdate({ _id: recId, tenantId, isdeleted: false }, { $set: updateDoc }, { new: true }).select('-password');
-//     if (!updated) return res.status(404).json({ status: false, message: 'User not found or already deleted' });
-//     if (mappedStaffIdToSync) {
-//       await Staff.updateOne({ tenantId, staffId: mappedStaffIdToSync, isdeleted: false }, { $set: { userId: updated.userId } });
-//     }
-//     return res.status(constants.HTTPS_SUCCESS || 200).json({ status: true, message: 'User updated successfully', data: updated });
-//   } catch (err) {
-//     if (err && err.code === 11000) {
-//       const dupField = Object.keys(err.keyPattern || {})[0] || 'unique field';
-//       return res.status(409).json({ status: false, message: `Duplicate ${dupField}.` });
-//     }
-//     return next(err);
-//   }
-// };
-
 const updateUser = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);

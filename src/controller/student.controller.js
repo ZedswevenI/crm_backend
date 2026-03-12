@@ -15,6 +15,7 @@ import SubTopic from '../models/subtopic.model.js';
 import BatchAssignEnable from '../models/batchenabledAssignment.model.js';
 import AssignmentResult from '../models/assignmentResult.model.js';
 import Phase from '../models/phaseplan.model.js';
+import Staff from '../models/staff.model.js';
 import TimeTable from '../models/timetable.model.js';
 import Attendance from '../models/attandence.model.js';
 import StudyMaterial from '../models/studymaterial.model.js';
@@ -814,51 +815,114 @@ const getStudentTopicsTests = async (req, res, next) => {
   }
 };
 
+// const getStudentTimetable = async (req, res, next) => {
+//   try {
+//     const tenantId = pickTenantId(req);
+//     const identifier = safeTrim(req.body?.studentNo || req.body?.studentId);
+//     // const targetDateMs = req.body?.date ? Number(req.body.date) : Date.now();
+//     let targetDateMs = Date.now();
+//     if (req.body?.date !== undefined && req.body?.date !== null) {
+//       const parsed = Number(req.body.date);
+//       targetDateMs = Number.isFinite(parsed) ? parsed : Date.now();
+//     }
+//     if (!tenantId || !identifier) {
+//       return res.status(400).json({ status: false, message: 'tenantId and studentNo are required' });
+//     }
+//     const student = await StudentProfile.findOne({
+//       tenantId,
+//       status: 'ACTIVE',
+//       isdeleted: false,
+//       $or: [{ studentId: identifier }, { admissionNo: identifier }, { registrationNumber: identifier }]
+//     }).lean();
+//     if (!student) {
+//       return res.status(404).json({ status: false, message: 'Student profile not found' });
+//     }
+//     // const d = new Date(targetDateMs);
+//     // const diff = d.getDay() === 0 ? -6 : 1 - d.getDay();
+//     // const mondayMs = new Date(d.setDate(d.getDate() + diff)).setHours(0, 0, 0, 0);
+//     const d = new Date(targetDateMs);
+//     const utcDay = d.getUTCDay(); // 0=Sun
+//     const diffDays = utcDay === 0 ? -6 : 1 - utcDay;
+//     const mondayMs = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + diffDays);
+//     console.log('student.batchCode ', student.batchCode);
+//     const timetableDoc = await TimeTable.findOne({
+//       tenantId,
+//       batchCode: student.batchCode,
+//       wkStartOn: mondayMs,
+//       isdeleted: false
+//     }).lean();
+//     // const todaysPeriods = getEffectivePeriods(timetableDoc, targetDateMs);
+//     const targetUTCMidnight = Date.UTC(new Date(targetDateMs).getUTCFullYear(), new Date(targetDateMs).getUTCMonth(), new Date(targetDateMs).getUTCDate());
+//     const todaysPeriods = getEffectivePeriods(timetableDoc, targetUTCMidnight);
+//     return res.status(200).json({
+//       status: true,
+//       message: 'Timetable retrieved successfully',
+//       data: {
+//         date: targetDateMs,
+//         batchCode: student.batchCode,
+//         wkStartOn: mondayMs,
+//         periods: todaysPeriods
+//       }
+//     });
+//   } catch (err) {
+//     return next(err);
+//   }
+// };
+
 const getStudentTimetable = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     const identifier = safeTrim(req.body?.studentNo || req.body?.studentId);
-    // const targetDateMs = req.body?.date ? Number(req.body.date) : Date.now();
-    let targetDateMs = Date.now();
-    if (req.body?.date !== undefined && req.body?.date !== null) {
-      const parsed = Number(req.body.date);
-      targetDateMs = Number.isFinite(parsed) ? parsed : Date.now();
-    }
+
+    // UTC midnight for the target date
+    const now = new Date();
+    const targetDateMs = req.body?.date !== undefined && req.body?.date !== null && Number.isFinite(Number(req.body.date)) ? Number(req.body.date) : Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+
     if (!tenantId || !identifier) {
       return res.status(400).json({ status: false, message: 'tenantId and studentNo are required' });
     }
+
     const student = await StudentProfile.findOne({
       tenantId,
       status: 'ACTIVE',
       isdeleted: false,
       $or: [{ studentId: identifier }, { admissionNo: identifier }, { registrationNumber: identifier }]
     }).lean();
+
     if (!student) {
       return res.status(404).json({ status: false, message: 'Student profile not found' });
     }
-    // const d = new Date(targetDateMs);
-    // const diff = d.getDay() === 0 ? -6 : 1 - d.getDay();
-    // const mondayMs = new Date(d.setDate(d.getDate() + diff)).setHours(0, 0, 0, 0);
-    const d = new Date(targetDateMs);
-    const utcDay = d.getUTCDay(); // 0=Sun
-    const diffDays = utcDay === 0 ? -6 : 1 - utcDay;
-    const mondayMs = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + diffDays);
-    console.log('student.batchCode ', student.batchCode);
+
+    const mondayMs = getPreviousMonday(targetDateMs);
+
+    // FIX: find DRAFT for this exact week OR any published timetable active up to this week
     const timetableDoc = await TimeTable.findOne({
       tenantId,
       batchCode: student.batchCode,
-      wkStartOn: mondayMs,
-      isdeleted: false
-    }).lean();
-    // const todaysPeriods = getEffectivePeriods(timetableDoc, targetDateMs);
-    const targetUTCMidnight = Date.UTC(new Date(targetDateMs).getUTCFullYear(), new Date(targetDateMs).getUTCMonth(), new Date(targetDateMs).getUTCDate());
-    const todaysPeriods = getEffectivePeriods(timetableDoc, targetUTCMidnight);
+      isdeleted: false,
+      $or: [{ wkStartOn: mondayMs }, { status: 'Active', wkStartOn: { $lte: mondayMs } }]
+    })
+      .sort({ wkStartOn: -1 }) // most recent wins — DRAFT for this week over old published
+      .lean();
+
+    if (!timetableDoc) {
+      return res.status(200).json({
+        status: true,
+        message: 'No timetable found for this week',
+        data: { date: targetDateMs, batchCode: student.batchCode, wkStartOn: mondayMs, periods: [] }
+      });
+    }
+
+    const todaysPeriods = getEffectivePeriods(timetableDoc, targetDateMs);
+
     return res.status(200).json({
       status: true,
       message: 'Timetable retrieved successfully',
       data: {
         date: targetDateMs,
         batchCode: student.batchCode,
+        timetableId: timetableDoc._id,
+        timetableStatus: timetableDoc.status,
         wkStartOn: mondayMs,
         periods: todaysPeriods
       }
@@ -995,8 +1059,10 @@ const getStudentAttendance = async (req, res, next) => {
         remarks: studentData?.remarks || null
       };
     });
+    console.log('attendanceRecords ', attendanceRecords);
     const scheduledPeriodNos = new Set(scheduledPeriods.map((p) => toInt(p.periodNo)));
     for (const record of attendanceRecords) {
+      console.log('record ', record);
       const pNo = toInt(record.periodNo);
       if (scheduledPeriodNos.has(pNo)) continue;
       const studentData = record.students?.find((s) => s.studentId === student.studentId);
