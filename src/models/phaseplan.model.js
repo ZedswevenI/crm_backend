@@ -3,7 +3,7 @@ import { v4 as uuid } from 'uuid';
 
 const PhaseTopicSchema = new mongoose.Schema(
   {
-    topicId: { type: String, required: true, ref: 'topic' },
+    // topicId: { type: String, required: true, ref: 'topic' },
     topicName: { type: String, trim: true },
     estHours: { type: Number, default: null },
     sortOrder: { type: Number, default: 0 }
