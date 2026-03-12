@@ -4,6 +4,7 @@ import constants from '../helpers/constants.js';
 import Phase from '../models/phaseplan.model.js';
 import Topic from '../models/topic.model.js';
 import Activity from '../models/activity.model.js';
+import StudentProfile from '../models/studentProfile.model.js';
 
 const parseDateToEpoch = (dateString) => {
   if (!dateString) return null;
@@ -806,4 +807,117 @@ const bulkUploadActivities = async (req, res, next) => {
   }
 };
 
-export default { createPhase, updatePhase, listPhases, deletePhase, getAvailableTopics, bulkUploadPhases, createActivity, editActivity, changeStatus, viewActivity, deleteActivity, listActivities, bulkUploadActivities };
+// const listStudentActivities = async (req, res, next) => {
+//   try {
+//     const tenantId = pickTenantId(req);
+//     const identifier = safeTrim(req.body?.studentNo || req.body?.studentId);
+//     if (!tenantId || !identifier) {
+//       return res.status(400).json({ status: false, message: 'tenantId and studentNo are required' });
+//     }
+//     const student = await StudentProfile.findOne({
+//       tenantId,
+//       status: 'ACTIVE',
+//       isdeleted: false,
+//       $or: [{ studentId: identifier }, { admissionNo: identifier }, { registrationNumber: identifier }]
+//     }).lean();
+//     if (!student) {
+//       return res.status(404).json({ status: false, message: 'Student profile not found' });
+//     }
+//     if (!student.batchCode) {
+//       return res.status(200).json({
+//         status: true,
+//         message: 'Student is not assigned to a batch',
+//         data: [],
+//         count: 0
+//       });
+//     }
+//     const activities = await Activity.find({
+//       tenantId,
+//       batchCode: student.batchCode,
+//       isdeleted: false,
+//       status: { $ne: 'CANCELLED' }
+//     })
+//       .sort({ startDate: 1 })
+//       .lean();
+//     const formattedActivities = activities.map((act) => ({
+//       activityId: act.activityId,
+//       activityName: act.activityName,
+//       startDate: act.startDate,
+//       endDate: act.endDate,
+//       status: act.status,
+//       remarks: act.remarks || ''
+//     }));
+//     return res.status(200).json({
+//       status: true,
+//       message: 'Student activities retrieved successfully',
+//       data: formattedActivities,
+//       count: formattedActivities.length
+//     });
+//   } catch (err) {
+//     return next(err);
+//   }
+// };
+
+const listStudentActivities = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const identifier = safeTrim(req.body?.studentNo || req.body?.studentId);
+
+    if (!tenantId || !identifier) {
+      return res.status(400).json({ status: false, message: 'tenantId and studentNo are required' });
+    }
+
+    // 1. Resolve the student profile to find BOTH their batchCode and centerCode
+    const student = await StudentProfile.findOne({
+      tenantId,
+      status: 'ACTIVE',
+      isdeleted: false,
+      $or: [{ studentId: identifier }, { admissionNo: identifier }, { registrationNumber: identifier }]
+    }).lean();
+
+    if (!student) {
+      return res.status(404).json({ status: false, message: 'Student profile not found' });
+    }
+
+    // 2. Build the query to check for Batch-specific OR Center-wide activities
+    const activityQuery = {
+      tenantId,
+      isdeleted: false,
+      status: { $ne: 'CANCELLED' },
+      $or: []
+    };
+    if (student.batchCode) {
+      activityQuery.$or.push({ batchCode: student.batchCode });
+    }
+    if (student.centerCode) {
+      activityQuery.$or.push({
+        centerCode: student.centerCode,
+        batchCode: { $in: [null, '', 'ALL'] }
+      });
+    }
+    if (activityQuery.$or.length === 0) {
+      return res.status(200).json({ status: true, data: [], count: 0, message: 'No center or batch assigned to student' });
+    }
+    const activities = await Activity.find(activityQuery).sort({ startDate: 1 }).lean();
+    const formattedActivities = activities.map((act) => ({
+      activityId: act.activityId,
+      activityName: act.activityName,
+      batchCode: act.batchCode || 'ALL',
+      centerCode: act.centerCode || null,
+      startDate: act.startDate,
+      endDate: act.endDate,
+      status: act.status,
+      remarks: act.remarks || ''
+    }));
+    return res.status(200).json({
+      status: true,
+      message: 'Student activities retrieved successfully',
+      data: formattedActivities,
+      count: formattedActivities.length
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+export default { createPhase, updatePhase, listPhases, deletePhase, getAvailableTopics, bulkUploadPhases, createActivity, editActivity, changeStatus, viewActivity, deleteActivity, listActivities, bulkUploadActivities, listStudentActivities };
