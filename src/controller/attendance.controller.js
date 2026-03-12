@@ -249,29 +249,17 @@ const getPendingAttendance = async (req, res, next) => {
     const tenantId = pickTenantId(req);
     const date = toInt(req.body?.date, 0);
     const batchCode = safeTrim(req.body?.batchCode);
-
     if (!tenantId || !date) {
       return res.status(400).json({ status: false, message: 'tenantId and date are required' });
     }
-
     const mondayMs = getPreviousMonday(date);
-
-    // FIX: Query timetables by wkStartOn for DRAFT timetables
-    // For Published timetables, they are Active and matched by wkStartOn of their publish week
-    // So we need BOTH: the week-specific one AND any Active timetable for the batch
     const ttQuery = { tenantId, isdeleted: false };
     if (batchCode) ttQuery.batchCode = batchCode;
-
-    // Find: (1) timetable for this exact week, OR (2) any Active/published timetable for the batch
     const timetables = await TimeTable.find({
       ...ttQuery,
-      $or: [
-        { wkStartOn: mondayMs }, // DRAFT for this week
-        { status: 'Active', wkStartOn: { $lte: mondayMs } } // Published — active for this date
-      ]
+      status: 'Active',
+      wkStartOn: { $lte: mondayMs }
     }).lean();
-
-    // Deduplicate by batchCode — prefer the most recent wkStartOn per batch
     const ttByBatch = new Map();
     for (const tt of timetables) {
       const existing = ttByBatch.get(tt.batchCode);
@@ -398,7 +386,8 @@ const getStaffSchedule = async (req, res, next) => {
     const allTimetables = await TimeTable.find({
       tenantId,
       isdeleted: false,
-      $or: [{ wkStartOn: mondayMs }, { status: 'Active', wkStartOn: { $lte: mondayMs } }]
+      status: 'Active',
+      wkStartOn: { $lte: mondayMs }
     }).lean();
 
     // Deduplicate — one timetable per batchCode, prefer most recent wkStartOn
