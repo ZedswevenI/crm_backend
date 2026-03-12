@@ -314,19 +314,107 @@ const getPendingAttendance = async (req, res, next) => {
   }
 };
 
+// const getStaffSchedule = async (req, res, next) => {
+//   try {
+//     const tenantId = pickTenantId(req);
+//     const facultyId = safeTrim(req.body?.facultyId);
+//     const date = toInt(req.body?.date, 0);
+//     if (!tenantId || !facultyId || !date) {
+//       return res.status(400).json({ status: false, message: 'tenantId, facultyId and date are required' });
+//     }
+//     const mondayMs = getPreviousMonday(date);
+//     const timetables = await TimeTable.find({ tenantId, isdeleted: false, wkStartOn: mondayMs }).lean();
+//     const myClasses = [];
+//     for (const tt of timetables) {
+//       const activePeriods = getEffectivePeriods(tt, date);
+//       const myPeriods = activePeriods.filter((p) => safeTrim(p.facultyId) === facultyId || safeTrim(p.replacementFacultyId) === facultyId);
+//       myPeriods.forEach((p) => {
+//         myClasses.push({
+//           batchCode: tt.batchCode,
+//           timetableId: tt._id,
+//           ...p
+//         });
+//       });
+//     }
+//     return res.status(200).json({ status: true, data: myClasses });
+//   } catch (err) {
+//     return next(err);
+//   }
+// };
+
+// const getStudentSchedule = async (req, res, next) => {
+//   try {
+//     const tenantId = pickTenantId(req);
+//     const studentId = safeTrim(req.body?.studentId);
+//     const date = toInt(req.body?.date, 0);
+//     if (!tenantId || !studentId || !date) {
+//       return res.status(400).json({ status: false, message: 'tenantId, studentId, and date are required' });
+//     }
+//     const student = await StudentProfile.findOne({
+//       tenantId,
+//       status: 'ACTIVE',
+//       isdeleted: false,
+//       $or: [{ studentId }, { admissionNo: studentId }, { registrationNumber: studentId }]
+//     }).lean();
+//     if (!student || !student.batchCode) {
+//       return res.status(200).json({
+//         status: true,
+//         data: [],
+//         message: 'Student not found or not assigned to a batch'
+//       });
+//     }
+//     const mondayMs = getPreviousMonday(date);
+//     const tt = await TimeTable.findOne({
+//       tenantId,
+//       batchCode: student.batchCode,
+//       wkStartOn: mondayMs,
+//       isdeleted: false
+//     }).lean();
+//     if (!tt) return res.status(200).json({ status: true, data: [] });
+//     const activePeriods = getEffectivePeriods(tt, date);
+//     return res.status(200).json({
+//       status: true,
+//       batchCode: student.batchCode,
+//       data: activePeriods
+//     });
+//   } catch (err) {
+//     return next(err);
+//   }
+// };
+
 const getStaffSchedule = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     const facultyId = safeTrim(req.body?.facultyId);
     const date = toInt(req.body?.date, 0);
+
     if (!tenantId || !facultyId || !date) {
       return res.status(400).json({ status: false, message: 'tenantId, facultyId and date are required' });
     }
+
     const mondayMs = getPreviousMonday(date);
-    const timetables = await TimeTable.find({ tenantId, isdeleted: false, wkStartOn: mondayMs }).lean();
+
+    // FIX: find DRAFT for this exact week OR any published timetable active up to this week
+    const allTimetables = await TimeTable.find({
+      tenantId,
+      isdeleted: false,
+      $or: [{ wkStartOn: mondayMs }, { status: 'Active', wkStartOn: { $lte: mondayMs } }]
+    }).lean();
+
+    // Deduplicate — one timetable per batchCode, prefer most recent wkStartOn
+    const ttByBatch = new Map();
+    for (const tt of allTimetables) {
+      const existing = ttByBatch.get(tt.batchCode);
+      if (!existing || toInt(tt.wkStartOn) > toInt(existing.wkStartOn)) {
+        ttByBatch.set(tt.batchCode, tt);
+      }
+    }
+
     const myClasses = [];
-    for (const tt of timetables) {
+    for (const tt of ttByBatch.values()) {
       const activePeriods = getEffectivePeriods(tt, date);
+      // FIX: after our REPLACE_PERIOD change staff fix, new facultyId is set directly on period
+      // replacementFacultyId check kept for backward compat with old data
       const myPeriods = activePeriods.filter((p) => safeTrim(p.facultyId) === facultyId || safeTrim(p.replacementFacultyId) === facultyId);
       myPeriods.forEach((p) => {
         myClasses.push({
@@ -336,7 +424,10 @@ const getStaffSchedule = async (req, res, next) => {
         });
       });
     }
-    return res.status(200).json({ status: true, data: myClasses });
+
+    myClasses.sort((a, b) => (a.time?.startMin || 0) - (b.time?.startMin || 0));
+
+    return res.status(200).json({ status: true, data: myClasses, count: myClasses.length });
   } catch (err) {
     return next(err);
   }
@@ -347,15 +438,19 @@ const getStudentSchedule = async (req, res, next) => {
     const tenantId = pickTenantId(req);
     const studentId = safeTrim(req.body?.studentId);
     const date = toInt(req.body?.date, 0);
+
     if (!tenantId || !studentId || !date) {
       return res.status(400).json({ status: false, message: 'tenantId, studentId, and date are required' });
     }
+
+    // Accept studentId, admissionNo, or registrationNumber
     const student = await StudentProfile.findOne({
       tenantId,
       status: 'ACTIVE',
       isdeleted: false,
       $or: [{ studentId }, { admissionNo: studentId }, { registrationNumber: studentId }]
     }).lean();
+
     if (!student || !student.batchCode) {
       return res.status(200).json({
         status: true,
@@ -363,18 +458,26 @@ const getStudentSchedule = async (req, res, next) => {
         message: 'Student not found or not assigned to a batch'
       });
     }
+
     const mondayMs = getPreviousMonday(date);
     const tt = await TimeTable.findOne({
       tenantId,
       batchCode: student.batchCode,
-      wkStartOn: mondayMs,
-      isdeleted: false
-    }).lean();
-    if (!tt) return res.status(200).json({ status: true, data: [] });
+      isdeleted: false,
+      $or: [{ wkStartOn: mondayMs }, { status: 'Active', wkStartOn: { $lte: mondayMs } }]
+    })
+      .sort({ wkStartOn: -1 })
+      .lean();
+
+    if (!tt) {
+      return res.status(200).json({ status: true, data: [], message: 'No timetable found for this week' });
+    }
     const activePeriods = getEffectivePeriods(tt, date);
     return res.status(200).json({
       status: true,
       batchCode: student.batchCode,
+      timetableId: tt._id,
+      timetableStatus: tt.status,
       data: activePeriods
     });
   } catch (err) {
