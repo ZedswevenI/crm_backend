@@ -873,15 +873,11 @@ const getStudentTimetable = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     const identifier = safeTrim(req.body?.studentNo || req.body?.studentId);
-
-    // UTC midnight for the target date
     const now = new Date();
     const targetDateMs = req.body?.date !== undefined && req.body?.date !== null && Number.isFinite(Number(req.body.date)) ? Number(req.body.date) : Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-
     if (!tenantId || !identifier) {
       return res.status(400).json({ status: false, message: 'tenantId and studentNo are required' });
     }
-
     const student = await StudentProfile.findOne({
       tenantId,
       status: 'ACTIVE',
@@ -892,10 +888,7 @@ const getStudentTimetable = async (req, res, next) => {
     if (!student) {
       return res.status(404).json({ status: false, message: 'Student profile not found' });
     }
-
     const mondayMs = getPreviousMonday(targetDateMs);
-
-    // FIX: find DRAFT for this exact week OR any published timetable active up to this week
     const timetableDoc = await TimeTable.findOne({
       tenantId,
       batchCode: student.batchCode,
@@ -903,9 +896,8 @@ const getStudentTimetable = async (req, res, next) => {
       status: 'Active',
       wkStartOn: { $lte: mondayMs }
     })
-      .sort({ wkStartOn: -1 }) // most recent wins — DRAFT for this week over old published
+      .sort({ wkStartOn: -1 })
       .lean();
-
     if (!timetableDoc) {
       return res.status(200).json({
         status: true,
@@ -913,9 +905,19 @@ const getStudentTimetable = async (req, res, next) => {
         data: { date: targetDateMs, batchCode: student.batchCode, wkStartOn: mondayMs, periods: [] }
       });
     }
-
     const todaysPeriods = getEffectivePeriods(timetableDoc, targetDateMs);
-
+    const facultyIds = [...new Set(todaysPeriods.map((p) => safeTrim(p.replacementFacultyId || p.facultyId)).filter(Boolean))];
+    const staffList = facultyIds.length ? await Staff.find({ tenantId, staffId: { $in: facultyIds }, isdeleted: false }, { staffId: 1, staffName: 1, staffCode: 1 }).lean() : [];
+    const staffById = Object.fromEntries(staffList.map((s) => [s.staffId, s]));
+    const enrichedPeriods = todaysPeriods.map((p) => {
+      const activeFacultyId = safeTrim(p.replacementFacultyId || p.facultyId);
+      const staff = staffById[activeFacultyId] || null;
+      return {
+        ...p,
+        staffCode: staff?.staffCode || null,
+        facultyName: staff?.staffName || p.facultyName || null
+      };
+    });
     return res.status(200).json({
       status: true,
       message: 'Timetable retrieved successfully',
@@ -925,7 +927,7 @@ const getStudentTimetable = async (req, res, next) => {
         timetableId: timetableDoc._id,
         timetableStatus: timetableDoc.status,
         wkStartOn: mondayMs,
-        periods: todaysPeriods
+        periods: enrichedPeriods
       }
     });
   } catch (err) {
