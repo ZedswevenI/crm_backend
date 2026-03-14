@@ -459,9 +459,286 @@ const getStudentSubjects = async (req, res, next) => {
   }
 };
 
+// const getAllClassSubjectTopics = async (req, res, next) => {
+//   try {
+//     console.log('tests. method called');
+//     const tenantId = safeTrim(req.body?.entiId);
+//     const regNo = safeTrim(req.body?.regNo);
+//     const classNo = toNum(req.body?.classNo);
+//     const subjectRaw = safeTrim(req.body?.subjectId);
+//     if (!tenantId || !regNo || !classNo || !subjectRaw) {
+//       return res.status(400).json({
+//         status: false,
+//         message: 'entiId, regNo, classNo and subject are required'
+//       });
+//     }
+//     let subjectId = null;
+//     const subQ = { tenantId, isdeleted: false, $or: [] };
+//     if (mongoose?.Types?.ObjectId?.isValid(subjectRaw)) subQ.$or.push({ _id: new mongoose.Types.ObjectId(subjectRaw) });
+//     subQ.$or.push({ subjectId: subjectRaw });
+//     subQ.$or.push({ subjectName: subjectRaw });
+//     const subjectDoc = await Subject.findOne(subQ, { _id: 1, subjectId: 1, subjectName: 1 }).lean();
+//     if (!subjectDoc) {
+//       return res.status(404).json({ status: false, message: 'Subject not found' });
+//     }
+//     subjectId = safeTrim(subjectDoc.subjectId || subjectDoc._id);
+//     const student = await StudentProfile.findOne({
+//       tenantId,
+//       isdeleted: false,
+//       status: 'ACTIVE',
+//       $or: [{ admissionNo: regNo }, { registrationNumber: regNo }, { portalStudentId: regNo }]
+//     }).lean();
+//     if (!student) return res.status(404).json({ status: false, message: 'Student not found' });
+//     const programId = safeTrim(student.programId);
+//     if (!programId) return res.status(400).json({ status: false, message: 'Student program not found' });
+//     const program = await Program.findOne({ tenantId, programId, isdeleted: false }).lean();
+//     if (!program) return res.status(404).json({ status: false, message: 'Program not found' });
+//     const batchId = safeTrim(req.body?.batchId) || safeTrim(student?.batchId);
+//     console.log('program ', program);
+//     const examMappings = (Array.isArray(program.examMappings) ? program.examMappings : [])
+//       .map((m) => ({
+//         categoryId: safeTrim(m?.categoryId),
+//         subCategoryId: safeTrim(m?.subCategoryId),
+//         sortOrder: Number.isFinite(Number(m?.sortOrder)) ? Number(m.sortOrder) : 0
+//       }))
+//       .filter((m) => m.categoryId && m.subCategoryId)
+//       .sort((a, b) => Number(a.sortOrder) - Number(b.sortOrder));
+//     console.log('examMappings ', examMappings);
+//     if (!examMappings.length) {
+//       return res.json({
+//         status: true,
+//         message: 'No exam mappings configured for this program',
+//         data: {
+//           student: { regNo, classNo, studentName: student?.student?.name || null, batchId: batchId || null },
+//           subjectId,
+//           subjectName: subjectDoc.subjectName || subjectRaw,
+//           program: { programId: program.programId, programName: program.programName },
+//           subtopicsByTopics: {}
+//         }
+//       });
+//     }
+//     const categoryIds = Array.from(new Set(examMappings.map((x) => x.categoryId)));
+//     const subCategoryIds = Array.from(new Set(examMappings.map((x) => x.subCategoryId)));
+//     const categories = await ExamCategory.find({ tenantId, categoryId: { $in: categoryIds }, isdeleted: false }).lean();
+//     const subCategories = await ExamSubCategory.find({ tenantId, subCategoryId: { $in: subCategoryIds }, isdeleted: false }).lean();
+//     const catNameById = new Map((categories || []).map((c) => [safeTrim(c.categoryId), c.categoryName || c.name || safeTrim(c.categoryId)]));
+//     const subCatNameById = new Map((subCategories || []).map((s) => [safeTrim(s.subCategoryId), s.subCategoryName || s.name || safeTrim(s.subCategoryId)]));
+//     const topics = await Topic.find({ tenantId, classNo, subjectId, isdeleted: false }).sort({ sortOrder: 1 }).lean();
+//     const topicIds = topics.map((t) => safeTrim(t.topicId || t._id)).filter(Boolean);
+//     const phases = await Phase.find({ tenantId, classNo, subjectId, isdeleted: false }).lean();
+//     const phaseByTopicId = new Map();
+//     for (const ph of phases) {
+//       for (const pt of ph.topics || []) {
+//         phaseByTopicId.set(safeTrim(pt.topicId), {
+//           phaseId: ph.phaseId,
+//           phaseName: ph.phaseName,
+//           phaseSortOrder: ph.sortOrder,
+//           estHours: pt.estHours || null
+//         });
+//       }
+//     }
+//     const subtopics = await SubTopic.find({ tenantId, classNo, subjectId, isdeleted: false, topicId: { $in: topicIds } })
+//       .sort({ sortOrder: 1 })
+//       .lean();
+//     const subTopicIds = subtopics.map((st) => safeTrim(st.subTopicId)).filter(Boolean);
+//     const assignments = await Assignment.find({
+//       tenantId,
+//       classNo,
+//       subjectId,
+//       isdeleted: false,
+//       status: { $in: ['active', 'ACTIVE'] },
+//       categoryId: { $in: categoryIds },
+//       subCategoryId: { $in: subCategoryIds },
+//       topicId: { $in: topicIds },
+//       subTopicId: { $in: subTopicIds }
+//     })
+//       .sort({ createdAt: 1 })
+//       .lean();
+//     const enabledTestMap = new Map();
+//     if (batchId) {
+//       console.log('batchId ', batchId);
+//       const enabledRows = await BatchAssignEnable.find({ tenantId, batchId, subjectId, isdeleted: false, status: 'enabled' }, { testId: 1, testNo: 1, enabledAt: 1, students: { $elemMatch: { admissionNo: safeTrim(student.admissionNo || regNo) } } }).lean();
+//       console.log('enabledRows ', enabledRows);
+//       const now = Date.now();
+//       const admissionNo = safeTrim(student.admissionNo || regNo);
+//       const studentId = safeTrim(student.studentId || student._id);
+//       const cgpaFromProfile = student?.cgpa === null || student?.cgpa === undefined ? null : toNum(student.cgpa);
+//       const ops = [];
+//       for (const r of enabledRows || []) {
+//         const tid = safeTrim(r?.testId);
+//         if (!tid) continue;
+//         const stuLog = Array.isArray(r?.students) && r.students.length ? r.students[0] : null;
+//         if (!stuLog) {
+//           ops.push({
+//             updateOne: {
+//               filter: { tenantId, batchId, subjectId, testId: tid, isdeleted: false, status: 'enabled', students: { $not: { $elemMatch: { admissionNo } } } },
+//               update: {
+//                 $push: {
+//                   students: {
+//                     studentId: studentId || null,
+//                     admissionNo,
+//                     cgpa: cgpaFromProfile,
+//                     status: 'ASSIGNED',
+//                     assignedAt: now,
+//                     startedAt: null,
+//                     completedAt: null,
+//                     attempts: 0
+//                   }
+//                 }
+//               }
+//             }
+//           });
+//           enabledTestMap.set(tid, {
+//             testId: tid,
+//             testNo: r?.testNo ?? null,
+//             studentStatus: 'ASSIGNED',
+//             studentCgpa: null
+//           });
+//         } else {
+//           const st = safeTrim(stuLog?.status) || 'ASSIGNED';
+//           enabledTestMap.set(tid, {
+//             testId: tid,
+//             testNo: r?.testNo ?? null,
+//             studentStatus: st,
+//             studentCgpa: st === 'COMPLETED' ? (stuLog?.cgpa === null || stuLog?.cgpa === undefined ? null : toNum(stuLog.cgpa)) : null
+//           });
+//         }
+//       }
+//       if (ops.length) {
+//         try {
+//           await BatchAssignEnable.bulkWrite(ops, { ordered: false });
+//         } catch {}
+//       }
+//     }
+//     const completedTestSet = new Set();
+//     if (batchId) {
+//       const doneRows = await AssignmentResult.find(
+//         {
+//           tenantId,
+//           isdeleted: false,
+//           admissionNo: safeTrim(student.admissionNo || regNo),
+//           batchId,
+//           classNo,
+//           subjectId: mongoose.Types.ObjectId.isValid(subjectId) ? new mongoose.Types.ObjectId(subjectId) : subjectId
+//         },
+//         { testId: 1 }
+//       )
+//         .lean()
+//         .catch(() => []);
+//       for (const d of doneRows || []) {
+//         const tid = safeTrim(d?.testId);
+//         if (tid) completedTestSet.add(tid);
+//       }
+//     }
+//     const assignsByKey = new Map();
+//     for (const a of assignments) {
+//       const catId = safeTrim(a.categoryId);
+//       const subCatId = safeTrim(a.subCategoryId);
+//       const stId = safeTrim(a.subTopicId);
+//       const key = `${catId}||${subCatId}||${stId}`;
+//       const arr = assignsByKey.get(key) || [];
+//       arr.push({
+//         assignmentId: a._id,
+//         testId: a.testId || null,
+//         testNo: a.testNo ?? null,
+//         testCode: a.testCode || null,
+//         numberOfQuestions: a.numberOfQuestions ?? null,
+//         status: a.status || null
+//       });
+//       assignsByKey.set(key, arr);
+//     }
+//     const subtopicsByTopics = {};
+//     for (const t of topics) {
+//       const tId = safeTrim(t.topicId || t._id);
+//       const topicName = t.topicName || t.name || 'TOPIC';
+//       const topicSortOrder = t.sortOrder ?? 0;
+//       const assignedPhase = phaseByTopicId.get(tId) || null;
+//       const sts = subtopics.filter((st) => safeTrim(st.topicId) === tId).sort((a, b) => Number(a?.sortOrder ?? 0) - Number(b?.sortOrder ?? 0));
+//       if (!sts.length) continue;
+//       subtopicsByTopics[topicName] = [];
+//       for (const st of sts) {
+//         const stId = safeTrim(st.subTopicId || st._id);
+//         const stName = st.subTopicName;
+//         const stSortOrder = st.sortOrder ?? 0;
+//         const test = [];
+//         for (const mapRow of examMappings) {
+//           const catId = mapRow.categoryId;
+//           const subCatId = mapRow.subCategoryId;
+//           const examCategory = catNameById.get(catId) || catId;
+//           const examSubCategory = subCatNameById.get(subCatId) || subCatId;
+//           const key = `${catId}||${subCatId}||${stId}`;
+//           const assigns = assignsByKey.get(key) || [];
+//           const a0 = assigns[0];
+//           const rawTestId = safeTrim(a0?.testId || '');
+//           let isEnabled = false;
+//           let status = 'NOT_ASSIGNED';
+//           let cgpa = null;
+//           if (rawTestId && enabledTestMap.has(rawTestId)) {
+//             isEnabled = true;
+//             if (completedTestSet.has(rawTestId)) {
+//               status = 'COMPLETED';
+//               const m = enabledTestMap.get(rawTestId);
+//               cgpa = m?.studentCgpa ?? null;
+//             } else {
+//               status = 'ASSIGNED';
+//               cgpa = null;
+//             }
+//           } else {
+//             isEnabled = false;
+//             status = 'NOT_ASSIGNED';
+//             cgpa = null;
+//           }
+//           test.push({
+//             examCategory,
+//             examSubCategory,
+//             testNo: isEnabled ? a0?.testNo || null : null,
+//             testId: isEnabled ? a0?.testId || null : null,
+//             isEnabled,
+//             status,
+//             cgpa,
+//             sortOrder: mapRow.sortOrder
+//           });
+//         }
+//         test.sort((a, b) => Number(a.sortOrder ?? 0) - Number(b.sortOrder ?? 0));
+//         subtopicsByTopics[topicName].push({
+//           topicId: tId,
+//           topicName,
+//           topicSortOrder,
+//           subtopicId: stId,
+//           subtopicName: stName,
+//           subtopicSortOrder: stSortOrder,
+//           phases: assignedPhase ? assignedPhase.phaseName : null,
+//           test
+//         });
+//       }
+//       subtopicsByTopics[topicName].sort((a, b) => Number(a.subtopicSortOrder) - Number(b.subtopicSortOrder));
+//     }
+//     return res.json({
+//       status: true,
+//       message: 'Class-subject topics loaded',
+//       data: {
+//         student: {
+//           regNo,
+//           classNo,
+//           studentName: student?.student?.name || null,
+//           batchId: batchId || null
+//         },
+//         subjectId,
+//         subjectName: subjectDoc.subjectName || subjectRaw,
+//         program: {
+//           programId: program.programId,
+//           programName: program.programName
+//         },
+//         subtopicsByTopics
+//       }
+//     });
+//   } catch (err) {
+//     return next(err);
+//   }
+// };
+
 const getAllClassSubjectTopics = async (req, res, next) => {
   try {
-    console.log('tests. method called');
     const tenantId = safeTrim(req.body?.entiId);
     const regNo = safeTrim(req.body?.regNo);
     const classNo = toNum(req.body?.classNo);
@@ -469,19 +746,21 @@ const getAllClassSubjectTopics = async (req, res, next) => {
     if (!tenantId || !regNo || !classNo || !subjectRaw) {
       return res.status(400).json({
         status: false,
-        message: 'entiId, regNo, classNo and subject are required'
+        message: 'entiId, regNo, classNo and subjectId are required'
       });
     }
-    let subjectId = null;
     const subQ = { tenantId, isdeleted: false, $or: [] };
-    if (mongoose?.Types?.ObjectId?.isValid(subjectRaw)) subQ.$or.push({ _id: new mongoose.Types.ObjectId(subjectRaw) });
+    if (mongoose.Types.ObjectId.isValid(subjectRaw)) subQ.$or.push({ _id: new mongoose.Types.ObjectId(subjectRaw) });
     subQ.$or.push({ subjectId: subjectRaw });
     subQ.$or.push({ subjectName: subjectRaw });
-    const subjectDoc = await Subject.findOne(subQ, { _id: 1, subjectId: 1, subjectName: 1 }).lean();
-    if (!subjectDoc) {
-      return res.status(404).json({ status: false, message: 'Subject not found' });
-    }
-    subjectId = safeTrim(subjectDoc.subjectId || subjectDoc._id);
+    const subjectDoc = await Subject.findOne(subQ, {
+      _id: 1,
+      subjectId: 1,
+      subjectName: 1
+    }).lean();
+    if (!subjectDoc) return res.status(404).json({ status: false, message: 'Subject not found' });
+    const subjectIdStr = safeTrim(subjectDoc.subjectId || String(subjectDoc._id));
+    const subjectObjectId = mongoose.Types.ObjectId.isValid(String(subjectDoc._id)) ? new mongoose.Types.ObjectId(String(subjectDoc._id)) : null;
     const student = await StudentProfile.findOne({
       tenantId,
       isdeleted: false,
@@ -494,8 +773,13 @@ const getAllClassSubjectTopics = async (req, res, next) => {
     const program = await Program.findOne({ tenantId, programId, isdeleted: false }).lean();
     if (!program) return res.status(404).json({ status: false, message: 'Program not found' });
     const batchId = safeTrim(req.body?.batchId) || safeTrim(student?.batchId);
-    console.log('program ', program);
+    const admissionNo = safeTrim(student.admissionNo || regNo);
+    const studentId = safeTrim(student.studentId || String(student._id));
     const examMappings = (Array.isArray(program.examMappings) ? program.examMappings : [])
+      .filter((m) => {
+        if (!Array.isArray(m?.subjectIds) || !m.subjectIds.length) return true;
+        return m.subjectIds.some((x) => String(x) === subjectIdStr || String(x) === String(subjectDoc._id));
+      })
       .map((m) => ({
         categoryId: safeTrim(m?.categoryId),
         subCategoryId: safeTrim(m?.subCategoryId),
@@ -503,29 +787,39 @@ const getAllClassSubjectTopics = async (req, res, next) => {
       }))
       .filter((m) => m.categoryId && m.subCategoryId)
       .sort((a, b) => Number(a.sortOrder) - Number(b.sortOrder));
-    console.log('examMappings ', examMappings);
     if (!examMappings.length) {
       return res.json({
         status: true,
-        message: 'No exam mappings configured for this program',
+        message: 'No exam mappings configured for this program/subject',
         data: {
-          student: { regNo, classNo, studentName: student?.student?.name || null, batchId: batchId || null },
-          subjectId,
+          student: {
+            regNo,
+            classNo,
+            studentName: student?.student?.name || null,
+            batchId: batchId || null
+          },
+          subjectId: subjectIdStr,
           subjectName: subjectDoc.subjectName || subjectRaw,
-          program: { programId: program.programId, programName: program.programName },
-          subtopicsByTopics: {}
+          program: {
+            programId: program.programId,
+            programName: program.programName
+          },
+          subtopicsByTopics: []
         }
       });
     }
     const categoryIds = Array.from(new Set(examMappings.map((x) => x.categoryId)));
     const subCategoryIds = Array.from(new Set(examMappings.map((x) => x.subCategoryId)));
-    const categories = await ExamCategory.find({ tenantId, categoryId: { $in: categoryIds }, isdeleted: false }).lean();
-    const subCategories = await ExamSubCategory.find({ tenantId, subCategoryId: { $in: subCategoryIds }, isdeleted: false }).lean();
+    const [categories, subCategories] = await Promise.all([ExamCategory.find({ tenantId, categoryId: { $in: categoryIds }, isdeleted: false }).lean(), ExamSubCategory.find({ tenantId, subCategoryId: { $in: subCategoryIds }, isdeleted: false }).lean()]);
     const catNameById = new Map((categories || []).map((c) => [safeTrim(c.categoryId), c.categoryName || c.name || safeTrim(c.categoryId)]));
     const subCatNameById = new Map((subCategories || []).map((s) => [safeTrim(s.subCategoryId), s.subCategoryName || s.name || safeTrim(s.subCategoryId)]));
-    const topics = await Topic.find({ tenantId, classNo, subjectId, isdeleted: false }).sort({ sortOrder: 1 }).lean();
+    const [topics, phases, subtopics] = await Promise.all([
+      Topic.find({ tenantId, classNo, subjectId: subjectIdStr, isdeleted: false }).sort({ sortOrder: 1 }).lean(),
+      Phase.find({ tenantId, classNo, subjectId: subjectIdStr, isdeleted: false }).lean(),
+      SubTopic.find({ tenantId, classNo, subjectId: subjectIdStr, isdeleted: false }).sort({ sortOrder: 1 }).lean()
+    ]);
     const topicIds = topics.map((t) => safeTrim(t.topicId || t._id)).filter(Boolean);
-    const phases = await Phase.find({ tenantId, classNo, subjectId, isdeleted: false }).lean();
+    const subTopicIds = subtopics.map((st) => safeTrim(st.subTopicId || st._id)).filter(Boolean);
     const phaseByTopicId = new Map();
     for (const ph of phases) {
       for (const pt of ph.topics || []) {
@@ -537,14 +831,10 @@ const getAllClassSubjectTopics = async (req, res, next) => {
         });
       }
     }
-    const subtopics = await SubTopic.find({ tenantId, classNo, subjectId, isdeleted: false, topicId: { $in: topicIds } })
-      .sort({ sortOrder: 1 })
-      .lean();
-    const subTopicIds = subtopics.map((st) => safeTrim(st.subTopicId)).filter(Boolean);
     const assignments = await Assignment.find({
       tenantId,
       classNo,
-      subjectId,
+      subjectId: subjectIdStr,
       isdeleted: false,
       status: { $in: ['active', 'ACTIVE'] },
       categoryId: { $in: categoryIds },
@@ -554,24 +844,56 @@ const getAllClassSubjectTopics = async (req, res, next) => {
     })
       .sort({ createdAt: 1 })
       .lean();
+    const assignsByKey = new Map();
+    for (const a of assignments) {
+      const key = `${safeTrim(a.categoryId)}||${safeTrim(a.subCategoryId)}||${safeTrim(a.subTopicId)}`;
+      const arr = assignsByKey.get(key) || [];
+      arr.push({
+        assignmentId: a._id,
+        testId: safeTrim(a.testId || ''),
+        testNo: a.testNo ?? null,
+        testCode: a.testCode || null,
+        numberOfQuestions: a.numberOfQuestions ?? null,
+        status: a.status || null
+      });
+      assignsByKey.set(key, arr);
+    }
     const enabledTestMap = new Map();
     if (batchId) {
-      console.log('batchId ', batchId);
-      const enabledRows = await BatchAssignEnable.find({ tenantId, batchId, subjectId, isdeleted: false, status: 'enabled' }, { testId: 1, testNo: 1, enabledAt: 1, students: { $elemMatch: { admissionNo: safeTrim(student.admissionNo || regNo) } } }).lean();
-      console.log('enabledRows ', enabledRows);
+      const enabledRows = await BatchAssignEnable.find(
+        {
+          tenantId,
+          batchId,
+          subjectId: subjectIdStr,
+          isdeleted: false,
+          status: 'enabled'
+        },
+        {
+          testId: 1,
+          testNo: 1,
+          enabledAt: 1,
+          students: { $elemMatch: { admissionNo } }
+        }
+      ).lean();
       const now = Date.now();
-      const admissionNo = safeTrim(student.admissionNo || regNo);
-      const studentId = safeTrim(student.studentId || student._id);
       const cgpaFromProfile = student?.cgpa === null || student?.cgpa === undefined ? null : toNum(student.cgpa);
-      const ops = [];
+      const backfillOps = [];
       for (const r of enabledRows || []) {
         const tid = safeTrim(r?.testId);
         if (!tid) continue;
         const stuLog = Array.isArray(r?.students) && r.students.length ? r.students[0] : null;
         if (!stuLog) {
-          ops.push({
+          backfillOps.push({
             updateOne: {
-              filter: { tenantId, batchId, subjectId, testId: tid, isdeleted: false, status: 'enabled', students: { $not: { $elemMatch: { admissionNo } } } },
+              filter: {
+                tenantId,
+                batchId,
+                subjectId: subjectIdStr,
+                testId: tid,
+                isdeleted: false,
+                status: 'enabled',
+                students: { $not: { $elemMatch: { admissionNo } } }
+              },
               update: {
                 $push: {
                   students: {
@@ -604,50 +926,36 @@ const getAllClassSubjectTopics = async (req, res, next) => {
           });
         }
       }
-      if (ops.length) {
+      if (backfillOps.length) {
         try {
-          await BatchAssignEnable.bulkWrite(ops, { ordered: false });
-        } catch {}
+          await BatchAssignEnable.bulkWrite(backfillOps, { ordered: false });
+        } catch (e) {
+          console.error('[getAllClassSubjectTopics] backfill bulkWrite failed:', e?.message);
+        }
       }
     }
     const completedTestSet = new Set();
     if (batchId) {
-      const doneRows = await AssignmentResult.find(
-        {
-          tenantId,
-          isdeleted: false,
-          admissionNo: safeTrim(student.admissionNo || regNo),
-          batchId,
-          classNo,
-          subjectId: mongoose.Types.ObjectId.isValid(subjectId) ? new mongoose.Types.ObjectId(subjectId) : subjectId
-        },
-        { testId: 1 }
-      )
+      const resultQuery = {
+        tenantId,
+        isdeleted: false,
+        admissionNo,
+        batchId,
+        classNo,
+        subjectId: subjectObjectId || subjectIdStr
+      };
+      const doneRows = await AssignmentResult.find(resultQuery, { testId: 1 })
         .lean()
-        .catch(() => []);
+        .catch((e) => {
+          console.error('[getAllClassSubjectTopics] AssignmentResult query failed:', e?.message);
+          return [];
+        });
       for (const d of doneRows || []) {
         const tid = safeTrim(d?.testId);
         if (tid) completedTestSet.add(tid);
       }
     }
-    const assignsByKey = new Map();
-    for (const a of assignments) {
-      const catId = safeTrim(a.categoryId);
-      const subCatId = safeTrim(a.subCategoryId);
-      const stId = safeTrim(a.subTopicId);
-      const key = `${catId}||${subCatId}||${stId}`;
-      const arr = assignsByKey.get(key) || [];
-      arr.push({
-        assignmentId: a._id,
-        testId: a.testId || null,
-        testNo: a.testNo ?? null,
-        testCode: a.testCode || null,
-        numberOfQuestions: a.numberOfQuestions ?? null,
-        status: a.status || null
-      });
-      assignsByKey.set(key, arr);
-    }
-    const subtopicsByTopics = {};
+    const subtopicsByTopics = [];
     for (const t of topics) {
       const tId = safeTrim(t.topicId || t._id);
       const topicName = t.topicName || t.name || 'TOPIC';
@@ -655,64 +963,80 @@ const getAllClassSubjectTopics = async (req, res, next) => {
       const assignedPhase = phaseByTopicId.get(tId) || null;
       const sts = subtopics.filter((st) => safeTrim(st.topicId) === tId).sort((a, b) => Number(a?.sortOrder ?? 0) - Number(b?.sortOrder ?? 0));
       if (!sts.length) continue;
-      subtopicsByTopics[topicName] = [];
+      const subtopicList = [];
       for (const st of sts) {
         const stId = safeTrim(st.subTopicId || st._id);
         const stName = st.subTopicName;
         const stSortOrder = st.sortOrder ?? 0;
-        const test = [];
+        const tests = [];
+
         for (const mapRow of examMappings) {
-          const catId = mapRow.categoryId;
-          const subCatId = mapRow.subCategoryId;
+          const { categoryId: catId, subCategoryId: subCatId } = mapRow;
           const examCategory = catNameById.get(catId) || catId;
           const examSubCategory = subCatNameById.get(subCatId) || subCatId;
           const key = `${catId}||${subCatId}||${stId}`;
           const assigns = assignsByKey.get(key) || [];
-          const a0 = assigns[0];
-          const rawTestId = safeTrim(a0?.testId || '');
-          let isEnabled = false;
-          let status = 'NOT_ASSIGNED';
-          let cgpa = null;
-          if (rawTestId && enabledTestMap.has(rawTestId)) {
-            isEnabled = true;
-            if (completedTestSet.has(rawTestId)) {
-              status = 'COMPLETED';
-              const m = enabledTestMap.get(rawTestId);
-              cgpa = m?.studentCgpa ?? null;
-            } else {
-              status = 'ASSIGNED';
-              cgpa = null;
-            }
-          } else {
-            isEnabled = false;
-            status = 'NOT_ASSIGNED';
-            cgpa = null;
+          if (!assigns.length) {
+            tests.push({
+              examCategory,
+              examSubCategory,
+              testNo: null,
+              testId: null,
+              testCode: null,
+              isEnabled: false,
+              status: 'NOT_ASSIGNED',
+              cgpa: null,
+              sortOrder: mapRow.sortOrder
+            });
+            continue;
           }
-          test.push({
-            examCategory,
-            examSubCategory,
-            testNo: isEnabled ? a0?.testNo || null : null,
-            testId: isEnabled ? a0?.testId || null : null,
-            isEnabled,
-            status,
-            cgpa,
-            sortOrder: mapRow.sortOrder
-          });
+          for (const a of assigns) {
+            const rawTestId = safeTrim(a.testId || '');
+            let isEnabled = false;
+            let status = 'NOT_ASSIGNED';
+            let cgpa = null;
+            if (rawTestId && enabledTestMap.has(rawTestId)) {
+              isEnabled = true;
+              if (completedTestSet.has(rawTestId)) {
+                status = 'COMPLETED';
+                cgpa = enabledTestMap.get(rawTestId)?.studentCgpa ?? null;
+              } else {
+                status = 'ASSIGNED';
+                cgpa = null;
+              }
+            }
+            tests.push({
+              examCategory,
+              examSubCategory,
+              testNo: isEnabled ? a.testNo : null,
+              testId: isEnabled ? a.testId : null,
+              testCode: isEnabled ? a.testCode : null,
+              numberOfQuestions: a.numberOfQuestions ?? null,
+              isEnabled,
+              status,
+              cgpa,
+              sortOrder: mapRow.sortOrder
+            });
+          }
         }
-        test.sort((a, b) => Number(a.sortOrder ?? 0) - Number(b.sortOrder ?? 0));
-        subtopicsByTopics[topicName].push({
-          topicId: tId,
-          topicName,
-          topicSortOrder,
+        tests.sort((a, b) => Number(a.sortOrder ?? 0) - Number(b.sortOrder ?? 0));
+        subtopicList.push({
           subtopicId: stId,
           subtopicName: stName,
           subtopicSortOrder: stSortOrder,
-          phases: assignedPhase ? assignedPhase.phaseName : null,
-          test
+          tests
         });
       }
-      subtopicsByTopics[topicName].sort((a, b) => Number(a.subtopicSortOrder) - Number(b.subtopicSortOrder));
+      subtopicList.sort((a, b) => Number(a.subtopicSortOrder) - Number(b.subtopicSortOrder));
+      subtopicsByTopics.push({
+        topicId: tId,
+        topicName,
+        topicSortOrder,
+        phase: assignedPhase ? assignedPhase.phaseName : null,
+        subtopics: subtopicList
+      });
     }
+    subtopicsByTopics.sort((a, b) => Number(a.topicSortOrder) - Number(b.topicSortOrder));
     return res.json({
       status: true,
       message: 'Class-subject topics loaded',
@@ -723,7 +1047,7 @@ const getAllClassSubjectTopics = async (req, res, next) => {
           studentName: student?.student?.name || null,
           batchId: batchId || null
         },
-        subjectId,
+        subjectId: subjectIdStr,
         subjectName: subjectDoc.subjectName || subjectRaw,
         program: {
           programId: program.programId,
@@ -815,60 +1139,6 @@ const getStudentTopicsTests = async (req, res, next) => {
   }
 };
 
-// const getStudentTimetable = async (req, res, next) => {
-//   try {
-//     const tenantId = pickTenantId(req);
-//     const identifier = safeTrim(req.body?.studentNo || req.body?.studentId);
-//     // const targetDateMs = req.body?.date ? Number(req.body.date) : Date.now();
-//     let targetDateMs = Date.now();
-//     if (req.body?.date !== undefined && req.body?.date !== null) {
-//       const parsed = Number(req.body.date);
-//       targetDateMs = Number.isFinite(parsed) ? parsed : Date.now();
-//     }
-//     if (!tenantId || !identifier) {
-//       return res.status(400).json({ status: false, message: 'tenantId and studentNo are required' });
-//     }
-//     const student = await StudentProfile.findOne({
-//       tenantId,
-//       status: 'ACTIVE',
-//       isdeleted: false,
-//       $or: [{ studentId: identifier }, { admissionNo: identifier }, { registrationNumber: identifier }]
-//     }).lean();
-//     if (!student) {
-//       return res.status(404).json({ status: false, message: 'Student profile not found' });
-//     }
-//     // const d = new Date(targetDateMs);
-//     // const diff = d.getDay() === 0 ? -6 : 1 - d.getDay();
-//     // const mondayMs = new Date(d.setDate(d.getDate() + diff)).setHours(0, 0, 0, 0);
-//     const d = new Date(targetDateMs);
-//     const utcDay = d.getUTCDay(); // 0=Sun
-//     const diffDays = utcDay === 0 ? -6 : 1 - utcDay;
-//     const mondayMs = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + diffDays);
-//     console.log('student.batchCode ', student.batchCode);
-//     const timetableDoc = await TimeTable.findOne({
-//       tenantId,
-//       batchCode: student.batchCode,
-//       wkStartOn: mondayMs,
-//       isdeleted: false
-//     }).lean();
-//     // const todaysPeriods = getEffectivePeriods(timetableDoc, targetDateMs);
-//     const targetUTCMidnight = Date.UTC(new Date(targetDateMs).getUTCFullYear(), new Date(targetDateMs).getUTCMonth(), new Date(targetDateMs).getUTCDate());
-//     const todaysPeriods = getEffectivePeriods(timetableDoc, targetUTCMidnight);
-//     return res.status(200).json({
-//       status: true,
-//       message: 'Timetable retrieved successfully',
-//       data: {
-//         date: targetDateMs,
-//         batchCode: student.batchCode,
-//         wkStartOn: mondayMs,
-//         periods: todaysPeriods
-//       }
-//     });
-//   } catch (err) {
-//     return next(err);
-//   }
-// };
-
 const getStudentTimetable = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
@@ -934,71 +1204,6 @@ const getStudentTimetable = async (req, res, next) => {
     return next(err);
   }
 };
-
-// const getStudentAttendance = async (req, res, next) => {
-//   try {
-//     const tenantId = pickTenantId(req);
-//     const identifier = safeTrim(req.body?.studentNo || req.body?.studentId);
-//     const targetDate = req.body?.date ? Number(req.body.date) : new Date().setHours(0, 0, 0, 0);
-//     if (!tenantId || !identifier || !req.body?.date) {
-//       return res.status(400).json({ status: false, message: 'tenantId, studentNo, and date are required' });
-//     }
-//     const student = await StudentProfile.findOne({
-//       tenantId,
-//       status: 'ACTIVE',
-//       isdeleted: false,
-//       $or: [{ studentId: identifier }, { admissionNo: identifier }, { registrationNumber: identifier }]
-//     }).lean();
-//     if (!student) return res.status(404).json({ status: false, message: 'Student profile not found' });
-//     const attendanceRecords = await Attendance.find({
-//       tenantId,
-//       batchCode: student.batchCode,
-//       date: targetDate,
-//       isdeleted: false
-//     })
-//       .populate({
-//         path: 'facultyId',
-//         localField: 'facultyId',
-//         foreignField: 'staffId',
-//         model: 'staff',
-//         justOne: true,
-//         select: 'staffName staffCode facultyType _id'
-//       })
-//       .populate({
-//         path: 'updatedBy',
-//         localField: 'updatedBy',
-//         foreignField: 'userId',
-//         model: 'user',
-//         justOne: true,
-//         select: 'name userId  _id'
-//       })
-//       .lean();
-//     const studentAttendance = attendanceRecords
-//       .map((record) => {
-//         const studentData = record.students.find((s) => s.studentId === student.studentId);
-//         return {
-//           facultyId: record.facultyId,
-//           updatedBy: record.updatedBy,
-//           periodNo: record.periodNo,
-//           topicTaught: record.topicTaught || null,
-//           status: studentData ? studentData.status : 'NOT_MARKED',
-//           remarks: studentData ? studentData.remarks : null
-//         };
-//       })
-//       .sort((a, b) => a.periodNo - b.periodNo);
-//     return res.status(200).json({
-//       status: true,
-//       message: 'Attendance retrieved successfully',
-//       data: {
-//         date: targetDate,
-//         studentId: student.studentId,
-//         attendance: studentAttendance
-//       }
-//     });
-//   } catch (err) {
-//     return next(err);
-//   }
-// };
 
 const getStudentAttendance = async (req, res, next) => {
   try {
