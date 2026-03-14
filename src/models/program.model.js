@@ -21,6 +21,7 @@ const programSchema = new mongoose.Schema(
         {
           categoryId: { type: String, required: true, trim: true },
           subCategoryId: { type: String, required: true, trim: true },
+          subjectIds: { type: [mongoose.Schema.Types.ObjectId], ref: 'subject', default: [] },
           sortOrder: { type: Number, required: false, default: 0 }
         }
       ],
