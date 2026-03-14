@@ -16,6 +16,7 @@ routes.post('/task/mark-in-progress', validatetoken, taskCtrl.markTaskInProgress
 
 routes.post('/list', validatetoken, staffCtrl.listTeachingStaff);
 routes.post('/view', validatetoken, staffCtrl.viewTeachingStaff);
+routes.post('/getstaffmaps', validatetoken, staffCtrl.getTeacherBatches);
 
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Teacher routes' }));
 
