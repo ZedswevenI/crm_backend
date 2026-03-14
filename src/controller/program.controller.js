@@ -342,42 +342,162 @@ const importPrograms = async (req, res, next) => {
   }
 };
 
+// const updateProgramExamMappings = async (req, res, next) => {
+//   try {
+//     const tenantId = pickTenantId(req);
+//     const recId = safeTrim(req.body?.recId);
+//     const userId = safeTrim(req.body?.userId || req.user?.userId);
+//     const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+//     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+//     if (!recId) return res.status(400).json({ status: false, message: 'recId is required' });
+//     if (!rows.length) return res.status(400).json({ status: false, message: 'rows is required (non-empty array)' });
+//     const prog = await Program.findOne({ _id: recId, tenantId, isdeleted: false }, { _id: 1 }).lean();
+//     if (!prog) return res.status(404).json({ status: false, message: 'Program not found' });
+//     const map = new Map();
+//     for (const r of rows) {
+//       const categoryId = safeTrim(r?.categoryId);
+//       const subCategoryId = safeTrim(r?.subCategoryId);
+//       if (!categoryId || !subCategoryId) continue;
+//       const key = `${categoryId}__${subCategoryId}`;
+//       if (!map.has(key)) {
+//         const so = toNum(r?.sortOrder);
+//         map.set(key, {
+//           categoryId,
+//           subCategoryId,
+//           sortOrder: Number.isFinite(so) ? so : 0
+//         });
+//       }
+//     }
+//     let cleanRows = Array.from(map.values());
+//     if (!cleanRows.length) {
+//       return res.status(400).json({ status: false, message: 'No valid rows (categoryId/subCategoryId missing)' });
+//     }
+//     const categoryIds = Array.from(new Set(cleanRows.map((x) => x.categoryId)));
+//     const subCategoryIds = Array.from(new Set(cleanRows.map((x) => x.subCategoryId)));
+//     const cats = await ExamCategory.find({ tenantId, categoryId: { $in: categoryIds }, isdeleted: false }, { _id: 0, categoryId: 1 }).lean();
+//     const catSet = new Set((cats || []).map((x) => String(x.categoryId)));
+//     const subs = await ExamSubCategory.find({ tenantId, subCategoryId: { $in: subCategoryIds }, isdeleted: false }, { _id: 0, subCategoryId: 1, categoryId: 1 }).lean();
+//     const subMap = new Map((subs || []).map((x) => [String(x.subCategoryId), String(x.categoryId)]));
+//     const bad = [];
+//     for (const r of cleanRows) {
+//       if (!catSet.has(r.categoryId)) bad.push({ row: r, reason: 'Invalid categoryId' });
+//       const belongsCat = subMap.get(r.subCategoryId);
+//       if (!belongsCat) bad.push({ row: r, reason: 'Invalid subCategoryId' });
+//       else if (belongsCat !== r.categoryId) bad.push({ row: r, reason: 'Sub-category does not belong to category' });
+//     }
+//     if (bad.length) {
+//       return res.status(400).json({
+//         status: false,
+//         message: 'Invalid exam mapping rows',
+//         data: bad.slice(0, 20)
+//       });
+//     }
+//     cleanRows.sort((a, b) => {
+//       const as = Number.isFinite(a.sortOrder) && a.sortOrder > 0 ? a.sortOrder : Number.MAX_SAFE_INTEGER;
+//       const bs = Number.isFinite(b.sortOrder) && b.sortOrder > 0 ? b.sortOrder : Number.MAX_SAFE_INTEGER;
+//       if (as !== bs) return as - bs;
+//       const ak = `${a.categoryId}__${a.subCategoryId}`;
+//       const bk = `${b.categoryId}__${b.subCategoryId}`;
+//       return ak.localeCompare(bk);
+//     });
+//     cleanRows = cleanRows.map((r, idx) => ({ ...r, sortOrder: idx + 1 }));
+//     const updated = await Program.findOneAndUpdate({ _id: recId, tenantId, isdeleted: false }, { $set: { examMappings: cleanRows, updatedBy: userId || null } }, { new: true, runValidators: true }).lean();
+//     return res.status(200).json({
+//       status: true,
+//       message: 'Program exam mappings updated',
+//       data: {
+//         recId,
+//         count: updated?.examMappings?.length || 0,
+//         examMappings: updated?.examMappings || []
+//       }
+//     });
+//   } catch (err) {
+//     return next(err);
+//   }
+// };
+
 const updateProgramExamMappings = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     const recId = safeTrim(req.body?.recId);
     const userId = safeTrim(req.body?.userId || req.user?.userId);
     const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
     if (!recId) return res.status(400).json({ status: false, message: 'recId is required' });
     if (!rows.length) return res.status(400).json({ status: false, message: 'rows is required (non-empty array)' });
-    const prog = await Program.findOne({ _id: recId, tenantId, isdeleted: false }, { _id: 1 }).lean();
+
+    const prog = await Program.findOne({ _id: recId, tenantId, isdeleted: false }, { _id: 1, subjects: 1 }).lean();
     if (!prog) return res.status(404).json({ status: false, message: 'Program not found' });
+
+    // Valid subjects on this program as strings for easy comparison
+    const validSubjectIds = new Set((prog.subjects || []).map((s) => String(s)));
+
+    // Build dedup map — key is categoryId__subCategoryId, subjectIds are merged (union)
     const map = new Map();
     for (const r of rows) {
       const categoryId = safeTrim(r?.categoryId);
       const subCategoryId = safeTrim(r?.subCategoryId);
+
       if (!categoryId || !subCategoryId) continue;
+
+      // Normalize subjectIds — accept array or single value
+      const rawSubjectIds = Array.isArray(r?.subjectIds) ? r.subjectIds : r?.subjectIds ? [r.subjectIds] : [];
+
+      const subjectIds = rawSubjectIds.map((x) => safeTrim(String(x))).filter((x) => x && isValidObjectId(x));
+
       const key = `${categoryId}__${subCategoryId}`;
       if (!map.has(key)) {
-        const so = toNum(r?.sortOrder);
         map.set(key, {
           categoryId,
           subCategoryId,
-          sortOrder: Number.isFinite(so) ? so : 0
+          subjectIds: [],
+          sortOrder: Number.isFinite(Number(r?.sortOrder)) ? Number(r.sortOrder) : 0
         });
       }
+
+      // Merge subjectIds — union across duplicate rows
+      const entry = map.get(key);
+      const existing = new Set(entry.subjectIds.map((x) => String(x)));
+      for (const sid of subjectIds) {
+        if (!existing.has(sid)) {
+          entry.subjectIds.push(new mongoose.Types.ObjectId(sid));
+          existing.add(sid);
+        }
+      }
     }
+
     let cleanRows = Array.from(map.values());
     if (!cleanRows.length) {
-      return res.status(400).json({ status: false, message: 'No valid rows (categoryId/subCategoryId missing)' });
+      return res.status(400).json({
+        status: false,
+        message: 'No valid rows (categoryId / subCategoryId missing)'
+      });
     }
+
+    // Validate all subjectIds in every row belong to this program
+    const allSubjectIds = cleanRows.flatMap((r) => r.subjectIds.map((s) => String(s)));
+    const badSubjects = allSubjectIds.filter((sid) => !validSubjectIds.has(sid));
+    if (badSubjects.length) {
+      return res.status(400).json({
+        status: false,
+        message: 'Some subjectIds are not mapped to this program',
+        data: [...new Set(badSubjects)]
+      });
+    }
+
+    // Validate categoryId and subCategoryId exist in master data
     const categoryIds = Array.from(new Set(cleanRows.map((x) => x.categoryId)));
     const subCategoryIds = Array.from(new Set(cleanRows.map((x) => x.subCategoryId)));
-    const cats = await ExamCategory.find({ tenantId, categoryId: { $in: categoryIds }, isdeleted: false }, { _id: 0, categoryId: 1 }).lean();
+
+    const [cats, subs] = await Promise.all([
+      ExamCategory.find({ tenantId, categoryId: { $in: categoryIds }, isdeleted: false }, { _id: 0, categoryId: 1 }).lean(),
+      ExamSubCategory.find({ tenantId, subCategoryId: { $in: subCategoryIds }, isdeleted: false }, { _id: 0, subCategoryId: 1, categoryId: 1 }).lean()
+    ]);
+
     const catSet = new Set((cats || []).map((x) => String(x.categoryId)));
-    const subs = await ExamSubCategory.find({ tenantId, subCategoryId: { $in: subCategoryIds }, isdeleted: false }, { _id: 0, subCategoryId: 1, categoryId: 1 }).lean();
     const subMap = new Map((subs || []).map((x) => [String(x.subCategoryId), String(x.categoryId)]));
+
     const bad = [];
     for (const r of cleanRows) {
       if (!catSet.has(r.categoryId)) bad.push({ row: r, reason: 'Invalid categoryId' });
@@ -392,16 +512,18 @@ const updateProgramExamMappings = async (req, res, next) => {
         data: bad.slice(0, 20)
       });
     }
+
+    // Sort and re-index sortOrder
     cleanRows.sort((a, b) => {
-      const as = Number.isFinite(a.sortOrder) && a.sortOrder > 0 ? a.sortOrder : Number.MAX_SAFE_INTEGER;
-      const bs = Number.isFinite(b.sortOrder) && b.sortOrder > 0 ? b.sortOrder : Number.MAX_SAFE_INTEGER;
+      const as = a.sortOrder > 0 ? a.sortOrder : Number.MAX_SAFE_INTEGER;
+      const bs = b.sortOrder > 0 ? b.sortOrder : Number.MAX_SAFE_INTEGER;
       if (as !== bs) return as - bs;
-      const ak = `${a.categoryId}__${a.subCategoryId}`;
-      const bk = `${b.categoryId}__${b.subCategoryId}`;
-      return ak.localeCompare(bk);
+      return `${a.categoryId}__${a.subCategoryId}`.localeCompare(`${b.categoryId}__${b.subCategoryId}`);
     });
     cleanRows = cleanRows.map((r, idx) => ({ ...r, sortOrder: idx + 1 }));
+
     const updated = await Program.findOneAndUpdate({ _id: recId, tenantId, isdeleted: false }, { $set: { examMappings: cleanRows, updatedBy: userId || null } }, { new: true, runValidators: true }).lean();
+
     return res.status(200).json({
       status: true,
       message: 'Program exam mappings updated',
@@ -409,6 +531,66 @@ const updateProgramExamMappings = async (req, res, next) => {
         recId,
         count: updated?.examMappings?.length || 0,
         examMappings: updated?.examMappings || []
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const removeSubjectsFromProgram = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const recId = safeTrim(req.body?.recId);
+    const userId = safeTrim(req.body?.userId || req.user?.userId);
+    const subjects = normalizeSubjects(req.body?.subjects);
+
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    if (!recId) return res.status(400).json({ status: false, message: 'recId is required' });
+    if (!subjects.length) return res.status(400).json({ status: false, message: 'subjects must be a non-empty array' });
+
+    const badSub = subjects.find((x) => !isValidObjectId(x));
+    if (badSub) return res.status(400).json({ status: false, message: `Invalid subject id: ${badSub}` });
+
+    const prog = await Program.findOne({ _id: recId, tenantId, isdeleted: false }, { _id: 1 }).lean();
+    if (!prog) return res.status(404).json({ status: false, message: 'Program not found' });
+
+    const subjectObjectIds = subjects.map((x) => new mongoose.Types.ObjectId(x));
+
+    // Step 1: remove subjects from subjects[] array
+    //         AND pull removed subjectIds out of each examMapping row's subjectIds array
+    await Program.updateOne(
+      { _id: recId, tenantId, isdeleted: false },
+      {
+        $pull: {
+          subjects: { $in: subjectObjectIds },
+          'examMappings.$[].subjectIds': { $in: subjectObjectIds }
+        },
+        $set: { updatedBy: userId || null }
+      }
+    );
+
+    // Step 2: remove examMapping rows that now have an empty subjectIds array
+    const updated = await Program.findOneAndUpdate(
+      { _id: recId, tenantId, isdeleted: false },
+      {
+        $pull: {
+          examMappings: { subjectIds: { $size: 0 } }
+        }
+      },
+      { new: true }
+    ).lean();
+
+    if (!updated) return res.status(404).json({ status: false, message: 'Program not found' });
+
+    return res.status(200).json({
+      status: true,
+      message: 'Subjects removed from program',
+      data: {
+        recId,
+        subjectsRemoved: subjects.length,
+        remainingSubjects: updated.subjects?.length || 0,
+        remainingExamMappings: updated.examMappings?.length || 0
       }
     });
   } catch (err) {
@@ -661,13 +843,6 @@ const listPTMs = async (req, res, next) => {
           foreignField: 'studentId',
           select: 'admissionNo student.name student.phone parentName parentPhone'
         })
-        .populate({
-          path: 'studentId',
-          model: 'studentprofile',
-          localField: 'studentId',
-          foreignField: 'studentId',
-          select: 'admissionNo student.name student.phone parentName parentPhone'
-        })
         .lean(),
       PTM.countDocuments(query)
     ]);
@@ -877,6 +1052,7 @@ export default {
   importPrograms,
   addProgramSubjects,
   updateProgramExamMappings,
+  removeSubjectsFromProgram,
   schedulePTM,
   bulkImportSchedule,
   submitPrePTMFeedback,

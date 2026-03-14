@@ -51,6 +51,7 @@ routes.post('/program/edit', validatetoken, programCtrl.updateProgram);
 routes.post('/program/delete', validatetoken, programCtrl.deleteProgram);
 routes.post('/program/view', validatetoken, programCtrl.viewProgram);
 routes.post('/program/addsubjects', validatetoken, programCtrl.addProgramSubjects);
+routes.post('/program/removesubjects', validatetoken, programCtrl.removeSubjectsFromProgram);
 routes.post('/program/import', validatetoken, programCtrl.importPrograms);
 routes.post('/program/updateExamMappings', validatetoken, programCtrl.updateProgramExamMappings);
 
