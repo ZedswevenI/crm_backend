@@ -56,7 +56,7 @@ const listTeachingStaff = async (req, res, next) => {
 const viewTeachingStaff = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
-    const staffId = safeTrim(req.body?.staffId || req.query?.staffId);
+    const staffId = safeTrim(req.body?.staffId || req.query?.staffId || req.body?.facultyId);
 
     if (!tenantId || !staffId) {
       return res.status(400).json({ status: false, message: 'tenantId and staffId are required' });
@@ -141,7 +141,140 @@ const viewTeachingStaff = async (req, res, next) => {
   }
 };
 
+const getTeacherBatches = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    const staffId = safeTrim(req.body?.staffId || req.body?.facultyId);
+    if (!staffId) return res.status(400).json({ status: false, message: 'staffId is required' });
+    // ── Fetch staff ───────────────────────────────────────────────────────────
+    const staffDoc = await Staff.findOne({ tenantId, staffId, isdeleted: false }, { staffId: 1, staffName: 1, staffCode: 1, subject: 1, facultyType: 1 }).lean();
+    if (!staffDoc) return res.status(404).json({ status: false, message: 'Staff not found' });
+    // ── Find ACTIVE batches where this staff is in staffMap ───────────────────
+    const batches = await Batch.find(
+      {
+        tenantId,
+        isdeleted: false,
+        status: 'ACTIVE',
+        staffMap: { $elemMatch: { staffId } }
+      },
+      {
+        batchId: 1,
+        batchCode: 1,
+        batchName: 1,
+        classNo: 1,
+        yearNo: 1,
+        academicYear: 1,
+        programId: 1,
+        programName: 1,
+        centerId: 1,
+        centerName: 1,
+        studentCount: 1,
+        startDate: 1,
+        endDate: 1,
+        status: 1,
+        staffMap: 1
+      }
+    )
+      .sort({ classNo: 1, batchName: 1 })
+      .lean();
+
+    // ── Early return ──────────────────────────────────────────────────────────
+    if (!batches.length) {
+      return res.json({
+        status: true,
+        message: 'No active batches assigned to this teacher',
+        data: {
+          staffId,
+          staffName: staffDoc.staffName || null,
+          staffCode: staffDoc.staffCode || null,
+          batches: [],
+          subjects: [],
+          classes: []
+        }
+      });
+    }
+
+    // ── Build batches array ───────────────────────────────────────────────────
+    // Each entry is one batch — includes the subjects this teacher
+    // handles in that specific batch (from staffMap rows matching staffId)
+    const batchList = batches.map((b) => {
+      const myStaffMapRows = (Array.isArray(b.staffMap) ? b.staffMap : []).filter((row) => safeTrim(row?.staffId) === staffId);
+
+      const batchSubjects = myStaffMapRows
+        .map((row) => ({
+          subjectId: safeTrim(row?.subjectId || ''),
+          subjectName: safeTrim(row?.subjectName || '')
+        }))
+        .filter((s) => s.subjectId);
+
+      return {
+        batchId: b.batchId,
+        batchCode: b.batchCode,
+        batchName: b.batchName,
+        classNo: b.classNo ?? null,
+        yearNo: b.yearNo ?? null,
+        academicYear: b.academicYear || null,
+        programId: b.programId || null,
+        programName: b.programName || null,
+        centerId: b.centerId || null,
+        centerName: b.centerName || null,
+        studentCount: b.studentCount ?? 0,
+        startDate: b.startDate ?? null,
+        endDate: b.endDate ?? null,
+        status: b.status || null,
+        subjects: batchSubjects // subjects teacher handles in THIS batch
+      };
+    });
+
+    // ── Build subjects array — unique across all batches ──────────────────────
+    const subjectMap = new Map();
+    for (const b of batches) {
+      const myRows = (Array.isArray(b.staffMap) ? b.staffMap : []).filter((row) => safeTrim(row?.staffId) === staffId);
+      for (const row of myRows) {
+        const sid = safeTrim(row?.subjectId || '');
+        if (sid && !subjectMap.has(sid)) {
+          subjectMap.set(sid, {
+            subjectId: sid,
+            subjectName: safeTrim(row?.subjectName || '')
+          });
+        }
+      }
+    }
+    const subjects = Array.from(subjectMap.values()).sort((a, b) => a.subjectName.localeCompare(b.subjectName));
+
+    // ── Build classes array — unique classNo across all batches ───────────────
+    const classMap = new Map();
+    for (const b of batches) {
+      const cn = b.classNo ?? null;
+      if (cn !== null && !classMap.has(cn)) {
+        classMap.set(cn, {
+          classNo: cn,
+          academicYear: b.academicYear || null // AY for this class level
+        });
+      }
+    }
+    const classes = Array.from(classMap.values()).sort((a, b) => Number(a.classNo) - Number(b.classNo));
+
+    return res.json({
+      status: true,
+      message: 'Teacher batches loaded',
+      data: {
+        staffId,
+        staffName: staffDoc.staffName || null,
+        staffCode: staffDoc.staffCode || null,
+        batches: batchList,
+        subjects,
+        classes
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   listTeachingStaff,
-  viewTeachingStaff
+  viewTeachingStaff,
+  getTeacherBatches
 };
