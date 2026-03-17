@@ -1184,8 +1184,6 @@ const viewBatchScheduleByDate = async (req, res, next) => {
   }
 };
 
-// POST /timetable/validate
-// FIX G7: conflict objects now include facultyName.
 // const validateSchedule = async (req, res, next) => {
 //   try {
 //     const tenantId = pickTenantId(req);
@@ -1204,18 +1202,34 @@ const viewBatchScheduleByDate = async (req, res, next) => {
 //         continue;
 //       }
 //       const correctedMonday = getPreviousMonday(wkStart);
-
+//       const publishedTT = await TimeTable.findOne({
+//         tenantId,
+//         batchCode,
+//         isdeleted: false,
+//         status: 'Active'
+//       })
+//         .sort({ wkStartOn: -1 })
+//         .lean();
+//       if (publishedTT) {
+//         conflicts.push({
+//           batchCode,
+//           message: `Timetable already published for batch ${batchCode}. Use day/edit to modify individual days.`,
+//           publishedAt: publishedTT.publishedAt || null,
+//           publishedTimetableId: publishedTT._id
+//         });
+//         continue;
+//       }
 //       for (const d of item.week || []) {
 //         const day = normDay(d?.day);
 //         if (!isValidDay(day)) continue;
 //         const exactDate = getOffsetDate(correctedMonday, day);
+
 //         for (const p of d?.periods || []) {
 //           const facultyId = safeTrim(p?.facultyId);
 //           const startMin = toInt(p?.time?.startMin, -1);
 //           const endMin = toInt(p?.time?.endMin, -1);
 //           if (!facultyId || startMin < 0 || endMin < 0) continue;
 
-//           // FIX G7: checkStaffConflicts now returns facultyName in its result
 //           const dbCheck = await checkStaffConflicts(tenantId, facultyId, exactDate, day, startMin, endMin, timetableId, false);
 //           if (dbCheck.conflict) {
 //             conflicts.push({
@@ -1223,7 +1237,7 @@ const viewBatchScheduleByDate = async (req, res, next) => {
 //               day,
 //               periodNo: p.periodNo,
 //               facultyId,
-//               facultyName: dbCheck.facultyName || safeTrim(p?.facultyName) || null, // FIX G7
+//               facultyName: dbCheck.facultyName || safeTrim(p?.facultyName) || null,
 //               message: dbCheck.message
 //             });
 //           } else {
@@ -1251,116 +1265,6 @@ const viewBatchScheduleByDate = async (req, res, next) => {
 //     return next(err);
 //   }
 // };
-
-const validateSchedule = async (req, res, next) => {
-  try {
-    const tenantId = pickTenantId(req);
-    const data = Array.isArray(req.body?.data) ? req.body.data : [];
-    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-    if (!data.length) return res.status(400).json({ status: false, message: 'No schedule data provided' });
-
-    const conflicts = [];
-    const proposed = [];
-
-    for (let i = 0; i < data.length; i++) {
-      const item = data[i];
-      const batchCode = safeTrim(item.batchCode) || `Row ${i + 1}`;
-      const wkStart = toInt(item.wkStartOn, 0);
-      const timetableId = safeTrim(item.timetableId) || null;
-
-      if (!wkStart) {
-        conflicts.push({ batchCode, message: 'wkStartOn is required' });
-        continue;
-      }
-
-      const correctedMonday = getPreviousMonday(wkStart);
-      const publishedTT = await TimeTable.findOne({
-        tenantId,
-        batchCode,
-        isdeleted: false,
-        status: 'Active'
-      })
-        .sort({ wkStartOn: -1 })
-        .lean();
-
-      if (publishedTT) {
-        conflicts.push({
-          batchCode,
-          message: `Timetable already published for batch ${batchCode}. Use day/edit to modify individual days.`,
-          publishedAt: publishedTT.publishedAt || null,
-          publishedTimetableId: publishedTT._id
-        });
-        continue; // no point checking conflicts — this batch is blocked
-      }
-
-      // Also check if a DRAFT already exists for this exact week (different timetableId)
-      // if (batchCode) {
-      //   const existingDraft = await TimeTable.findOne({
-      //     tenantId,
-      //     batchCode,
-      //     isdeleted: false,
-      //     status: { $ne: 'Active' },
-      //     wkStartOn: correctedMonday,
-      //     ...(timetableId ? { _id: { $ne: timetableId } } : {})
-      //   }).lean();
-
-      //   if (existingDraft) {
-      //     conflicts.push({
-      //       batchCode,
-      //       message: `A draft timetable already exists for batch ${batchCode} for this week.`,
-      //       draftTimetableId: existingDraft._id
-      //     });
-      //     continue;
-      //   }
-      // }
-
-      // Existing conflict checks — staff availability per period
-      for (const d of item.week || []) {
-        const day = normDay(d?.day);
-        if (!isValidDay(day)) continue;
-        const exactDate = getOffsetDate(correctedMonday, day);
-
-        for (const p of d?.periods || []) {
-          const facultyId = safeTrim(p?.facultyId);
-          const startMin = toInt(p?.time?.startMin, -1);
-          const endMin = toInt(p?.time?.endMin, -1);
-          if (!facultyId || startMin < 0 || endMin < 0) continue;
-
-          const dbCheck = await checkStaffConflicts(tenantId, facultyId, exactDate, day, startMin, endMin, timetableId, false);
-          if (dbCheck.conflict) {
-            conflicts.push({
-              batchCode,
-              day,
-              periodNo: p.periodNo,
-              facultyId,
-              facultyName: dbCheck.facultyName || safeTrim(p?.facultyName) || null,
-              message: dbCheck.message
-            });
-          } else {
-            const internal = proposed.find((pa) => pa.facultyId === facultyId && pa.exactDate === exactDate && startMin < pa.endMin && endMin > pa.startMin);
-            if (internal) {
-              conflicts.push({
-                batchCode,
-                day,
-                periodNo: p.periodNo,
-                facultyId,
-                facultyName: safeTrim(p?.facultyName) || null,
-                message: `Internal conflict with batch ${internal.batchCode}`
-              });
-            } else {
-              proposed.push({ facultyId, exactDate, startMin, endMin, batchCode, facultyName: safeTrim(p?.facultyName) || null });
-            }
-          }
-        }
-      }
-    }
-
-    if (conflicts.length) return res.status(400).json({ status: false, message: 'Conflicts detected', conflicts });
-    return res.status(200).json({ status: true, message: 'All schedules valid' });
-  } catch (err) {
-    return next(err);
-  }
-};
 
 // POST /timetable/late-entry/log
 const logLateEntry = async (req, res, next) => {
@@ -1469,6 +1373,158 @@ const bulkUpdateZoomLinks = async (req, res, next) => {
     }
 
     return res.json({ status: true, message: 'Bulk zoom links updated', data: { updatedCount: ops.length } });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const validateSchedule = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const data = Array.isArray(req.body?.data) ? req.body.data : [];
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+    if (!data.length) return res.status(400).json({ status: false, message: 'No schedule data provided' });
+
+    const conflicts = [];
+    const proposed = [];
+
+    for (let i = 0; i < data.length; i++) {
+      const item = data[i];
+      const batchCode = safeTrim(item.batchCode) || `Row ${i + 1}`;
+      const wkStart = toInt(item.wkStartOn, 0);
+      const timetableId = safeTrim(item.timetableId) || null;
+
+      // ── FIX 1: wkStartOn is required ──────────────────────────────────────
+      if (!wkStart) {
+        conflicts.push({ batchCode, message: 'wkStartOn is required' });
+        continue;
+      }
+
+      const correctedMonday = getPreviousMonday(wkStart);
+
+      // ── FIX 2 (BUG FIX): Scope published check to THIS week only ──────────
+      // Previously: findOne without wkStartOn → any Active week blocked this upload
+      // Now: only block if THIS exact week is already Active
+      const publishedTT = await TimeTable.findOne({
+        tenantId,
+        batchCode,
+        wkStartOn: correctedMonday, // ← KEY FIX: scoped to exact week
+        isdeleted: false,
+        status: 'Active'
+      }).lean();
+
+      if (publishedTT) {
+        conflicts.push({
+          batchCode,
+          week: correctedMonday,
+          message: `Timetable already published for batch ${batchCode} for this week. Use day/edit to modify individual days.`,
+          publishedAt: publishedTT.publishedAt || null,
+          publishedTimetableId: publishedTT._id
+        });
+        continue;
+      }
+
+      // ── FIX 3: Validate period time ranges ────────────────────────────────
+      // Previously: startMin/endMin were never validated here
+      let periodTimeError = false;
+      for (const d of item.week || []) {
+        const day = normDay(d?.day);
+        if (!isValidDay(day)) {
+          conflicts.push({ batchCode, day: d?.day, message: `Invalid day: ${d?.day}` });
+          periodTimeError = true;
+          break;
+        }
+        for (const p of d?.periods || []) {
+          const startMin = toInt(p?.time?.startMin, -1);
+          const endMin = toInt(p?.time?.endMin, -1);
+          if (startMin < 0 || startMin > 1439) {
+            conflicts.push({ batchCode, day, periodNo: p.periodNo, message: `Period ${p.periodNo} on ${day}: invalid startMin (${startMin})` });
+            periodTimeError = true;
+          } else if (endMin < 0 || endMin > 1439) {
+            conflicts.push({ batchCode, day, periodNo: p.periodNo, message: `Period ${p.periodNo} on ${day}: invalid endMin (${endMin})` });
+            periodTimeError = true;
+          } else if (endMin <= startMin) {
+            conflicts.push({ batchCode, day, periodNo: p.periodNo, message: `Period ${p.periodNo} on ${day}: endMin must be greater than startMin` });
+            periodTimeError = true;
+          }
+        }
+        if (periodTimeError) break;
+      }
+      if (periodTimeError) continue;
+
+      // ── FIX 4: Validate duplicate periodNo within same day ────────────────
+      // Previously: not checked at all
+      let hasDuplicate = false;
+      for (const d of item.week || []) {
+        const day = normDay(d?.day);
+        const seenPeriodNos = new Set();
+        for (const p of d?.periods || []) {
+          const pNo = toInt(p?.periodNo, 0);
+          if (!pNo) continue;
+          if (seenPeriodNos.has(pNo)) {
+            conflicts.push({ batchCode, day, periodNo: pNo, message: `Duplicate periodNo ${pNo} on ${day}` });
+            hasDuplicate = true;
+          }
+          seenPeriodNos.add(pNo);
+        }
+      }
+      if (hasDuplicate) continue;
+
+      // ── FIX 5: Staff conflict checks (unchanged logic, kept intact) ────────
+      for (const d of item.week || []) {
+        const day = normDay(d?.day);
+        if (!isValidDay(day)) continue;
+        const exactDate = getOffsetDate(correctedMonday, day);
+
+        for (const p of d?.periods || []) {
+          const facultyId = safeTrim(p?.facultyId);
+          const startMin = toInt(p?.time?.startMin, -1);
+          const endMin = toInt(p?.time?.endMin, -1);
+          if (!facultyId || startMin < 0 || endMin < 0) continue;
+
+          // Check against Active timetables in DB
+          const dbCheck = await checkStaffConflicts(tenantId, facultyId, exactDate, day, startMin, endMin, timetableId, false);
+
+          if (dbCheck.conflict) {
+            conflicts.push({
+              batchCode,
+              day,
+              periodNo: p.periodNo,
+              facultyId,
+              facultyName: dbCheck.facultyName || safeTrim(p?.facultyName) || null,
+              message: dbCheck.message
+            });
+          } else {
+            // Check internal conflicts (within the same submitted payload)
+            const internal = proposed.find((pa) => pa.facultyId === facultyId && pa.exactDate === exactDate && startMin < pa.endMin && endMin > pa.startMin);
+            if (internal) {
+              conflicts.push({
+                batchCode,
+                day,
+                periodNo: p.periodNo,
+                facultyId,
+                facultyName: safeTrim(p?.facultyName) || null,
+                message: `Internal conflict with batch ${internal.batchCode} on ${day} (Period ${internal.periodNo})`
+              });
+            } else {
+              proposed.push({
+                facultyId,
+                exactDate,
+                startMin,
+                endMin,
+                batchCode,
+                periodNo: p.periodNo,
+                facultyName: safeTrim(p?.facultyName) || null
+              });
+            }
+          }
+        }
+      }
+    }
+
+    if (conflicts.length) return res.status(400).json({ status: false, message: 'Conflicts detected', conflicts });
+
+    return res.status(200).json({ status: true, message: 'All schedules valid' });
   } catch (err) {
     return next(err);
   }
