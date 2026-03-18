@@ -1,6 +1,10 @@
 import express from 'express';
 import multer from 'multer';
 
+import validate from '../middlewares/validation.js';
+import constants from '../helpers/constants.js';
+import validatetoken from '../middlewares/auth.js';
+
 import mockExamController from '../controller/mockExam.controller.js';
 import mockExamBatchAssignController from '../controller/mockExambatchassign.controller.js';
 import mockExamQnsController from '../controller/mockExamQns.controller.js';
@@ -9,53 +13,55 @@ import { instructionController, passageController } from '../controller/instruct
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
+import { uploadQuestionImage } from '../middlewares/multer.js';
 
-router.post('/exam/create', mockExamController.createExam);
-router.post('/exam/update', mockExamController.updateExam);
-router.post('/exam/list', mockExamController.listExams);
-router.post('/exam/get', mockExamController.getExam);
-router.post('/exam/delete', mockExamController.deleteExam);
-router.post('/exam/publish-result', mockExamController.publishResult);
-router.post('/exam/apply-grace', mockExamController.applyGrace);
-router.post('/exam/remove-grace', mockExamController.removeGrace);
-router.post('/exam/auto-publish-check', mockExamController.checkAndAutoPublish);
-router.post('/exam/student-list', mockExamController.listExamsForStudent);
+router.post('/create', validatetoken, mockExamController.createExam);
+router.post('/update', validatetoken, mockExamController.updateExam);
+router.post('/list', validatetoken, mockExamController.listExams);
+router.post('/get', validatetoken, mockExamController.getExam);
+router.post('/delete', validatetoken, mockExamController.deleteExam);
+router.post('/publish', validatetoken, mockExamController.publishExam);
+router.post('/publish-result', validatetoken, mockExamController.publishResult);
+router.post('/apply-grace', validatetoken, mockExamController.applyGrace);
+router.post('/remove-grace', validatetoken, mockExamController.removeGrace);
+router.post('/auto-publish-check', validatetoken, mockExamController.checkAndAutoPublish);
+router.post('/student-list', mockExamController.listExamsForStudent);
 
-router.post('/exambatch/assign', mockExamBatchAssignController.assignToBatch);
-router.post('/exambatch/disable', mockExamBatchAssignController.disableFromBatch);
-router.post('/exambatch/list-by-exam', mockExamBatchAssignController.listBatchesByExam);
-router.post('/exambatch/list-by-batch', mockExamBatchAssignController.listExamsByBatch);
-router.post('/exambatch/student-status', mockExamBatchAssignController.getStudentStatus);
-router.post('/exambatch/sync-students', mockExamBatchAssignController.syncStudents);
+router.post('/batch/assign', validatetoken, mockExamBatchAssignController.assignToBatch);
+router.post('/batch/disable', validatetoken, mockExamBatchAssignController.disableFromBatch);
+router.post('/batch/list-by-exam', validatetoken, mockExamBatchAssignController.listBatchesByExam);
+router.post('/batch/list-by-batch', validatetoken, mockExamBatchAssignController.listExamsByBatch);
+router.post('/batch/student-status', validatetoken, mockExamBatchAssignController.getStudentStatus);
+router.post('/batch/sync-students', validatetoken, mockExamBatchAssignController.syncStudents);
 
-router.post('/examqns/create', mockExamQnsController.createQuestion);
-router.post('/examqns/bulk-create', mockExamQnsController.createQuestionsBulk);
-router.post('/examqns/update', mockExamQnsController.updateQuestion);
-router.post('/examqns/delete', mockExamQnsController.deleteQuestion);
-router.post('/examqns/bulk-delete-section', mockExamQnsController.bulkDeleteBySection);
-router.post('/examqns/list-by-section', mockExamQnsController.listQuestionsBySection);
-router.post('/examqns/get-questions', mockExamQnsController.getQuestionsByExam);
-router.post('/examqns/view', mockExamQnsController.viewQuestion);
-router.post('/examqns/sort-order', mockExamQnsController.updateSortOrder);
-router.post('/examqns/upload-image', upload.array('files'), mockExamQnsController.uploadImage);
-router.get('/examqns/image', mockExamQnsController.getImage);
+router.post('/questions/create', validatetoken, mockExamQnsController.createQuestion);
+router.post('/questions/bulk-create', validatetoken, mockExamQnsController.createQuestionsBulk);
+router.post('/questions/update', validatetoken, mockExamQnsController.updateQuestion);
+router.post('/questions/delete', validatetoken, mockExamQnsController.deleteQuestion);
+router.post('/questions/bulk-delete-section', validatetoken, mockExamQnsController.bulkDeleteBySection);
+router.post('/questions/list-by-section', validatetoken, mockExamQnsController.listQuestionsBySection);
+router.post('/questions/get-questions', mockExamQnsController.getQuestionsByExam);
+router.post('/questions/view', validatetoken, mockExamQnsController.viewQuestion);
+router.post('/questions/sort-order', validatetoken, mockExamQnsController.updateSortOrder);
+router.post('/questions/upload-image', validatetoken, validatetoken, uploadQuestionImage, mockExamQnsController.uploadImage);
+router.post('/questions/image/download', mockExamQnsController.getImage);
 
-router.post('/examresult/submit', mockExamResultController.submitResult);
-router.post('/examresult/my-result', mockExamResultController.getMyResult);
-router.post('/examresult/leaderboard', mockExamResultController.getLeaderboard);
-router.post('/examresult/list-by-exam', mockExamResultController.listResultsByExam);
-router.post('/examresult/list-by-batch', mockExamResultController.listResultsByBatch);
-router.post('/examresult/list-by-student', mockExamResultController.listResultsByStudent);
-router.post('/examresult/section-analytics', mockExamResultController.getSectionAnalytics);
+router.post('/result/submit', mockExamResultController.submitResult);
+router.post('/result/my-result', mockExamResultController.getMyResult);
+router.post('/result/leaderboard', validatetoken, mockExamResultController.getLeaderboard);
+router.post('/result/list-by-exam', validatetoken, mockExamResultController.listResultsByExam);
+router.post('/result/list-by-batch', validatetoken, mockExamResultController.listResultsByBatch);
+router.post('/result/list-by-student', validatetoken, mockExamResultController.listResultsByStudent);
+router.post('/result/section-analytics', validatetoken, mockExamResultController.getSectionAnalytics);
 
-router.post('/instruction/create', instructionController.createInstruction);
-router.post('/instruction/update', instructionController.updateInstruction);
-router.post('/instruction/list', instructionController.listInstructions);
-router.post('/instruction/delete', instructionController.deleteInstruction);
+router.post('/instruction/create', validatetoken, instructionController.createInstruction);
+router.post('/instruction/update', validatetoken, instructionController.updateInstruction);
+router.post('/instruction/list', validatetoken, instructionController.listInstructions);
+router.post('/instruction/delete', validatetoken, instructionController.deleteInstruction);
 
-router.post('/passage/create', passageController.createPassage);
-router.post('/passage/update', passageController.updatePassage);
-router.post('/passage/list', passageController.listPassages);
-router.post('/passage/delete', passageController.deletePassage);
+router.post('/passage/create', validatetoken, passageController.createPassage);
+router.post('/passage/update', validatetoken, passageController.updatePassage);
+router.post('/passage/list', validatetoken, passageController.listPassages);
+router.post('/passage/delete', validatetoken, passageController.deletePassage);
 
 export default router;

@@ -5,7 +5,7 @@ import MockExam from '../models/mockExam.model.js';
 import MockExamResult from '../models/mockExamResult.model.js';
 import MockExamQns from '../models/mockExamQns.model.js';
 import ExamInstruction from '../models/mockExamInstruction.model.js';
-
+import MockExamBatchAssign from '../models/mockExambatchmapping.model.js';
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const safeTrim = (v) => (v == null ? '' : String(v)).trim();
 const toNum = (v) => {
@@ -136,7 +136,7 @@ const _buildSectionResults = (answers, sections) => {
 };
 
 // ─── CREATE EXAM ──────────────────────────────────────────────────────────────
-export const createExam = async (req, res, next) => {
+const createExam = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     const userId = pickUid(req);
@@ -197,7 +197,7 @@ export const createExam = async (req, res, next) => {
 };
 
 // ─── UPDATE EXAM ──────────────────────────────────────────────────────────────
-export const updateExam = async (req, res, next) => {
+const updateExam = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     const userId = pickUid(req);
@@ -270,7 +270,7 @@ export const updateExam = async (req, res, next) => {
 };
 
 // ─── LIST EXAMS ───────────────────────────────────────────────────────────────
-export const listExams = async (req, res, next) => {
+const listExams = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
@@ -309,7 +309,7 @@ export const listExams = async (req, res, next) => {
 };
 
 // ─── GET EXAM ─────────────────────────────────────────────────────────────────
-export const getExam = async (req, res, next) => {
+const getExam = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     const examId = safeTrim(req.body?.examId || req.query?.examId);
@@ -325,7 +325,7 @@ export const getExam = async (req, res, next) => {
 };
 
 // ─── DELETE EXAM ──────────────────────────────────────────────────────────────
-export const deleteExam = async (req, res, next) => {
+const deleteExam = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     const examId = safeTrim(req.body?.examId);
@@ -343,7 +343,7 @@ export const deleteExam = async (req, res, next) => {
 };
 
 // ─── PUBLISH RESULT ───────────────────────────────────────────────────────────
-export const publishResult = async (req, res, next) => {
+const publishResult = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     const examId = safeTrim(req.body?.examId);
@@ -376,7 +376,7 @@ export const publishResult = async (req, res, next) => {
 };
 
 // ─── APPLY GRACE ──────────────────────────────────────────────────────────────
-export const applyGrace = async (req, res, next) => {
+const applyGrace = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     const examId = safeTrim(req.body?.examId);
@@ -413,7 +413,7 @@ export const applyGrace = async (req, res, next) => {
 };
 
 // ─── REMOVE GRACE ─────────────────────────────────────────────────────────────
-export const removeGrace = async (req, res, next) => {
+const removeGrace = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     const examId = safeTrim(req.body?.examId);
@@ -432,11 +432,10 @@ export const removeGrace = async (req, res, next) => {
 };
 
 // ─── AUTO PUBLISH CHECK (cron) ────────────────────────────────────────────────
-export const checkAndAutoPublish = async (req, res, next) => {
+const checkAndAutoPublish = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-
     const now = Date.now();
     const exams = await MockExam.find({
       tenantId,
@@ -444,13 +443,10 @@ export const checkAndAutoPublish = async (req, res, next) => {
       status: { $nin: ['result_published'] },
       autoPublishAt: { $ne: null, $lte: now }
     }).lean();
-
     if (!exams.length) return res.status(200).json({ status: true, message: 'No exams pending auto-publish', count: 0 });
-
     const examIds = exams.map((e) => e.examId);
     await MockExam.updateMany({ tenantId, examId: { $in: examIds }, isdeleted: false }, { $set: { status: 'result_published', resultPublishedAt: now } });
     await MockExamResult.updateMany({ tenantId, examId: { $in: examIds }, isdeleted: false }, { $set: { status: 'result_published', isResultVisible: true } });
-
     return res.status(200).json({ status: true, message: 'Auto-published results', count: examIds.length, examIds });
   } catch (err) {
     return next(err);
@@ -458,31 +454,24 @@ export const checkAndAutoPublish = async (req, res, next) => {
 };
 
 // ─── LIST EXAMS FOR STUDENT ───────────────────────────────────────────────────
-export const listExamsForStudent = async (req, res, next) => {
+const listExamsForStudent = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     const batchId = safeTrim(req.body?.batchId);
     const admissionNo = safeTrim(req.body?.admissionNo);
-
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
     if (!batchId) return res.status(400).json({ status: false, message: 'batchId is required' });
-
-    // import here to avoid circular — or move to top if not circular
-    const MockExamBatchAssign = (await import('../models/mockExamBatchAssign.model.js')).default;
     const assigns = await MockExamBatchAssign.find({ tenantId, batchId, isdeleted: false, status: 'enabled' }, { examId: 1, students: 1 }).lean();
     if (!assigns.length) return res.status(200).json({ status: true, message: 'No exams assigned', data: [], count: 0 });
-
     const examIds = assigns.map((a) => a.examId);
     const exams = await MockExam.find({ tenantId, examId: { $in: examIds }, isdeleted: false, status: { $ne: 'draft' } }, { password: 0 })
       .sort({ startTime: 1 })
       .lean();
-
     let attemptedIds = new Set();
     if (admissionNo) {
       const attempted = await MockExamResult.find({ tenantId, admissionNo, examId: { $in: examIds }, isdeleted: false }, { examId: 1 }).lean();
       attemptedIds = new Set(attempted.map((r) => r.examId));
     }
-
     const now = Date.now();
     const data = exams.map((e) => {
       const isLive = !!(e.startTime && e.endTime && now >= e.startTime && now <= e.endTime);
@@ -490,11 +479,31 @@ export const listExamsForStudent = async (req, res, next) => {
       const resultReady = e.status === 'result_published' && e.autoPublishAt && now >= e.autoPublishAt;
       return { ...e, isLive, isAttempted, canAttempt: isLive && !isAttempted, isResultVisible: resultReady };
     });
-
     return res.status(200).json({ status: true, message: 'Exams loaded', data, count: data.length });
   } catch (err) {
     return next(err);
   }
 };
 
-export default { createExam, updateExam, listExams, getExam, deleteExam, publishResult, applyGrace, removeGrace, checkAndAutoPublish, listExamsForStudent };
+const publishExam = async (req, res, next) => {
+  try {
+    const tenantId = pickTid(req);
+    const examId = safeTrim(req.body?.examId);
+    const userId = pickUid(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    if (!examId) return res.status(400).json({ status: false, message: 'examId is required' });
+    const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false });
+    if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
+    if (exam.status !== 'draft') return res.status(400).json({ status: false, message: `Exam is already ${exam.status}` });
+    if (!exam.sections?.length) return res.status(400).json({ status: false, message: 'Cannot publish exam with no sections' });
+    if (!exam.startTime || !exam.endTime) return res.status(400).json({ status: false, message: 'startTime and endTime are required before publishing' });
+    exam.status = 'published';
+    exam.updatedBy = userId || null;
+    await exam.save();
+    return res.status(200).json({ status: true, message: 'Exam published successfully', data: { examId, status: exam.status } });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+export default { createExam, updateExam, listExams, getExam, deleteExam, publishExam, publishResult, applyGrace, removeGrace, checkAndAutoPublish, listExamsForStudent };

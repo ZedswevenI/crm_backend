@@ -241,29 +241,17 @@ export const getMyResult = async (req, res, next) => {
     const tenantId = pickTid(req);
     const examId = safeTrim(req.body?.examId);
     const admissionNo = safeTrim(req.body?.admissionNo);
-
     if (!tenantId || !examId || !admissionNo) return res.status(400).json({ status: false, message: 'tenantId, examId, admissionNo are required' });
-
-    // fetch exam to validate autoPublishAt
-    const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }, { autoPublishAt: 1, resultPublishedAt: 1, status: 1, password: 0 }).lean();
+    const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }, { autoPublishAt: 1, resultPublishedAt: 1, status: 1 }).lean();
     if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
-
     const now = Date.now();
-
-    // result is visible only if:
-    // 1. exam status is result_published AND
-    // 2. autoPublishAt has passed (or was null meaning admin manually published)
     const autoPublishPassed = !exam.autoPublishAt || now >= exam.autoPublishAt;
     if (exam.status !== 'result_published' || !autoPublishPassed) {
       return res.status(403).json({ status: false, message: 'Result has not been published yet', autoPublishAt: exam.autoPublishAt || null });
     }
-
     const result = await MockExamResult.findOne({ tenantId, examId, admissionNo, isdeleted: false }).lean();
     if (!result) return res.status(404).json({ status: false, message: 'Result not found' });
-
-    // double-check isResultVisible flag
     if (!result.isResultVisible) return res.status(403).json({ status: false, message: 'Result not yet visible' });
-
     return res.status(200).json({ status: true, message: 'Result loaded', data: { ...result, exam } });
   } catch (err) {
     return next(err);

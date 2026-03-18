@@ -103,7 +103,7 @@ export const uploadImage = async (req, res) => {
 // ─── GET IMAGE ────────────────────────────────────────────────────────────────
 export const getImage = async (req, res) => {
   try {
-    const key = extractKey(req.query?.key || req.body?.key || '');
+    const key = extractKey(req.query?.url || req.body?.url || '');
     if (!key) return res.status(400).json({ status: false, message: 'key is required' });
     if (!BUCKET) return res.status(500).json({ status: false, message: 'S3 bucket not configured' });
     const url = await getSignedUrl(s3Client, new GetObjectCommand({ Bucket: BUCKET, Key: key }), { expiresIn: 1800 });
