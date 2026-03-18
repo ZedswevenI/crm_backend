@@ -10,5 +10,7 @@ routes.post('/pending', validatetoken, attendanceController.getPendingAttendance
 routes.post('/schedule/staff', validatetoken, attendanceController.getStaffSchedule);
 routes.post('/schedule/student', validatetoken, attendanceController.getStudentSchedule);
 routes.post('/students/list', validatetoken, attendanceController.getStudentsForAttendance);
+routes.post('/list', validatetoken, attendanceController.listAttendanceByDate);
+routes.post('/schedule/withattendance', validatetoken, attendanceController.getScheduleWithAttendance);
 
 export default routes;

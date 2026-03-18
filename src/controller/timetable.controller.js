@@ -1184,89 +1184,6 @@ const viewBatchScheduleByDate = async (req, res, next) => {
   }
 };
 
-// const validateSchedule = async (req, res, next) => {
-//   try {
-//     const tenantId = pickTenantId(req);
-//     const data = Array.isArray(req.body?.data) ? req.body.data : [];
-//     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-//     if (!data.length) return res.status(400).json({ status: false, message: 'No schedule data provided' });
-//     const conflicts = [];
-//     const proposed = [];
-//     for (let i = 0; i < data.length; i++) {
-//       const item = data[i];
-//       const batchCode = safeTrim(item.batchCode) || `Row ${i + 1}`;
-//       const wkStart = toInt(item.wkStartOn, 0);
-//       const timetableId = safeTrim(item.timetableId) || null;
-//       if (!wkStart) {
-//         conflicts.push({ batchCode, message: 'wkStartOn is required' });
-//         continue;
-//       }
-//       const correctedMonday = getPreviousMonday(wkStart);
-//       const publishedTT = await TimeTable.findOne({
-//         tenantId,
-//         batchCode,
-//         isdeleted: false,
-//         status: 'Active'
-//       })
-//         .sort({ wkStartOn: -1 })
-//         .lean();
-//       if (publishedTT) {
-//         conflicts.push({
-//           batchCode,
-//           message: `Timetable already published for batch ${batchCode}. Use day/edit to modify individual days.`,
-//           publishedAt: publishedTT.publishedAt || null,
-//           publishedTimetableId: publishedTT._id
-//         });
-//         continue;
-//       }
-//       for (const d of item.week || []) {
-//         const day = normDay(d?.day);
-//         if (!isValidDay(day)) continue;
-//         const exactDate = getOffsetDate(correctedMonday, day);
-
-//         for (const p of d?.periods || []) {
-//           const facultyId = safeTrim(p?.facultyId);
-//           const startMin = toInt(p?.time?.startMin, -1);
-//           const endMin = toInt(p?.time?.endMin, -1);
-//           if (!facultyId || startMin < 0 || endMin < 0) continue;
-
-//           const dbCheck = await checkStaffConflicts(tenantId, facultyId, exactDate, day, startMin, endMin, timetableId, false);
-//           if (dbCheck.conflict) {
-//             conflicts.push({
-//               batchCode,
-//               day,
-//               periodNo: p.periodNo,
-//               facultyId,
-//               facultyName: dbCheck.facultyName || safeTrim(p?.facultyName) || null,
-//               message: dbCheck.message
-//             });
-//           } else {
-//             const internal = proposed.find((pa) => pa.facultyId === facultyId && pa.exactDate === exactDate && startMin < pa.endMin && endMin > pa.startMin);
-//             if (internal) {
-//               conflicts.push({
-//                 batchCode,
-//                 day,
-//                 periodNo: p.periodNo,
-//                 facultyId,
-//                 facultyName: safeTrim(p?.facultyName) || null,
-//                 message: `Internal conflict with batch ${internal.batchCode}`
-//               });
-//             } else {
-//               proposed.push({ facultyId, exactDate, startMin, endMin, batchCode, facultyName: safeTrim(p?.facultyName) || null });
-//             }
-//           }
-//         }
-//       }
-//     }
-
-//     if (conflicts.length) return res.status(400).json({ status: false, message: 'Conflicts detected', conflicts });
-//     return res.status(200).json({ status: true, message: 'All schedules valid' });
-//   } catch (err) {
-//     return next(err);
-//   }
-// };
-
-// POST /timetable/late-entry/log
 const logLateEntry = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
@@ -1322,7 +1239,6 @@ const listLateEntries = (type) => async (req, res, next) => {
   }
 };
 
-// POST /timetable/bulk/zoomlink/upload
 const bulkUpdateZoomLinks = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
@@ -1537,7 +1453,7 @@ export default {
   deleteTimeTable,
   cancelWholeDay,
   editWholeDay,
-  addPeriod, // NEW — FIX G3
+  addPeriod,
   cancelPeriod,
   rearrangeStaff,
   changePeriod,
