@@ -8,21 +8,17 @@ const pickTid = (req) => safeTrim(req.body?.entiId || req.body?.tenantId);
 const pickUid = (req) => safeTrim(req.body?.userId || req.user?.userId);
 const uuid = () => (typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : crypto.randomBytes(16).toString('hex'));
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// EXAM INSTRUCTION CRUD
-// ═══════════════════════════════════════════════════════════════════════════════
-
-export const createInstruction = async (req, res, next) => {
+const createInstruction = async (req, res, next) => {
   try {
+    console.log(req.body);
     const tenantId = pickTid(req);
     const userId = pickUid(req);
+    console.log('userId ', userId);
     const title = safeTrim(req.body?.title);
     const contentHtml = req.body?.contentHtml ?? '';
     const language = safeTrim(req.body?.language) || 'en';
-
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
     if (!title) return res.status(400).json({ status: false, message: 'title is required' });
-
     const doc = await ExamInstruction.create({
       tenantId,
       instructionId: uuid(),
@@ -31,10 +27,9 @@ export const createInstruction = async (req, res, next) => {
       language,
       status: 'active',
       createdBy: userId || null,
-      updatedBy: null,
+      updatedBy: userId || null,
       isdeleted: false
     });
-
     return res.status(201).json({ status: true, message: 'Instruction created successfully', data: doc });
   } catch (err) {
     if (err?.code === 11000) return res.status(409).json({ status: false, message: 'Duplicate instructionId' });
@@ -42,15 +37,13 @@ export const createInstruction = async (req, res, next) => {
   }
 };
 
-export const updateInstruction = async (req, res, next) => {
+const updateInstruction = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     const userId = pickUid(req);
     const recId = safeTrim(req.body?.recId);
-
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
     if (!recId) return res.status(400).json({ status: false, message: 'recId is required' });
-
     const set = {};
     if (req.body?.title !== undefined) {
       const v = safeTrim(req.body.title);
@@ -65,20 +58,17 @@ export const updateInstruction = async (req, res, next) => {
       const v = safeTrim(req.body.status);
       if (v) set.status = v;
     }
-
     if (!Object.keys(set).length) return res.status(400).json({ status: false, message: 'No fields to update' });
     set.updatedBy = userId || null;
-
     const updated = await ExamInstruction.findOneAndUpdate({ _id: recId, tenantId, isdeleted: false }, { $set: set }, { new: true }).lean();
     if (!updated) return res.status(404).json({ status: false, message: 'Instruction not found' });
-
     return res.status(200).json({ status: true, message: 'Instruction updated successfully', data: updated });
   } catch (err) {
     return next(err);
   }
 };
 
-export const listInstructions = async (req, res, next) => {
+const listInstructions = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
@@ -109,7 +99,7 @@ export const listInstructions = async (req, res, next) => {
   }
 };
 
-export const deleteInstruction = async (req, res, next) => {
+const deleteInstruction = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     const userId = pickUid(req);
@@ -131,7 +121,7 @@ export const deleteInstruction = async (req, res, next) => {
 // EXAM PASSAGE CRUD
 // ═══════════════════════════════════════════════════════════════════════════════
 
-export const createPassage = async (req, res, next) => {
+const createPassage = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     const userId = pickUid(req);
@@ -164,7 +154,7 @@ export const createPassage = async (req, res, next) => {
   }
 };
 
-export const updatePassage = async (req, res, next) => {
+const updatePassage = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     const userId = pickUid(req);
@@ -201,7 +191,7 @@ export const updatePassage = async (req, res, next) => {
   }
 };
 
-export const listPassages = async (req, res, next) => {
+const listPassages = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
@@ -233,7 +223,7 @@ export const listPassages = async (req, res, next) => {
   }
 };
 
-export const deletePassage = async (req, res, next) => {
+const deletePassage = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     const userId = pickUid(req);
