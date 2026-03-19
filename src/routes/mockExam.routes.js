@@ -40,7 +40,8 @@ router.post('/questions/update', validatetoken, mockExamQnsController.updateQues
 router.post('/questions/delete', validatetoken, mockExamQnsController.deleteQuestion);
 router.post('/questions/bulk-delete-section', validatetoken, mockExamQnsController.bulkDeleteBySection);
 router.post('/questions/list-by-section', validatetoken, mockExamQnsController.listQuestionsBySection);
-router.post('/questions/get-questions', mockExamQnsController.getQuestionsByExam);
+router.post('/questions/get-questions', mockExamQnsController.getQuestionsByCode);
+router.post('/questions/getallquestions', mockExamQnsController.getQuestionsByExam);
 router.post('/questions/view', validatetoken, mockExamQnsController.viewQuestion);
 router.post('/questions/sort-order', validatetoken, mockExamQnsController.updateSortOrder);
 router.post('/questions/upload-image', validatetoken, validatetoken, uploadQuestionImage, mockExamQnsController.uploadImage);
