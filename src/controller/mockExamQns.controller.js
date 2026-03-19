@@ -8,8 +8,8 @@ import s3Client from '../middlewares/s3config.js';
 import MockExamQns from '../models/mockExamQns.model.js';
 import MockExam from '../models/mockExam.model.js';
 import ExamPassage from '../models/passage.model.js';
+import Counter from '../models/counter.model.js';
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
 const safeTrim = (v) => (v == null ? '' : String(v)).trim();
 const toNum = (v, def = 0) => {
   const n = Number(
@@ -69,8 +69,9 @@ function needsOneCorrect(qt) {
 }
 function validateQDoc(d, label) {
   if (!d.tenantId) return `${label}: tenantId required`;
-  if (!d.examId) return `${label}: examId required`;
-  if (!d.sectionId) return `${label}: sectionId required`;
+  // if (!d.examId) return `${label}: examId required`;
+  // if (!d.sectionId) return `${label}: sectionId required`;
+  if (d.examId && !d.sectionId) return `${label}: sectionId required when examId is set`;
   if (!ALLOWED_TYPES.has(d.questionType)) return `${label}: invalid questionType`;
   if (!ALLOWED_DIFF.has(d.difficulty)) return `${label}: invalid difficulty`;
   if (needsOptions(d.questionType)) {
@@ -80,6 +81,11 @@ function validateQDoc(d, label) {
   if (d.questionType === 'numeric' && d.numericMin != null && d.numericMax != null && d.numericMin > d.numericMax) return `${label}: numericMin must be <= numericMax`;
   return null;
 }
+
+const generateQuestionNo = async (tenantId) => {
+  const doc = await Counter.findOneAndUpdate({ tenantId, key: 'questionNo' }, { $inc: { seq: 1 }, $setOnInsert: { tenantId, key: 'questionNo' } }, { new: true, upsert: true });
+  return `Q${String(doc.seq).padStart(5, '0')}`;
+};
 
 // ─── UPLOAD IMAGE ─────────────────────────────────────────────────────────────
 const uploadImage = async (req, res) => {
@@ -387,7 +393,7 @@ const getQuestionsByExam = async (req, res, next) => {
         startTime: exam.startTime,
         endTime: exam.endTime,
         calculatorType: exam.calculatorType,
-        sections
+        questions: enriched
       }
     });
   } catch (err) {
@@ -496,4 +502,351 @@ const updateSortOrder = async (req, res, next) => {
   }
 };
 
-export default { uploadImage, getImage, createQuestion, createQuestionsBulk, updateQuestion, deleteQuestion, bulkDeleteBySection, listQuestionsBySection, getQuestionsByExam, viewQuestion, updateSortOrder, getQuestionsByCode };
+// ─── createQuestionInBank ──────────────────────────────────────────────────────
+const createQuestionInBank = async (req, res, next) => {
+  try {
+    const tenantId = pickTid(req);
+    const userId = pickUid(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+
+    const {
+      questionType,
+      subjectId,
+      topicId,
+      subTopicId,
+      difficulty,
+      positiveMarks,
+      negativeMarks,
+      hasPartialMarking,
+      numericMin,
+      numericMax,
+      questionHtml,
+      passageId,
+      passageHtml,
+      instructionHtml,
+      solutionHtml,
+      enablePassage,
+      enableInstruction,
+      enableSolution,
+      correctAnswer,
+      questionOptions,
+      images,
+      tags,
+      sortOrder,
+      status
+    } = req.body;
+
+    if (!questionType) return res.status(400).json({ status: false, message: 'questionType is required' });
+    if (!subjectId || !mustObjId(subjectId)) return res.status(400).json({ status: false, message: 'valid subjectId is required for bank questions' });
+    if (!topicId) return res.status(400).json({ status: false, message: 'topicId is required for bank questions' });
+    if (!subTopicId) return res.status(400).json({ status: false, message: 'subTopicId is required for bank questions' });
+
+    const questionNo = await generateQuestionNo(tenantId);
+
+    const doc = await MockExamQns.create({
+      tenantId,
+      examId: null,
+      sectionId: null,
+      subjectId: new mongoose.Types.ObjectId(String(subjectId)),
+      questionId: uuid(),
+      questionNo,
+      topicId: safeTrim(topicId) || null,
+      subTopicId: safeTrim(subTopicId) || null,
+      questionType: safeTrim(questionType).toLowerCase(),
+      difficulty: safeTrim(difficulty) || 'medium',
+      positiveMarks: toNum(positiveMarks, 0),
+      negativeMarks: toNum(negativeMarks, 0),
+      hasPartialMarking: !!hasPartialMarking,
+      numericMin: numericMin !== undefined ? toNum(numericMin) : null,
+      numericMax: numericMax !== undefined ? toNum(numericMax) : null,
+      questionHtml: questionHtml || '',
+      passageId: passageId || null,
+      passageHtml: passageId ? '' : passageHtml || '',
+      instructionHtml: instructionHtml || '',
+      solutionHtml: solutionHtml || '',
+      enablePassage: !!enablePassage,
+      enableInstruction: !!enableInstruction,
+      enableSolution: !!enableSolution,
+      correctAnswer: safeTrim(correctAnswer) || '',
+      questionOptions: normalizeOptions(questionOptions),
+      images: normalizeImages(images),
+      tags: Array.isArray(tags) ? tags.map(safeTrim).filter(Boolean) : [],
+      sortOrder: toNum(sortOrder, 0),
+      status: safeTrim(status) || 'active',
+      createdBy: userId || null,
+      updatedBy: userId || null,
+      isdeleted: false
+    });
+
+    return res.status(200).json({ status: true, message: 'Question created in bank', data: doc });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+// ─── createQuestionsBulkInBank ────────────────────────────────────────────────
+const createQuestionsBulkInBank = async (req, res, next) => {
+  try {
+    const tenantId = pickTid(req);
+    const userId = pickUid(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+
+    const questions = Array.isArray(req.body?.questions) ? req.body.questions : [];
+    if (!questions.length) return res.status(400).json({ status: false, message: 'questions[] is required' });
+
+    const docs = [];
+    for (const q of questions) {
+      if (!q.questionType) return res.status(400).json({ status: false, message: 'questionType is required for all questions' });
+      if (!q.subjectId || !mustObjId(q.subjectId)) return res.status(400).json({ status: false, message: 'valid subjectId is required for all bank questions' });
+      if (!q.topicId) return res.status(400).json({ status: false, message: 'topicId is required for all bank questions' });
+      if (!q.subTopicId) return res.status(400).json({ status: false, message: 'subTopicId is required for all bank questions' });
+
+      const questionNo = await generateQuestionNo(tenantId);
+      docs.push({
+        tenantId,
+        examId: null,
+        sectionId: null,
+        subjectId: new mongoose.Types.ObjectId(String(q.subjectId)),
+        questionId: uuid(),
+        questionNo,
+        topicId: safeTrim(q.topicId) || null,
+        subTopicId: safeTrim(q.subTopicId) || null,
+        questionType: safeTrim(q.questionType).toLowerCase(),
+        difficulty: safeTrim(q.difficulty) || 'medium',
+        positiveMarks: toNum(q.positiveMarks, 0),
+        negativeMarks: toNum(q.negativeMarks, 0),
+        hasPartialMarking: !!q.hasPartialMarking,
+        numericMin: q.numericMin !== undefined ? toNum(q.numericMin) : null,
+        numericMax: q.numericMax !== undefined ? toNum(q.numericMax) : null,
+        questionHtml: q.questionHtml || '',
+        passageId: q.passageId || null,
+        passageHtml: q.passageId ? '' : q.passageHtml || '',
+        instructionHtml: q.instructionHtml || '',
+        solutionHtml: q.solutionHtml || '',
+        enablePassage: !!q.enablePassage,
+        enableInstruction: !!q.enableInstruction,
+        enableSolution: !!q.enableSolution,
+        correctAnswer: safeTrim(q.correctAnswer) || '',
+        questionOptions: normalizeOptions(q.questionOptions),
+        images: normalizeImages(q.images),
+        tags: Array.isArray(q.tags) ? q.tags.map(safeTrim).filter(Boolean) : [],
+        sortOrder: toNum(q.sortOrder, 0),
+        status: safeTrim(q.status) || 'active',
+        createdBy: userId || null,
+        updatedBy: userId || null,
+        isdeleted: false
+      });
+    }
+
+    const inserted = await MockExamQns.insertMany(docs, { ordered: true });
+    return res.status(200).json({ status: true, message: `${inserted.length} questions created in bank`, count: inserted.length, data: inserted });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+// ─── listQuestionBank ─────────────────────────────────────────────────────────
+const listQuestionBank = async (req, res, next) => {
+  try {
+    const tenantId = pickTid(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+    const subjectId = req.query.subjectId;
+    const topicId = req.query.topicId;
+    const subTopicId = req.query.subTopicId;
+    const difficulty = req.query.difficulty;
+    const questionType = req.query.questionType;
+    const status = req.query.status;
+    const page = Math.max(parseInt(req.query.page || req.body.page || '1', 10), 1);
+    const limit = Math.min(Math.max(parseInt(req.query.limit || req.body.limit || '20', 10), 1), 200);
+    const query = { tenantId, examId: null, isdeleted: false };
+    if (subjectId && mustObjId(subjectId)) query.subjectId = new mongoose.Types.ObjectId(String(subjectId));
+    if (topicId) query.topicId = safeTrim(topicId);
+    if (subTopicId) query.subTopicId = safeTrim(subTopicId);
+    if (difficulty) query.difficulty = safeTrim(difficulty);
+    if (questionType) query.questionType = safeTrim(questionType).toLowerCase();
+    if (status) query.status = safeTrim(status);
+    if (req.body.list === 'full') {
+      const rows = await MockExamQns.find(query).sort({ createdAt: -1 }).lean();
+      return res.status(200).json({ status: true, data: rows, count: rows.length });
+    }
+    const skip = (page - 1) * limit;
+    const [rows, count] = await Promise.all([MockExamQns.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(), MockExamQns.countDocuments(query)]);
+    return res.status(200).json({ status: true, data: rows, count, page, limit });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+// ─── mapQuestionToExam ────────────────────────────────────────────────────────
+const mapQuestionToExam = async (req, res, next) => {
+  try {
+    const tenantId = pickTid(req);
+    const userId = pickUid(req);
+    const recId = safeTrim(req.body?.recId);
+    const examId = safeTrim(req.body?.examId);
+    const sectionId = safeTrim(req.body?.sectionId);
+
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+    if (!recId) return res.status(400).json({ status: false, message: 'recId (_id) is required' });
+    if (!examId) return res.status(400).json({ status: false, message: 'examId is required' });
+    if (!sectionId) return res.status(400).json({ status: false, message: 'sectionId is required' });
+
+    const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }).lean();
+    if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
+    const section = (exam.sections || []).find((s) => s.sectionId === sectionId);
+    if (!section) return res.status(400).json({ status: false, message: `Section ${sectionId} not found in exam` });
+
+    const question = await MockExamQns.findOne({ _id: recId, tenantId, isdeleted: false });
+    if (!question) return res.status(404).json({ status: false, message: 'Question not found' });
+
+    const resolvedSubjectId = question.subjectId || (section.subjectId ? new mongoose.Types.ObjectId(String(section.subjectId)) : null);
+
+    if (!question.examId) {
+      // First mapping — update in place
+      question.examId = examId;
+      question.sectionId = sectionId;
+      question.subjectId = resolvedSubjectId;
+      question.updatedBy = userId || null;
+      await question.save();
+      return res.status(200).json({ status: true, message: 'Question mapped to exam', data: question });
+    }
+
+    // Already mapped — duplicate with new questionNo
+    const questionNo = await generateQuestionNo(tenantId);
+    const raw = question.toObject();
+    delete raw._id;
+    delete raw.__v;
+    delete raw.createdAt;
+    delete raw.updatedAt;
+
+    const duplicate = await MockExamQns.create({
+      ...raw,
+      examId,
+      sectionId,
+      subjectId: resolvedSubjectId,
+      questionNo,
+      questionId: uuid(),
+      createdBy: userId || null,
+      updatedBy: userId || null,
+      isdeleted: false
+    });
+    return res.status(200).json({ status: true, message: 'Question duplicated and mapped to exam', data: duplicate });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+// ─── unmapQuestionFromExam ────────────────────────────────────────────────────
+const unmapQuestionFromExam = async (req, res, next) => {
+  try {
+    const tenantId = pickTid(req);
+    const userId = pickUid(req);
+    const recId = safeTrim(req.body?.recId);
+
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+    if (!recId) return res.status(400).json({ status: false, message: 'recId (_id) is required' });
+
+    const question = await MockExamQns.findOne({ _id: recId, tenantId, isdeleted: false });
+    if (!question) return res.status(404).json({ status: false, message: 'Question not found' });
+    if (!question.examId) return res.status(400).json({ status: false, message: 'Question is already in the bank' });
+
+    question.examId = null;
+    question.sectionId = null;
+    question.updatedBy = userId || null;
+    await question.save();
+
+    return res.status(200).json({ status: true, message: 'Question unmapped and returned to bank', data: question });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+// ─── bulkMapQuestionsToExam ───────────────────────────────────────────────────
+const bulkMapQuestionsToExam = async (req, res, next) => {
+  try {
+    const tenantId = pickTid(req);
+    const userId = pickUid(req);
+    const examId = safeTrim(req.body?.examId);
+    const sectionId = safeTrim(req.body?.sectionId);
+    const recIds = Array.isArray(req.body?.recIds) ? req.body.recIds.map(safeTrim).filter(Boolean) : [];
+
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+    if (!examId) return res.status(400).json({ status: false, message: 'examId is required' });
+    if (!sectionId) return res.status(400).json({ status: false, message: 'sectionId is required' });
+    if (!recIds.length) return res.status(400).json({ status: false, message: 'recIds[] is required' });
+
+    const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }).lean();
+    if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
+    const section = (exam.sections || []).find((s) => s.sectionId === sectionId);
+    if (!section) return res.status(400).json({ status: false, message: `Section ${sectionId} not found in exam` });
+
+    const questions = await MockExamQns.find({ _id: { $in: recIds }, tenantId, isdeleted: false });
+    if (!questions.length) return res.status(404).json({ status: false, message: 'No questions found' });
+
+    const results = { mapped: 0, duplicated: 0, errors: [] };
+    for (const question of questions) {
+      try {
+        const resolvedSubjectId = question.subjectId || (section.subjectId ? new mongoose.Types.ObjectId(String(section.subjectId)) : null);
+
+        if (!question.examId) {
+          question.examId = examId;
+          question.sectionId = sectionId;
+          question.subjectId = resolvedSubjectId;
+          question.updatedBy = userId || null;
+          await question.save();
+          results.mapped++;
+        } else {
+          const questionNo = await generateQuestionNo(tenantId);
+          const raw = question.toObject();
+          delete raw._id;
+          delete raw.__v;
+          delete raw.createdAt;
+          delete raw.updatedAt;
+          await MockExamQns.create({
+            ...raw,
+            examId,
+            sectionId,
+            subjectId: resolvedSubjectId,
+            questionNo,
+            questionId: uuid(),
+            createdBy: userId || null,
+            updatedBy: userId || null,
+            isdeleted: false
+          });
+          results.duplicated++;
+        }
+      } catch (e) {
+        results.errors.push({ recId: String(question._id), error: e.message });
+      }
+    }
+
+    return res.status(200).json({
+      status: true,
+      message: `Bulk map complete — ${results.mapped} mapped, ${results.duplicated} duplicated${results.errors.length ? `, ${results.errors.length} errors` : ''}`,
+      data: results
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+export default {
+  uploadImage,
+  getImage,
+  createQuestion,
+  createQuestionsBulk,
+  updateQuestion,
+  deleteQuestion,
+  bulkDeleteBySection,
+  listQuestionsBySection,
+  getQuestionsByExam,
+  viewQuestion,
+  updateSortOrder,
+  getQuestionsByCode,
+  createQuestionInBank,
+  createQuestionsBulkInBank,
+  listQuestionBank,
+  mapQuestionToExam,
+  unmapQuestionFromExam,
+  bulkMapQuestionsToExam
+};
