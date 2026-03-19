@@ -20,10 +20,13 @@ const OptionSchema = new mongoose.Schema(
 const MockExamQnsSchema = new mongoose.Schema(
   {
     tenantId: { type: String, required: true, trim: true },
-    examId: { type: String, required: true, trim: true },
-    sectionId: { type: String, required: true, trim: true },
+    examId: { type: String, default: null, trim: true },
+    sectionId: { type: String, default: null, trim: true },
     subjectId: { type: mongoose.Schema.Types.ObjectId, ref: 'subject', required: true },
     questionId: { type: String, required: true, trim: true },
+    questionNo: { type: String, default: null, trim: true },
+    topicId: { type: String, default: null, trim: true },
+    subTopicId: { type: String, default: null, trim: true },
     questionType: {
       type: String,
       required: true,
@@ -70,8 +73,10 @@ const MockExamQnsSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-MockExamQnsSchema.index({ tenantId: 1, examId: 1, questionId: 1 }, { unique: true, partialFilterExpression: { isdeleted: false }, name: 'uniq_mockqns_per_exam' });
+MockExamQnsSchema.index({ tenantId: 1, questionNo: 1 }, { unique: true, sparse: true, partialFilterExpression: { questionNo: { $ne: null } }, name: 'uniq_mockqns_questionno' });
+MockExamQnsSchema.index({ tenantId: 1, examId: 1, questionId: 1 }, { unique: true, partialFilterExpression: { isdeleted: false, examId: { $ne: null } }, name: 'uniq_mockqns_per_exam' });
 MockExamQnsSchema.index({ tenantId: 1, examId: 1, sectionId: 1, subjectId: 1, isdeleted: 1, sortOrder: 1 }, { name: 'mockqns_section_idx' });
+MockExamQnsSchema.index({ tenantId: 1, examId: 1, subjectId: 1, topicId: 1, subTopicId: 1, isdeleted: 1 }, { name: 'mockqns_bank_idx' });
 MockExamQnsSchema.index({ tenantId: 1, examId: 1, passageId: 1, isdeleted: 1 }, { name: 'mockqns_passage_idx' });
 
 MockExamQnsSchema.pre('validate', function (next) {

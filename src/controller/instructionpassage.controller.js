@@ -1,4 +1,9 @@
 import crypto from 'crypto';
+import path from 'path';
+import logger from '../helpers/logger.js';
+import { PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import s3Client from '../middlewares/s3config.js';
 import ExamInstruction from '../models/mockExamInstruction.model.js';
 import ExamPassage from '../models/passage.model.js';
 
@@ -7,6 +12,64 @@ const safeTrim = (v) => (v == null ? '' : String(v)).trim();
 const pickTid = (req) => safeTrim(req.body?.entiId || req.body?.tenantId);
 const pickUid = (req) => safeTrim(req.body?.userId || req.user?.userId);
 const uuid = () => (typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : crypto.randomBytes(16).toString('hex'));
+
+const BUCKET = process.env.AWS_S3_QUESTION_BUCKET;
+const REGION = process.env.AWS_REGION || 'ap-south-1';
+function buildImageKeypass(name) {
+  const ext = path.extname(name) || '';
+  const base = path
+    .basename(name, ext)
+    .replace(/\s+/g, '_')
+    .replace(/[^a-zA-Z0-9_\-]/g, '');
+  return `mockexam/questions/${base}-${Date.now()}-${crypto.randomBytes(8).toString('hex')}${ext}`;
+}
+
+function buildImageKeyInst(name) {
+  const ext = path.extname(name) || '';
+  const base = path
+    .basename(name, ext)
+    .replace(/\s+/g, '_')
+    .replace(/[^a-zA-Z0-9_\-]/g, '');
+  return `mockexam/questions/${base}-${Date.now()}-${crypto.randomBytes(8).toString('hex')}${ext}`;
+}
+
+// ─── UPLOAD IMAGE ─────────────────────────────────────────────────────────────
+const uploadImageInstruction = async (req, res) => {
+  try {
+    if (!req.files?.length) return res.status(400).json({ status: false, message: 'No files uploaded' });
+    if (!BUCKET) return res.status(500).json({ status: false, message: 'S3 bucket not configured' });
+    const base = `${req.protocol}://${req.get('host')}`;
+    const files = await Promise.all(
+      req.files.map(async (f) => {
+        const key = buildImageKeyInst(f.originalname);
+        await s3Client.send(new PutObjectCommand({ Bucket: BUCKET, Key: key, Body: f.buffer, ContentType: f.mimetype }));
+        return { key, s3Url: `https://${BUCKET}.s3.${REGION}.amazonaws.com/${key}`, url: `${base}/mockexamqns/image?key=${encodeURIComponent(key)}`, fileName: f.originalname };
+      })
+    );
+    return res.status(201).json({ status: true, message: 'Images uploaded successfully', files });
+  } catch (err) {
+    return res.status(500).json({ status: false, message: err.message || 'Upload failed' });
+  }
+};
+
+// ─── UPLOAD IMAGE ─────────────────────────────────────────────────────────────
+const uploadImagePassage = async (req, res) => {
+  try {
+    if (!req.files?.length) return res.status(400).json({ status: false, message: 'No files uploaded' });
+    if (!BUCKET) return res.status(500).json({ status: false, message: 'S3 bucket not configured' });
+    const base = `${req.protocol}://${req.get('host')}`;
+    const files = await Promise.all(
+      req.files.map(async (f) => {
+        const key = buildImageKeypass(f.originalname);
+        await s3Client.send(new PutObjectCommand({ Bucket: BUCKET, Key: key, Body: f.buffer, ContentType: f.mimetype }));
+        return { key, s3Url: `https://${BUCKET}.s3.${REGION}.amazonaws.com/${key}`, url: `${base}/mockexamqns/image?key=${encodeURIComponent(key)}`, fileName: f.originalname };
+      })
+    );
+    return res.status(201).json({ status: true, message: 'Images uploaded successfully', files });
+  } catch (err) {
+    return res.status(500).json({ status: false, message: err.message || 'Upload failed' });
+  }
+};
 
 const createInstruction = async (req, res, next) => {
   try {
@@ -241,5 +304,5 @@ const deletePassage = async (req, res, next) => {
   }
 };
 
-export const instructionController = { createInstruction, updateInstruction, listInstructions, deleteInstruction };
-export const passageController = { createPassage, updatePassage, listPassages, deletePassage };
+export const instructionController = { createInstruction, updateInstruction, listInstructions, deleteInstruction, uploadImageInstruction };
+export const passageController = { createPassage, updatePassage, listPassages, deletePassage, uploadImagePassage };
