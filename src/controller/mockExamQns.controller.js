@@ -82,7 +82,7 @@ function validateQDoc(d, label) {
 }
 
 // ─── UPLOAD IMAGE ─────────────────────────────────────────────────────────────
-export const uploadImage = async (req, res) => {
+const uploadImage = async (req, res) => {
   try {
     if (!req.files?.length) return res.status(400).json({ status: false, message: 'No files uploaded' });
     if (!BUCKET) return res.status(500).json({ status: false, message: 'S3 bucket not configured' });
@@ -101,7 +101,7 @@ export const uploadImage = async (req, res) => {
 };
 
 // ─── GET IMAGE ────────────────────────────────────────────────────────────────
-export const getImage = async (req, res) => {
+const getImage = async (req, res) => {
   try {
     const key = extractKey(req.query?.url || req.body?.url || '');
     if (!key) return res.status(400).json({ status: false, message: 'key is required' });
@@ -114,31 +114,25 @@ export const getImage = async (req, res) => {
 };
 
 // ─── CREATE SINGLE QUESTION ───────────────────────────────────────────────────
-export const createQuestion = async (req, res, next) => {
+const createQuestion = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     const userId = pickUid(req);
     const examId = safeTrim(req.body?.examId);
     const sectionId = safeTrim(req.body?.sectionId);
-
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
     if (!examId) return res.status(400).json({ status: false, message: 'examId is required' });
     if (!sectionId) return res.status(400).json({ status: false, message: 'sectionId is required' });
-
     const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }, { 'sections.sectionId': 1, 'sections.subjectId': 1 }).lean();
     if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
     const section = (exam.sections || []).find((s) => safeTrim(s.sectionId) === sectionId);
     if (!section) return res.status(400).json({ status: false, message: 'sectionId not found in this exam' });
-
     const subjectIdRaw = req.body?.subjectId || section.subjectId;
     if (!subjectIdRaw || !mustObjId(subjectIdRaw)) return res.status(400).json({ status: false, message: 'subjectId is required' });
-
     if (req.body?.passageId && !mustObjId(req.body.passageId)) return res.status(400).json({ status: false, message: 'Invalid passageId' });
-
     const qt = safeTrim(req.body?.questionType).toLowerCase();
     const diff = safeTrim(req.body?.difficulty || 'medium').toLowerCase();
     const opts = normalizeOptions(req.body?.questionOptions);
-
     const doc = {
       tenantId,
       examId,
@@ -170,10 +164,8 @@ export const createQuestion = async (req, res, next) => {
       createdBy: userId,
       updatedBy: userId
     };
-
     const err = validateQDoc(doc, 'Question');
     if (err) return res.status(400).json({ status: false, message: err });
-
     const created = await MockExamQns.create(doc);
     return res.status(201).json({ status: true, message: 'Question created successfully', data: created });
   } catch (err) {
@@ -183,32 +175,27 @@ export const createQuestion = async (req, res, next) => {
 };
 
 // ─── BULK CREATE QUESTIONS ────────────────────────────────────────────────────
-export const createQuestionsBulk = async (req, res, next) => {
+const createQuestionsBulk = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     const userId = pickUid(req);
     const examId = safeTrim(req.body?.examId);
     const sectionId = safeTrim(req.body?.sectionId);
     const payload = Array.isArray(req.body?.questions) ? req.body.questions : [];
-
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
     if (!examId) return res.status(400).json({ status: false, message: 'examId is required' });
     if (!sectionId) return res.status(400).json({ status: false, message: 'sectionId is required' });
     if (!payload.length) return res.status(400).json({ status: false, message: 'questions[] must be non-empty' });
-
     const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }, { 'sections.sectionId': 1, 'sections.subjectId': 1 }).lean();
     if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
     const section = (exam.sections || []).find((s) => safeTrim(s.sectionId) === sectionId);
     if (!section) return res.status(400).json({ status: false, message: 'sectionId not found in this exam' });
-
     const secSubjectId = section.subjectId ? new mongoose.Types.ObjectId(String(section.subjectId)) : null;
-
     const incomingIds = payload.map((q) => safeTrim(q?.questionId)).filter(Boolean);
     if (incomingIds.length) {
       const existing = await MockExamQns.find({ tenantId, examId, questionId: { $in: incomingIds }, isdeleted: false }, { questionId: 1, _id: 0 }).lean();
       if (existing.length) return res.status(409).json({ status: false, message: 'Duplicate questionIds found', conflicts: existing.map((e) => e.questionId) });
     }
-
     const docs = payload.map((q, idx) => {
       const qt = safeTrim(q?.questionType).toLowerCase();
       const subjectRaw = q?.subjectId || secSubjectId;
@@ -244,12 +231,10 @@ export const createQuestionsBulk = async (req, res, next) => {
         updatedBy: userId
       };
     });
-
     for (let i = 0; i < docs.length; i++) {
       const e = validateQDoc(docs[i], `Row ${i + 1}`);
       if (e) return res.status(400).json({ status: false, message: e });
     }
-
     const inserted = await MockExamQns.insertMany(docs, { ordered: true });
     return res.status(201).json({ status: true, message: 'Questions created successfully', insertedCount: inserted.length, data: inserted });
   } catch (err) {
@@ -258,7 +243,7 @@ export const createQuestionsBulk = async (req, res, next) => {
 };
 
 // ─── UPDATE QUESTION ──────────────────────────────────────────────────────────
-export const updateQuestion = async (req, res, next) => {
+const updateQuestion = async (req, res, next) => {
   try {
     const recId = safeTrim(req.body?.recId);
     const userId = pickUid(req);
@@ -311,15 +296,13 @@ export const updateQuestion = async (req, res, next) => {
 };
 
 // ─── DELETE QUESTION ──────────────────────────────────────────────────────────
-export const deleteQuestion = async (req, res, next) => {
+const deleteQuestion = async (req, res, next) => {
   try {
     const recId = safeTrim(req.body?.recId);
     const userId = pickUid(req);
     if (!recId) return res.status(400).json({ status: false, message: 'recId is required' });
-
     const updated = await MockExamQns.findOneAndUpdate({ _id: recId, isdeleted: false }, { $set: { isdeleted: true, status: 'inactive', updatedBy: userId } }, { new: true }).lean();
     if (!updated) return res.status(404).json({ status: false, message: 'Question not found or already deleted' });
-
     return res.status(200).json({ status: true, message: 'Question deleted successfully' });
   } catch (err) {
     return next(err);
@@ -327,15 +310,13 @@ export const deleteQuestion = async (req, res, next) => {
 };
 
 // ─── BULK DELETE BY SECTION ───────────────────────────────────────────────────
-export const bulkDeleteBySection = async (req, res, next) => {
+const bulkDeleteBySection = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     const examId = safeTrim(req.body?.examId);
     const sectionId = safeTrim(req.body?.sectionId);
     const userId = pickUid(req);
-
     if (!tenantId || !examId || !sectionId) return res.status(400).json({ status: false, message: 'tenantId, examId, sectionId are required' });
-
     const result = await MockExamQns.updateMany({ tenantId, examId, sectionId, isdeleted: false }, { $set: { isdeleted: true, status: 'inactive', updatedBy: userId } });
     return res.status(200).json({ status: true, message: 'Bulk delete successful', matchedCount: result.matchedCount, modifiedCount: result.modifiedCount });
   } catch (err) {
@@ -344,20 +325,17 @@ export const bulkDeleteBySection = async (req, res, next) => {
 };
 
 // ─── LIST BY SECTION ──────────────────────────────────────────────────────────
-export const listQuestionsBySection = async (req, res, next) => {
+const listQuestionsBySection = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     const examId = safeTrim(req.body?.examId);
     const sectionId = safeTrim(req.body?.sectionId);
-
-    if (!tenantId || !examId || !sectionId) return res.status(400).json({ status: false, message: 'tenantId, examId, sectionId are required' });
-
+    if (!tenantId || !examId || !sectionId) return res.status(400).json({ status: false, message: 'tenantId, examId are required' });
     const query = { tenantId, examId, sectionId, isdeleted: false };
     if (req.body?.difficulty) query.difficulty = safeTrim(req.body.difficulty).toLowerCase();
     if (req.body?.questionType) query.questionType = safeTrim(req.body.questionType).toLowerCase();
     if (req.body?.status) query.status = safeTrim(req.body.status);
     if (req.body?.subjectId && mustObjId(req.body.subjectId)) query.subjectId = new mongoose.Types.ObjectId(String(req.body.subjectId));
-
     const questions = await MockExamQns.find(query).sort({ sortOrder: 1 }).lean();
     return res.status(200).json({ status: true, data: questions, count: questions.length });
   } catch (err) {
@@ -366,30 +344,15 @@ export const listQuestionsBySection = async (req, res, next) => {
 };
 
 // ─── GET QUESTIONS BY EXAM (password protected) ───────────────────────────────
-export const getQuestionsByExam = async (req, res, next) => {
+const getQuestionsByExam = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     const examId = safeTrim(req.body?.examId);
-    const examCode = safeTrim(req.body?.examCode);
-    const password = safeTrim(req.body?.password);
-
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-    if (!examId && !examCode) return res.status(400).json({ status: false, message: 'examId or examCode is required' });
-    if (!password) return res.status(400).json({ status: false, message: 'password is required' });
-
-    const examQuery = { tenantId, isdeleted: false, ...(examId ? { examId } : { examCode }) };
+    const examQuery = { tenantId, isdeleted: false, examId };
     const exam = await MockExam.findOne(examQuery).lean();
     if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
-    if (safeTrim(exam.password) !== password) return res.status(401).json({ status: false, message: 'Invalid password' });
-
-    const now = Date.now();
-    if (exam.startTime && now < exam.startTime) return res.status(403).json({ status: false, message: 'Exam has not started yet' });
-    if (exam.endTime && now > exam.endTime) return res.status(403).json({ status: false, message: 'Exam window has closed' });
-
-    // fetch questions — strip answer-related fields for student
-    const questions = await MockExamQns.find({ tenantId, examId: exam.examId, isdeleted: false, status: 'active' }, { solutionHtml: 0, correctAnswer: 0, 'questionOptions.isCorrect': 0, 'questionOptions.partialMark': 0 }).sort({ sectionId: 1, sortOrder: 1 }).lean();
-
-    // populate passageId refs
+    const questions = await MockExamQns.find({ tenantId, examId: exam.examId, isdeleted: false, status: 'active' }, {}).sort({ sectionId: 1, sortOrder: 1 }).populate('subjectId', 'subjectName subjectCode').lean();
     const passageIds = [...new Set(questions.filter((q) => q.passageId).map((q) => String(q.passageId)))];
     let passageMap = new Map();
     if (passageIds.length) {
@@ -400,8 +363,6 @@ export const getQuestionsByExam = async (req, res, next) => {
       ...q,
       passageData: q.passageId ? passageMap.get(String(q.passageId)) || null : null
     }));
-
-    // group by section
     const secMap = new Map((exam.sections || []).map((s) => [safeTrim(s.sectionId), s]));
     const grouped = {};
     for (const q of enriched) {
@@ -413,7 +374,68 @@ export const getQuestionsByExam = async (req, res, next) => {
       grouped[sid].questions.push(q);
     }
     const sections = Object.values(grouped).sort((a, b) => a.sortOrder - b.sortOrder);
+    return res.status(200).json({
+      status: true,
+      message: 'Questions loaded',
+      data: {
+        examId: exam.examId,
+        examCode: exam.examCode,
+        examName: exam.examName,
+        duration: exam.duration,
+        totalMarks: exam.totalMarks,
+        totalQuestions: exam.totalQuestions,
+        startTime: exam.startTime,
+        endTime: exam.endTime,
+        calculatorType: exam.calculatorType,
+        sections
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
 
+const getQuestionsByCode = async (req, res, next) => {
+  try {
+    const tenantId = pickTid(req);
+    const examId = safeTrim(req.body?.examId);
+    const examCode = safeTrim(req.body?.examCode);
+    const password = safeTrim(req.body?.password);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    if (!examId && !examCode) return res.status(400).json({ status: false, message: 'examId or examCode is required' });
+    if (!password) return res.status(400).json({ status: false, message: 'password is required' });
+    const examQuery = { tenantId, isdeleted: false, ...(examId ? { examId } : { examCode }) };
+    const exam = await MockExam.findOne(examQuery).lean();
+    if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
+    if (safeTrim(exam.password) !== password) return res.status(401).json({ status: false, message: 'Invalid password' });
+    const now = Date.now();
+    if (exam.startTime && now < exam.startTime) return res.status(403).json({ status: false, message: 'Exam has not started yet' });
+    if (exam.endTime && now > exam.endTime) return res.status(403).json({ status: false, message: 'Exam window has closed' });
+    const questions = await MockExamQns.find({ tenantId, examId: exam.examId, isdeleted: false, status: 'active' }, { solutionHtml: 0, correctAnswer: 0, 'questionOptions.isCorrect': 0, 'questionOptions.partialMark': 0 })
+      .sort({ sectionId: 1, sortOrder: 1 })
+      .populate('subjectId', 'subjectName subjectCode')
+      .lean();
+    const passageIds = [...new Set(questions.filter((q) => q.passageId).map((q) => String(q.passageId)))];
+    let passageMap = new Map();
+    if (passageIds.length) {
+      const passages = await ExamPassage.find({ _id: { $in: passageIds }, isdeleted: false }, { passageHtml: 1, title: 1 }).lean();
+      passageMap = new Map(passages.map((p) => [String(p._id), p]));
+    }
+    const enriched = questions.map((q) => ({
+      ...q,
+      passageData: q.passageId ? passageMap.get(String(q.passageId)) || null : null
+    }));
+    const secMap = new Map((exam.sections || []).map((s) => [safeTrim(s.sectionId), s]));
+    const grouped = {};
+    for (const q of enriched) {
+      const sid = safeTrim(q.sectionId);
+      if (!grouped[sid]) {
+        const sec = secMap.get(sid) || {};
+        grouped[sid] = { sectionId: sid, sectionCode: sec.sectionCode || sid, sectionName: sec.sectionName || sid, subjectId: sec.subjectId || null, sortOrder: sec.sortOrder || 0, questions: [] };
+      }
+      grouped[sid].questions.push(q);
+    }
+    const sections = Object.values(grouped).sort((a, b) => a.sortOrder - b.sortOrder);
     return res.status(200).json({
       status: true,
       message: 'Questions loaded',
@@ -436,7 +458,7 @@ export const getQuestionsByExam = async (req, res, next) => {
 };
 
 // ─── VIEW SINGLE QUESTION (admin) ─────────────────────────────────────────────
-export const viewQuestion = async (req, res, next) => {
+const viewQuestion = async (req, res, next) => {
   try {
     const recId = safeTrim(req.body?.recId);
     if (!recId) return res.status(400).json({ status: false, message: 'recId is required' });
@@ -451,7 +473,7 @@ export const viewQuestion = async (req, res, next) => {
 };
 
 // ─── UPDATE SORT ORDER ────────────────────────────────────────────────────────
-export const updateSortOrder = async (req, res, next) => {
+const updateSortOrder = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     const examId = safeTrim(req.body?.examId);
@@ -474,4 +496,4 @@ export const updateSortOrder = async (req, res, next) => {
   }
 };
 
-export default { uploadImage, getImage, createQuestion, createQuestionsBulk, updateQuestion, deleteQuestion, bulkDeleteBySection, listQuestionsBySection, getQuestionsByExam, viewQuestion, updateSortOrder };
+export default { uploadImage, getImage, createQuestion, createQuestionsBulk, updateQuestion, deleteQuestion, bulkDeleteBySection, listQuestionsBySection, getQuestionsByExam, viewQuestion, updateSortOrder, getQuestionsByCode };
