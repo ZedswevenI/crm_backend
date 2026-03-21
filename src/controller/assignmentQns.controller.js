@@ -67,12 +67,12 @@ const ALLOWED_DIFFICULTY = new Set(['easy', 'medium', 'hard']);
 
 function needsOptions(qt) {
   const t = safeTrim(qt).toLowerCase();
-  return t === 'mcq_single' || t === 'mcq_multi' || t === 'true_false';
+  return t === 'mcq_single' || t === 'mcq_multi';
 }
 
 function needsAtLeastOneCorrect(qt) {
   const t = safeTrim(qt).toLowerCase();
-  return t === 'mcq_single' || t === 'true_false';
+  return t === 'mcq_single';
 }
 
 function normalizeImages(images) {
@@ -806,7 +806,7 @@ const createQuestion = async (req, res, next) => {
       if (!normalizedOptions.length) {
         return res.status(400).json({
           status: false,
-          message: 'questionOptions is required for mcq_single / mcq_multi / true_false'
+          message: 'questionOptions is required for mcq_single / mcq_multi'
         });
       }
       if (needsAtLeastOneCorrect(qt)) {
