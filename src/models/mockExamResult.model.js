@@ -16,7 +16,8 @@ const AnswerSchema = new mongoose.Schema(
     negativeMarks: { type: Number, default: 0 },
     marksAwarded: { type: Number, default: 0 },
     correctAnswerRaw: { type: mongoose.Schema.Types.Mixed, default: null },
-    hasPartialMarking: { type: Boolean, default: false }
+    hasPartialMarking: { type: Boolean, default: false },
+    timeTaken: { type: Number, default: 0 }
   },
   { _id: false }
 );
@@ -32,7 +33,7 @@ const SectionResultSchema = new mongoose.Schema(
     skippedCount: { type: Number, default: 0 },
     totalMarks: { type: Number, default: 0 },
     obtainedMarks: { type: Number, default: 0 },
-    timeTaken: { type: Number, default: 0 } // ms
+    timeTaken: { type: Number, default: 0 }
   },
   { _id: false }
 );
