@@ -141,14 +141,16 @@ routes.post('/ptm/schedule/import', validatetoken, programCtrl.bulkImportSchedul
 routes.post('/ptm/parent/feedback', programCtrl.submitParentPTMFeedback);
 routes.post('/ptm/staff/feedback', validatetoken, programCtrl.submitStaffFeedback);
 routes.post('/ptm/staff/feedback/import', validatetoken, programCtrl.bulkImportFeedback);
-routes.post('/ptm/list', programCtrl.listPTMs);
+routes.post('/ptm/liststudents', programCtrl.listPTMs);
+routes.post('/ptm/list', validatetoken, programCtrl.listPtmSessions);
 routes.post('/ptm/view', programCtrl.viewPTM);
 routes.post('/ptm/update', validatetoken, programCtrl.editPTM);
 routes.post('/ptm/remove', validatetoken, programCtrl.removePTM);
+routes.post('/ptm/togglepostfeedback', validatetoken, programCtrl.togglePostPtmFeedback);
 routes.post('/ptm/student/add', validatetoken, programCtrl.addStudentsToPTM);
 routes.post('/ptm/student/remove', validatetoken, programCtrl.removeStudentsFromPTM);
-routes.post('/ptm/preptm/submit', validatetoken, programCtrl.submitPrePtmFeedback);
-routes.post('/ptm/postptm/submit', validatetoken, programCtrl.submitPostPtmFeedback);
+routes.post('/ptm/preptm/submit', programCtrl.submitPrePtmFeedback);
+routes.post('/ptm/postptm/submit', programCtrl.submitPostPtmFeedback);
 
 // Package Reports
 routes.post('/package/upload', validatetoken, upload.single('file'), packageCtrl.uploadPackageFile);
