@@ -682,8 +682,6 @@ const removeSubjectsFromProgram = async (req, res, next) => {
 //   }
 // };
 
-import { getPrePtmQuestions, getPostPtmQuestions } from '../helpers/ptmFeedbackQuestions.constants.js';
-
 const schedulePTM = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
@@ -834,7 +832,7 @@ const bulkImportSchedule = async (req, res, next) => {
   }
 };
 
-const submitPrePTMFeedback = async (req, res, next) => {
+const submitParentPTMFeedback = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     const { ptmId, prePtmFeedback } = req.body;
@@ -1318,7 +1316,7 @@ export default {
   removeSubjectsFromProgram,
   schedulePTM,
   bulkImportSchedule,
-  submitPrePTMFeedback,
+  submitParentPTMFeedback,
   submitStaffFeedback,
   bulkImportFeedback,
   listPTMs,
@@ -1327,6 +1325,6 @@ export default {
   removePTM,
   addStudentsToPTM,
   removeStudentsFromPTM,
-  submitPrePTMFeedback,
+  submitPrePtmFeedback,
   submitPostPtmFeedback
 };

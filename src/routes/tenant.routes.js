@@ -138,7 +138,7 @@ routes.post('/exam/subcategory/view', validatetoken, manageCtrl.viewExamSubCateg
 // PTM Routes
 routes.post('/ptm/schedule', validatetoken, programCtrl.schedulePTM);
 routes.post('/ptm/schedule/import', validatetoken, programCtrl.bulkImportSchedule);
-routes.post('/ptm/parent/feedback', programCtrl.submitPrePTMFeedback);
+routes.post('/ptm/parent/feedback', programCtrl.submitParentPTMFeedback);
 routes.post('/ptm/staff/feedback', validatetoken, programCtrl.submitStaffFeedback);
 routes.post('/ptm/staff/feedback/import', validatetoken, programCtrl.bulkImportFeedback);
 routes.post('/ptm/list', programCtrl.listPTMs);
@@ -147,7 +147,7 @@ routes.post('/ptm/update', validatetoken, programCtrl.editPTM);
 routes.post('/ptm/remove', validatetoken, programCtrl.removePTM);
 routes.post('/ptm/student/add', validatetoken, programCtrl.addStudentsToPTM);
 routes.post('/ptm/student/remove', validatetoken, programCtrl.removeStudentsFromPTM);
-routes.post('/ptm/preptm/submit', validatetoken, programCtrl.submitPrePTMFeedback);
+routes.post('/ptm/preptm/submit', validatetoken, programCtrl.submitPrePtmFeedback);
 routes.post('/ptm/postptm/submit', validatetoken, programCtrl.submitPostPtmFeedback);
 
 // Package Reports
