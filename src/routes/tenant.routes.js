@@ -147,6 +147,8 @@ routes.post('/ptm/update', validatetoken, programCtrl.editPTM);
 routes.post('/ptm/remove', validatetoken, programCtrl.removePTM);
 routes.post('/ptm/student/add', validatetoken, programCtrl.addStudentsToPTM);
 routes.post('/ptm/student/remove', validatetoken, programCtrl.removeStudentsFromPTM);
+routes.post('/ptm/preptm/submit', validatetoken, programCtrl.submitPrePTMFeedback);
+routes.post('/ptm/postptm/submit', validatetoken, programCtrl.submitPostPtmFeedback);
 
 // Package Reports
 routes.post('/package/upload', validatetoken, upload.single('file'), packageCtrl.uploadPackageFile);

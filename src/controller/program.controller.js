@@ -6,6 +6,7 @@ import ExamCategory from '../models/examcategory.model.js';
 import ExamSubCategory from '../models/examsubcategory.model.js';
 import PTM from '../models/ptm.model.js';
 import StudentProfile from '../models/studentProfile.model.js';
+import { getPrePtmQuestions, getPostPtmQuestions } from '../helpers/ptmFbQns.constants.js';
 
 const pickTenantId = (req) => (req.body?.entiId || req.body?.tenantId || '').toString().trim();
 const safeTrim = (v) => (v === null || v === undefined ? '' : String(v)).trim();
@@ -36,6 +37,34 @@ const parseDateTimeToEpoch = (dateStr, timeStr) => {
   const dtString = timeStr && timeStr !== 'NULL' ? `${dateStr} ${timeStr}` : `${dateStr} 00:00:00`;
   const parsed = new Date(dtString).getTime();
   return Number.isNaN(parsed) ? null : parsed;
+};
+const VALID_FIELD_TYPES = ['text', 'radio', 'checkbox'];
+const normalizeQuestions = (raw) => {
+  if (!Array.isArray(raw) || raw.length === 0) return { valid: true, questions: [] };
+  const questions = [];
+  for (let i = 0; i < raw.length; i++) {
+    const q = raw[i] || {};
+    const fieldType = safeTrim(q.fieldType).toLowerCase();
+    if (!VALID_FIELD_TYPES.includes(fieldType)) {
+      return { valid: false, message: `Question ${i + 1}: invalid fieldType "${q.fieldType}"` };
+    }
+    const fieldText = safeTrim(q.fieldText);
+    if (!fieldText) {
+      return { valid: false, message: `Question ${i + 1}: fieldText is required` };
+    }
+    const fieldOptions = Array.isArray(q.fieldOptions) ? q.fieldOptions.map((o) => safeTrim(String(o))).filter(Boolean) : [];
+    if ((fieldType === 'radio' || fieldType === 'checkbox') && fieldOptions.length < 2) {
+      return { valid: false, message: `Question ${i + 1}: "${fieldType}" needs at least 2 fieldOptions` };
+    }
+    questions.push({
+      fieldId: q.fieldId ? safeTrim(q.fieldId) : uuid(),
+      fieldType,
+      fieldText,
+      fieldOptions: fieldType === 'text' ? [] : fieldOptions,
+      fieldValue: null
+    });
+  }
+  return { valid: true, questions };
 };
 
 const createProgram = async (req, res, next) => {
@@ -598,37 +627,103 @@ const removeSubjectsFromProgram = async (req, res, next) => {
   }
 };
 
+// const schedulePTM = async (req, res, next) => {
+//   try {
+//     const tenantId = pickTenantId(req);
+//     const userId = safeTrim(req.body?.userId);
+//     const { scope, targetIds, ptmDate, startTime, endTime, durationMins, content, venue, meetingMode } = req.body;
+//     if (!tenantId || !scope || !Array.isArray(targetIds) || targetIds.length === 0) {
+//       return res.status(400).json({ status: false, message: 'Invalid scope or targetIds' });
+//     }
+//     if (!ptmDate || !startTime || !endTime) {
+//       return res.status(400).json({ status: false, message: 'ptmDate, startTime, and endTime are required (in Epoch ms)' });
+//     }
+//     const studentQuery = { tenantId, status: 'ACTIVE', isdeleted: false };
+//     if (scope === 'CENTER') studentQuery.centerCode = { $in: targetIds };
+//     else if (scope === 'PROGRAM') studentQuery.programCode = { $in: targetIds };
+//     else if (scope === 'BATCH') studentQuery.batchCode = { $in: targetIds };
+//     else if (scope === 'STUDENT') studentQuery.studentId = { $in: targetIds };
+//     else return res.status(400).json({ status: false, message: 'Invalid scope' });
+//     const students = await StudentProfile.find(studentQuery).lean();
+//     if (!students.length) {
+//       return res.status(404).json({ status: false, message: 'No active students found for the given scope' });
+//     }
+//     const bulkOps = students.map((st) => ({
+//       updateOne: {
+//         filter: { tenantId, admissionNo: st.admissionNo, startTime: Number(startTime), isdeleted: false },
+//         update: {
+//           $setOnInsert: {
+//             ptmId: uuid(),
+//             studentId: st.studentId,
+//             studentName: st.student?.name || 'Unknown',
+//             centerCode: st.centerCode,
+//             programCode: st.programCode,
+//             batchCode: st.batchCode,
+//             createdBy: userId
+//           },
+//           $set: {
+//             ptmDate: Number(ptmDate),
+//             endTime: Number(endTime),
+//             durationMins: toInt(durationMins, 15),
+//             content: safeTrim(content),
+//             venue: safeTrim(venue),
+//             meetingMode: safeTrim(meetingMode) || 'OFFLINE',
+//             status: 'SCHEDULED',
+//             updatedBy: userId
+//           }
+//         },
+//         upsert: true
+//       }
+//     }));
+//     await PTM.bulkWrite(bulkOps, { ordered: false });
+//     return res.status(201).json({ status: true, message: `Successfully scheduled PTM for ${students.length} student(s).` });
+//   } catch (err) {
+//     return next(err);
+//   }
+// };
+
+import { getPrePtmQuestions, getPostPtmQuestions } from '../helpers/ptmFeedbackQuestions.constants.js';
+
 const schedulePTM = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     const userId = safeTrim(req.body?.userId);
-    const { scope, targetIds, ptmDate, startTime, endTime, durationMins, content, venue, meetingMode } = req.body;
-    if (!tenantId || !scope || !Array.isArray(targetIds) || targetIds.length === 0) {
-      return res.status(400).json({ status: false, message: 'Invalid scope or targetIds' });
-    }
-    if (!ptmDate || !startTime || !endTime) {
-      return res.status(400).json({ status: false, message: 'ptmDate, startTime, and endTime are required (in Epoch ms)' });
-    }
+    const { scope, targetIds, ptmDate, startTime, endTime, durationMins, content, venue, meetingMode, enablePostPtmFeedback } = req.body;
+
+    if (!tenantId || !scope || !Array.isArray(targetIds) || !targetIds.length) return res.status(400).json({ status: false, message: 'Invalid scope or targetIds' });
+    if (!ptmDate || !startTime || !endTime) return res.status(400).json({ status: false, message: 'ptmDate, startTime, endTime required (epoch ms)' });
+    if (Number(startTime) >= Number(endTime)) return res.status(400).json({ status: false, message: 'endTime must be after startTime' });
+
+    // Auto-inject questions from constants — frontend never sends these
+    const prePtmQuestions = getPrePtmQuestions();
+    const postPtmQuestions = getPostPtmQuestions();
+
+    // Build student query by scope
     const studentQuery = { tenantId, status: 'ACTIVE', isdeleted: false };
     if (scope === 'CENTER') studentQuery.centerCode = { $in: targetIds };
     else if (scope === 'PROGRAM') studentQuery.programCode = { $in: targetIds };
     else if (scope === 'BATCH') studentQuery.batchCode = { $in: targetIds };
     else if (scope === 'STUDENT') studentQuery.studentId = { $in: targetIds };
-    else return res.status(400).json({ status: false, message: 'Invalid scope' });
+    else return res.status(400).json({ status: false, message: 'Invalid scope. Use CENTER | PROGRAM | BATCH | STUDENT' });
+
     const students = await StudentProfile.find(studentQuery).lean();
-    if (!students.length) {
-      return res.status(404).json({ status: false, message: 'No active students found for the given scope' });
-    }
+    if (!students.length) return res.status(404).json({ status: false, message: 'No active students found for the given scope' });
+
     const bulkOps = students.map((st) => ({
       updateOne: {
-        filter: { tenantId, admissionNo: st.admissionNo, startTime: Number(startTime), isdeleted: false },
+        filter: {
+          tenantId,
+          admissionNo: st.admissionNo,
+          startTime: Number(startTime),
+          isdeleted: false
+        },
         update: {
           $setOnInsert: {
             ptmId: uuid(),
             studentId: st.studentId,
             studentName: st.student?.name || 'Unknown',
             centerCode: st.centerCode,
-            programCode: st.programCode,
+            programCode: st.programCode || null,
             batchCode: st.batchCode,
             createdBy: userId
           },
@@ -636,18 +731,40 @@ const schedulePTM = async (req, res, next) => {
             ptmDate: Number(ptmDate),
             endTime: Number(endTime),
             durationMins: toInt(durationMins, 15),
-            content: safeTrim(content),
-            venue: safeTrim(venue),
+            content: safeTrim(content) || null,
+            venue: safeTrim(venue) || null,
             meetingMode: safeTrim(meetingMode) || 'OFFLINE',
             status: 'SCHEDULED',
+            enablePostPtmFeedback: enablePostPtmFeedback === true,
+            // Auto-injected from constants
+            prePtmQuestions,
+            postPtmQuestions,
+            // Reset submission state on reschedule/upsert
+            prePtmRemarks: null,
+            prePtmSubmittedAt: null,
+            postPtmRemarks: null,
+            postPtmSubmittedAt: null,
             updatedBy: userId
           }
         },
         upsert: true
       }
     }));
-    await PTM.bulkWrite(bulkOps, { ordered: false });
-    return res.status(201).json({ status: true, message: `Successfully scheduled PTM for ${students.length} student(s).` });
+
+    const result = await PTM.bulkWrite(bulkOps, { ordered: false });
+
+    return res.status(201).json({
+      status: true,
+      message: `PTM scheduled for ${students.length} student(s).`,
+      data: {
+        totalStudents: students.length,
+        inserted: result.upsertedCount || 0,
+        updated: result.modifiedCount || 0,
+        enablePostPtmFeedback: enablePostPtmFeedback === true,
+        prePtmQuestionsCount: prePtmQuestions.length,
+        postPtmQuestionsCount: postPtmQuestions.length
+      }
+    });
   } catch (err) {
     return next(err);
   }
@@ -1043,6 +1160,152 @@ const removeStudentsFromPTM = async (req, res, next) => {
   }
 };
 
+const submitPrePtmFeedback = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const ptmId = safeTrim(req.body?.ptmId);
+    const answers = req.body?.answers; // [{ fieldId, fieldValue }]
+    const remarks = safeTrim(req.body?.prePtmRemarks);
+
+    if (!tenantId || !ptmId) return res.status(400).json({ status: false, message: 'tenantId and ptmId are required' });
+    if (!Array.isArray(answers) || answers.length === 0) return res.status(400).json({ status: false, message: 'answers array is required' });
+
+    // Fetch the PTM doc
+    const ptm = await PTM.findOne({ tenantId, ptmId, isdeleted: false }).lean();
+    if (!ptm) return res.status(404).json({ status: false, message: 'PTM not found' });
+
+    // Guard: only allow on SCHEDULED PTMs
+    if (ptm.status !== 'SCHEDULED') return res.status(400).json({ status: false, message: `Cannot submit pre-PTM feedback when status is ${ptm.status}` });
+
+    // Guard: already submitted
+    if (ptm.prePtmSubmittedAt) return res.status(409).json({ status: false, message: 'Pre-PTM feedback already submitted' });
+
+    // Build a map of incoming answers keyed by fieldId
+    const answerMap = new Map(answers.map((a) => [safeTrim(String(a.fieldId || '')), a.fieldValue]));
+
+    // Validate and apply fieldValue per question
+    const updatedQuestions = ptm.prePtmQuestions.map((q) => {
+      if (!answerMap.has(q.fieldId)) return q; // unanswered questions stay null
+      const raw = answerMap.get(q.fieldId);
+      let fieldValue;
+
+      if (q.fieldType === 'text') {
+        fieldValue = safeTrim(String(raw ?? '')) || null;
+      } else if (q.fieldType === 'radio') {
+        const val = safeTrim(String(raw ?? ''));
+        if (val && !q.fieldOptions.includes(val)) throw Object.assign(new Error(`Invalid option "${val}" for question "${q.fieldText}"`), { statusCode: 400 });
+        fieldValue = val || null;
+      } else if (q.fieldType === 'checkbox') {
+        const vals = Array.isArray(raw) ? raw : [raw];
+        const cleaned = vals.map((v) => safeTrim(String(v ?? ''))).filter(Boolean);
+        const bad = cleaned.find((v) => !q.fieldOptions.includes(v));
+        if (bad) throw Object.assign(new Error(`Invalid option "${bad}" for question "${q.fieldText}"`), { statusCode: 400 });
+        fieldValue = cleaned.length ? cleaned : null;
+      }
+      return { ...q, fieldValue };
+    });
+
+    const updated = await PTM.findOneAndUpdate(
+      { tenantId, ptmId, isdeleted: false },
+      {
+        $set: {
+          prePtmQuestions: updatedQuestions,
+          prePtmRemarks: remarks || null,
+          prePtmSubmittedAt: Date.now()
+        }
+      },
+      { new: true }
+    ).lean();
+
+    return res.status(200).json({
+      status: true,
+      message: 'Pre-PTM feedback submitted successfully',
+      data: {
+        ptmId,
+        prePtmQuestions: updated.prePtmQuestions,
+        prePtmRemarks: updated.prePtmRemarks,
+        prePtmSubmittedAt: updated.prePtmSubmittedAt
+      }
+    });
+  } catch (err) {
+    if (err.statusCode === 400) return res.status(400).json({ status: false, message: err.message });
+    return next(err);
+  }
+};
+
+const submitPostPtmFeedback = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const ptmId = safeTrim(req.body?.ptmId);
+    const answers = req.body?.answers; // [{ fieldId, fieldValue }]
+    const remarks = safeTrim(req.body?.postPtmRemarks);
+
+    if (!tenantId || !ptmId) return res.status(400).json({ status: false, message: 'tenantId and ptmId are required' });
+    if (!Array.isArray(answers) || answers.length === 0) return res.status(400).json({ status: false, message: 'answers array is required' });
+
+    const ptm = await PTM.findOne({ tenantId, ptmId, isdeleted: false }).lean();
+    if (!ptm) return res.status(404).json({ status: false, message: 'PTM not found' });
+
+    // Guard: post-PTM feedback must be enabled
+    if (!ptm.enablePostPtmFeedback) return res.status(403).json({ status: false, message: 'Post-PTM feedback is not enabled for this PTM' });
+
+    // Guard: PTM must be completed
+    if (ptm.status !== 'COMPLETED') return res.status(400).json({ status: false, message: `Cannot submit post-PTM feedback when status is ${ptm.status}` });
+
+    // Guard: already submitted
+    if (ptm.postPtmSubmittedAt) return res.status(409).json({ status: false, message: 'Post-PTM feedback already submitted' });
+
+    const answerMap = new Map(answers.map((a) => [safeTrim(String(a.fieldId || '')), a.fieldValue]));
+
+    const updatedQuestions = ptm.postPtmQuestions.map((q) => {
+      if (!answerMap.has(q.fieldId)) return q;
+      const raw = answerMap.get(q.fieldId);
+      let fieldValue;
+
+      if (q.fieldType === 'text') {
+        fieldValue = safeTrim(String(raw ?? '')) || null;
+      } else if (q.fieldType === 'radio') {
+        const val = safeTrim(String(raw ?? ''));
+        if (val && !q.fieldOptions.includes(val)) throw Object.assign(new Error(`Invalid option "${val}" for question "${q.fieldText}"`), { statusCode: 400 });
+        fieldValue = val || null;
+      } else if (q.fieldType === 'checkbox') {
+        const vals = Array.isArray(raw) ? raw : [raw];
+        const cleaned = vals.map((v) => safeTrim(String(v ?? ''))).filter(Boolean);
+        const bad = cleaned.find((v) => !q.fieldOptions.includes(v));
+        if (bad) throw Object.assign(new Error(`Invalid option "${bad}" for question "${q.fieldText}"`), { statusCode: 400 });
+        fieldValue = cleaned.length ? cleaned : null;
+      }
+      return { ...q, fieldValue };
+    });
+
+    const updated = await PTM.findOneAndUpdate(
+      { tenantId, ptmId, isdeleted: false },
+      {
+        $set: {
+          postPtmQuestions: updatedQuestions,
+          postPtmRemarks: remarks || null,
+          postPtmSubmittedAt: Date.now()
+        }
+      },
+      { new: true }
+    ).lean();
+
+    return res.status(200).json({
+      status: true,
+      message: 'Post-PTM feedback submitted successfully',
+      data: {
+        ptmId,
+        postPtmQuestions: updated.postPtmQuestions,
+        postPtmRemarks: updated.postPtmRemarks,
+        postPtmSubmittedAt: updated.postPtmSubmittedAt
+      }
+    });
+  } catch (err) {
+    if (err.statusCode === 400) return res.status(400).json({ status: false, message: err.message });
+    return next(err);
+  }
+};
+
 export default {
   createProgram,
   viewProgram,
@@ -1063,5 +1326,7 @@ export default {
   editPTM,
   removePTM,
   addStudentsToPTM,
-  removeStudentsFromPTM
+  removeStudentsFromPTM,
+  submitPrePTMFeedback,
+  submitPostPtmFeedback
 };
