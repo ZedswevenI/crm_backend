@@ -113,7 +113,7 @@ const buildSectionResults = (answers, sections, sectionTimings = {}) => {
 };
 
 // ─── SUBMIT RESULT ────────────────────────────────────────────────────────────
-export const submitResult = async (req, res, next) => {
+const submitResult = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     const admissionNo = safeTrim(req.body?.admissionNo);
@@ -124,28 +124,19 @@ export const submitResult = async (req, res, next) => {
     const startedAt = req.body?.startedAt ? toNum(req.body.startedAt) : null;
     const completedAt = req.body?.completedAt ? toNum(req.body.completedAt) : Date.now();
     const sectionTimings = req.body?.sectionTimings || {};
-
     if (!tenantId || !admissionNo || !examId) return res.status(400).json({ status: false, message: 'tenantId, admissionNo, examId are required' });
-
     const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }).lean();
     if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
-
     const now = Date.now();
     if (exam.startTime && now < exam.startTime) return res.status(403).json({ status: false, message: 'Exam has not started yet' });
-
     const isLate = !!(exam.endTime && completedAt > exam.endTime);
-
     const incomingAnswers = Array.isArray(req.body?.answers) ? req.body.answers : [];
     if (!incomingAnswers.length) return res.status(400).json({ status: false, message: 'answers[] is required' });
-
     const questions = await MockExamQns.find({ tenantId, examId, isdeleted: false }, { _id: 0, questionId: 1, sectionId: 1, questionType: 1, positiveMarks: 1, negativeMarks: 1, questionOptions: 1, hasPartialMarking: 1, numericMin: 1, numericMax: 1, correctAnswer: 1 }).lean();
-
     const qById = new Map(questions.map((q) => [safeTrim(q.questionId), q]));
     const totalPossible = questions.reduce((s, q) => s + toNum(q.positiveMarks), 0);
-
     const evaluated = [];
     let obtainedMarks = 0;
-
     for (const a of incomingAnswers) {
       const qid = safeTrim(a?.questionId);
       const sid = safeTrim(a?.sectionId);
@@ -155,7 +146,6 @@ export const submitResult = async (req, res, next) => {
       const answerRaw = isSkipped ? null : (a?.answerRaw ?? null);
       const pos = q ? toNum(q.positiveMarks) : toNum(a?.positiveMarks);
       const neg = q ? toNum(q.negativeMarks) : toNum(a?.negativeMarks);
-
       let isCorrect = null,
         correctAnswerRaw = null,
         marksAwarded = 0;
@@ -165,7 +155,6 @@ export const submitResult = async (req, res, next) => {
         correctAnswerRaw = ev.correctAnswerRaw ?? null;
         marksAwarded = ev.marksAwarded;
       }
-
       obtainedMarks += toNum(marksAwarded);
       evaluated.push({
         questionId: qid,
@@ -173,6 +162,7 @@ export const submitResult = async (req, res, next) => {
         answerRaw,
         isCorrect,
         isSkipped,
+        timeTaken: toNum(a.timeTaken, 0),
         positiveMarks: pos,
         negativeMarks: neg,
         marksAwarded,
@@ -180,10 +170,8 @@ export const submitResult = async (req, res, next) => {
         hasPartialMarking: q?.hasPartialMarking || false
       });
     }
-
     const sectionResults = buildSectionResults(evaluated, exam.sections, sectionTimings);
     const totalMarks = toNum(exam.totalMarks) || totalPossible;
-
     const doc = await MockExamResult.create({
       tenantId,
       examId,
@@ -206,8 +194,6 @@ export const submitResult = async (req, res, next) => {
       createdBy: safeTrim(req.body?.userId) || null,
       updatedBy: safeTrim(req.body?.userId) || null
     });
-
-    // update student status in batch assignment
     if (batchId) {
       await MockExamBatchAssign.updateOne(
         { tenantId, examId, batchId, isdeleted: false },
@@ -223,7 +209,6 @@ export const submitResult = async (req, res, next) => {
         { arrayFilters: [{ 'st.admissionNo': admissionNo }] }
       );
     }
-
     return res.status(200).json({
       status: true,
       message: 'Result submitted successfully',
@@ -236,7 +221,7 @@ export const submitResult = async (req, res, next) => {
 };
 
 // ─── GET MY RESULT ────────────────────────────────────────────────────────────
-export const getMyResult = async (req, res, next) => {
+const getMyResult = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     const examId = safeTrim(req.body?.examId);
@@ -259,14 +244,14 @@ export const getMyResult = async (req, res, next) => {
 };
 
 // ─── LEADERBOARD ──────────────────────────────────────────────────────────────
-export const getLeaderboard = async (req, res, next) => {
+const getLeaderboard = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     const examId = safeTrim(req.body?.examId);
 
     if (!tenantId || !examId) return res.status(400).json({ status: false, message: 'tenantId and examId are required' });
 
-    const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }, { status: 1, autoPublishAt: 1, password: 0 }).lean();
+    const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }, { status: 1, autoPublishAt: 1 }).lean();
     if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
 
     const now = Date.now();
@@ -295,7 +280,7 @@ export const getLeaderboard = async (req, res, next) => {
 };
 
 // ─── LIST RESULTS BY EXAM ─────────────────────────────────────────────────────
-export const listResultsByExam = async (req, res, next) => {
+const listResultsByExam = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     const examId = safeTrim(req.body?.examId);
@@ -320,7 +305,7 @@ export const listResultsByExam = async (req, res, next) => {
 };
 
 // ─── LIST RESULTS BY BATCH ────────────────────────────────────────────────────
-export const listResultsByBatch = async (req, res, next) => {
+const listResultsByBatch = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     const batchId = safeTrim(req.body?.batchId);
@@ -343,7 +328,7 @@ export const listResultsByBatch = async (req, res, next) => {
 };
 
 // ─── LIST RESULTS BY STUDENT ──────────────────────────────────────────────────
-export const listResultsByStudent = async (req, res, next) => {
+const listResultsByStudent = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     const admissionNo = safeTrim(req.body?.admissionNo);
@@ -365,20 +350,16 @@ export const listResultsByStudent = async (req, res, next) => {
   }
 };
 
-// ─── SECTION ANALYTICS ────────────────────────────────────────────────────────
-export const getSectionAnalytics = async (req, res, next) => {
+const getSectionAnalytics = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     const examId = safeTrim(req.body?.examId);
     if (!tenantId || !examId) return res.status(400).json({ status: false, message: 'tenantId and examId are required' });
-
-    const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }, { sections: 1, password: 0 }).lean();
+    const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }, { sections: 1 }).lean();
     if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
-
     const matchQ = { tenantId, examId, isdeleted: false, isResultVisible: true };
     if (safeTrim(req.body?.batchId)) matchQ.batchId = safeTrim(req.body.batchId);
     if (safeTrim(req.body?.centerId)) matchQ.centerId = safeTrim(req.body.centerId);
-
     const agg = await MockExamResult.aggregate([
       { $match: matchQ },
       { $unwind: '$sectionResults' },
@@ -396,7 +377,6 @@ export const getSectionAnalytics = async (req, res, next) => {
         }
       }
     ]);
-
     const secMap = new Map((exam.sections || []).map((s) => [safeTrim(s.sectionId), s]));
     const data = agg.map((r) => {
       const sec = secMap.get(safeTrim(r._id)) || {};
@@ -416,11 +396,213 @@ export const getSectionAnalytics = async (req, res, next) => {
         accuracy: attempted > 0 ? round2((r.totalCorrect / attempted) * 100) : 0
       };
     });
-
     return res.status(200).json({ status: true, message: 'Section analytics loaded', data });
   } catch (err) {
     return next(err);
   }
 };
 
-export default { submitResult, getMyResult, getLeaderboard, listResultsByExam, listResultsByBatch, listResultsByStudent, getSectionAnalytics };
+const getMyResultWithAnswers = async (req, res, next) => {
+  try {
+    const tenantId = pickTid(req);
+    const admissionNo = safeTrim(req.body?.admissionNo);
+    const examId = safeTrim(req.body?.examId);
+    if (!tenantId || !admissionNo || !examId) return res.status(400).json({ status: false, message: 'tenantId, admissionNo, examId are required' });
+    const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }, { status: 1, autoPublishAt: 1 }).lean();
+    if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
+    if (exam.status !== 'result_published') return res.status(403).json({ status: false, message: 'Result not published yet', autoPublishAt: exam.autoPublishAt || null });
+    const now = Date.now();
+    if (exam.autoPublishAt && now < exam.autoPublishAt) return res.status(403).json({ status: false, message: 'Result not available yet', autoPublishAt: exam.autoPublishAt });
+    const result = await MockExamResult.findOne({ tenantId, examId, admissionNo, isdeleted: false }).lean();
+    if (!result) return res.status(404).json({ status: false, message: 'Result not found for this student' });
+    if (!result.isResultVisible) return res.status(403).json({ status: false, message: 'Result is not visible yet' });
+    const questions = await MockExamQns.find(
+      { tenantId, examId, isdeleted: false },
+      {
+        questionId: 1,
+        sectionId: 1,
+        questionType: 1,
+        difficulty: 1,
+        questionHtml: 1,
+        questionOptions: 1,
+        correctAnswer: 1,
+        solutionHtml: 1,
+        enableSolution: 1,
+        positiveMarks: 1,
+        negativeMarks: 1,
+        hasPartialMarking: 1,
+        numericMin: 1,
+        numericMax: 1,
+        passageId: 1,
+        passageHtml: 1,
+        topicId: 1,
+        subTopicId: 1,
+        tags: 1,
+        sortOrder: 1
+      }
+    )
+      .sort({ sectionId: 1, sortOrder: 1 })
+      .populate('passageId', 'title passageHtml')
+      .lean();
+    const qMap = new Map(questions.map((q) => [safeTrim(q.questionId), q]));
+    const answers = (result.answers || []).map((a) => {
+      const q = qMap.get(safeTrim(a.questionId)) || null;
+      return {
+        questionId: a.questionId,
+        sectionId: a.sectionId,
+        answerRaw: a.answerRaw,
+        correctAnswer: q?.correctAnswer ?? null,
+        isCorrect: a.isCorrect,
+        isSkipped: a.isSkipped,
+        marksAwarded: a.marksAwarded,
+        timeTaken: a.timeTaken || 0,
+        positiveMarks: a.positiveMarks,
+        negativeMarks: a.negativeMarks,
+        hasPartialMarking: a.hasPartialMarking,
+        questionType: q?.questionType || null,
+        difficulty: q?.difficulty || null,
+        questionHtml: q?.questionHtml || null,
+        questionOptions: q?.questionOptions || [],
+        solutionHtml: q?.enableSolution ? q?.solutionHtml || null : null,
+        numericMin: q?.numericMin ?? null,
+        numericMax: q?.numericMax ?? null,
+        topicId: q?.topicId || null,
+        subTopicId: q?.subTopicId || null,
+        tags: q?.tags || [],
+        sortOrder: q?.sortOrder ?? null,
+        passage: q?.passageId ? { title: q.passageId?.title || null, passageHtml: q.passageId?.passageHtml || null } : q?.passageHtml ? { title: null, passageHtml: q.passageHtml } : null
+      };
+    });
+    return res.status(200).json({
+      status: true,
+      message: 'Result with answers loaded',
+      data: {
+        examId,
+        admissionNo,
+        obtainedMarks: result.obtainedMarks,
+        totalMarks: result.totalMarks,
+        rank: result.rank,
+        percentile: result.percentile,
+        timeTaken: result.timeTaken,
+        isLate: result.isLate,
+        sectionResults: result.sectionResults,
+        graceLogs: result.graceLogs,
+        answers
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const getQuestionTimingAnalytics = async (req, res, next) => {
+  try {
+    const tenantId = pickTid(req);
+    const examId = safeTrim(req.body?.examId);
+    const batchId = safeTrim(req.body?.batchId) || null;
+    if (!tenantId || !examId) return res.status(400).json({ status: false, message: 'tenantId and examId are required' });
+    const matchStage = { tenantId, examId, isdeleted: false };
+    if (batchId) matchStage.batchId = batchId;
+    const rows = await MockExamResult.aggregate([
+      { $match: matchStage },
+      { $unwind: '$answers' },
+      {
+        $group: {
+          _id: '$answers.questionId',
+          sectionId: { $first: '$answers.sectionId' },
+          avgTimeTaken: { $avg: '$answers.timeTaken' },
+          minTimeTaken: { $min: '$answers.timeTaken' },
+          maxTimeTaken: { $max: '$answers.timeTaken' },
+          totalStudents: { $sum: 1 }
+        }
+      },
+      {
+        $project: {
+          _id: 0,
+          questionId: '$_id',
+          sectionId: 1,
+          avgTimeTaken: { $round: ['$avgTimeTaken', 0] },
+          minTimeTaken: 1,
+          maxTimeTaken: 1,
+          totalStudents: 1
+        }
+      },
+      { $sort: { sectionId: 1, questionId: 1 } }
+    ]);
+    return res.status(200).json({
+      status: true,
+      message: 'Question timing analytics loaded',
+      examId,
+      batchId: batchId || null,
+      count: rows.length,
+      data: rows
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const getQuestionAttemptAnalytics = async (req, res, next) => {
+  try {
+    const tenantId = pickTid(req);
+    const examId = safeTrim(req.body?.examId);
+    const batchId = safeTrim(req.body?.batchId) || null;
+    if (!tenantId || !examId) return res.status(400).json({ status: false, message: 'tenantId and examId are required' });
+    const matchStage = { tenantId, examId, isdeleted: false };
+    if (batchId) matchStage.batchId = batchId;
+    const rows = await MockExamResult.aggregate([
+      { $match: matchStage },
+      { $unwind: '$answers' },
+      {
+        $group: {
+          _id: '$answers.questionId',
+          sectionId: { $first: '$answers.sectionId' },
+          totalStudents: { $sum: 1 },
+          correctCount: {
+            $sum: { $cond: [{ $eq: ['$answers.isCorrect', true] }, 1, 0] }
+          },
+          wrongCount: {
+            $sum: { $cond: [{ $eq: ['$answers.isCorrect', false] }, 1, 0] }
+          },
+          skippedCount: {
+            $sum: { $cond: [{ $eq: ['$answers.isSkipped', true] }, 1, 0] }
+          },
+          avgMarksAwarded: { $avg: '$answers.marksAwarded' }
+        }
+      },
+      {
+        $project: {
+          _id: 0,
+          questionId: '$_id',
+          sectionId: 1,
+          totalStudents: 1,
+          correctCount: 1,
+          wrongCount: 1,
+          skippedCount: 1,
+          avgMarksAwarded: { $round: ['$avgMarksAwarded', 2] },
+          accuracyPct: {
+            $round: [
+              {
+                $cond: [{ $gt: ['$totalStudents', 0] }, { $multiply: [{ $divide: ['$correctCount', '$totalStudents'] }, 100] }, 0]
+              },
+              2
+            ]
+          }
+        }
+      },
+      { $sort: { sectionId: 1, questionId: 1 } }
+    ]);
+    return res.status(200).json({
+      status: true,
+      message: 'Question attempt analytics loaded',
+      examId,
+      batchId: batchId || null,
+      count: rows.length,
+      data: rows
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+export default { submitResult, getMyResult, getLeaderboard, listResultsByExam, listResultsByBatch, listResultsByStudent, getSectionAnalytics, getMyResultWithAnswers, getQuestionTimingAnalytics, getQuestionAttemptAnalytics };
