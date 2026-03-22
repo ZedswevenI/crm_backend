@@ -9,6 +9,7 @@ import mockExamController from '../controller/mockExam.controller.js';
 import mockExamBatchAssignController from '../controller/mockExambatchassign.controller.js';
 import mockExamQnsController from '../controller/mockExamQns.controller.js';
 import mockExamResultController from '../controller/mockExamResult.controller.js';
+import bookmarkController from '../controller/mockExamQnsReport.controller.js';
 import { instructionController, passageController } from '../controller/instructionpassage.controller.js';
 
 const routes = express.Router();
@@ -56,12 +57,15 @@ routes.post('/questions/unmap', validatetoken, mockExamQnsController.unmapQuesti
 routes.post('/questions/bulk-map', validatetoken, mockExamQnsController.bulkMapQuestionsToExam);
 
 routes.post('/result/submit', mockExamResultController.submitResult);
-routes.post('/result/my-result', mockExamResultController.getMyResult);
-routes.post('/result/leaderboard', validatetoken, mockExamResultController.getLeaderboard);
-routes.post('/result/list-by-exam', validatetoken, mockExamResultController.listResultsByExam);
-routes.post('/result/list-by-batch', validatetoken, mockExamResultController.listResultsByBatch);
-routes.post('/result/list-by-student', validatetoken, mockExamResultController.listResultsByStudent);
-routes.post('/result/section-analytics', validatetoken, mockExamResultController.getSectionAnalytics);
+routes.post('/result/my-result', mockExamResultController.submitResult);
+routes.post('/result/my-result/with/questions', mockExamResultController.getMyResultWithAnswers);
+routes.post('/result/leaderboard', mockExamResultController.getLeaderboard);
+routes.post('/result/list-by-exam', mockExamResultController.listResultsByExam);
+routes.post('/result/list-by-batch', mockExamResultController.listResultsByBatch);
+routes.post('/result/list-by-student', mockExamResultController.listResultsByStudent);
+routes.post('/result/section-analytics', mockExamResultController.getSectionAnalytics);
+routes.post('/result/analytics/timing', mockExamResultController.getQuestionTimingAnalytics);
+routes.post('/result/analytics/attempts', mockExamResultController.getQuestionAttemptAnalytics);
 
 routes.post('/instruction/create', validatetoken, instructionController.createInstruction);
 routes.post('/instruction/update', validatetoken, instructionController.updateInstruction);
@@ -74,5 +78,12 @@ routes.post('/passage/update', validatetoken, passageController.updatePassage);
 routes.post('/passage/list', validatetoken, passageController.listPassages);
 routes.post('/passage/delete', validatetoken, passageController.deletePassage);
 routes.post('/passage/upload-image', validatetoken, validatetoken, uploadQuestionImage, passageController.uploadImagePassage);
+
+routes.post('/bookmarkqns/create', bookmarkController.createBookmark);
+routes.post('/bookmarkqns/list', bookmarkController.listBookmarks);
+routes.post('/bookmarkqns/delete', bookmarkController.deleteBookmark);
+routes.post('/reportqns/create', bookmarkController.createReport);
+routes.post('/reportqns/list', bookmarkController.listReports);
+routes.post('/reportqns/update/status', bookmarkController.updateReportStatus);
 
 export default routes;
