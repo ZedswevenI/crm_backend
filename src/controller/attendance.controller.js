@@ -321,7 +321,7 @@ const getStaffSchedule = async (req, res, next) => {
       tenantId,
       isdeleted: false,
       status: 'Active',
-      wkStartOn: { $lte: mondayMs }
+      wkStartOn: mondayMs
     }).lean();
     const ttByBatch = new Map();
     for (const tt of allTimetables) {
@@ -387,19 +387,15 @@ const getStudentSchedule = async (req, res, next) => {
     const tenantId = pickTenantId(req);
     const studentId = safeTrim(req.body?.studentId);
     const date = toInt(req.body?.date, 0);
-
     if (!tenantId || !studentId || !date) {
       return res.status(400).json({ status: false, message: 'tenantId, studentId, and date are required' });
     }
-
-    // Accept studentId, admissionNo, or registrationNumber
     const student = await StudentProfile.findOne({
       tenantId,
       status: 'ACTIVE',
       isdeleted: false,
       $or: [{ studentId }, { admissionNo: studentId }, { registrationNumber: studentId }]
     }).lean();
-
     if (!student || !student.batchCode) {
       return res.status(200).json({
         status: true,
@@ -407,7 +403,6 @@ const getStudentSchedule = async (req, res, next) => {
         message: 'Student not found or not assigned to a batch'
       });
     }
-
     const mondayMs = getPreviousMonday(date);
     const tt = await TimeTable.findOne({
       tenantId,
