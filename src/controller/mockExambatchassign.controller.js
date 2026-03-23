@@ -189,31 +189,135 @@ export const listExamsByBatch = async (req, res, next) => {
 };
 
 // ─── GET STUDENT STATUS ───────────────────────────────────────────────────────
-export const getStudentStatus = async (req, res, next) => {
+// const getStudentStatus = async (req, res, next) => {
+//   try {
+//     const tenantId = pickTid(req);
+//     const examId = safeTrim(req.body?.examId);
+//     const batchId = safeTrim(req.body?.batchId);
+
+//     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+//     if (!examId) return res.status(400).json({ status: false, message: 'examId is required' });
+//     if (!batchId) return res.status(400).json({ status: false, message: 'batchId is required' });
+
+//     const assign = await MockExamBatchAssign.findOne({ tenantId, examId, batchId, isdeleted: false }).lean();
+//     if (!assign) return res.status(404).json({ status: false, message: 'Assignment not found for this exam and batch' });
+
+//     const students = assign.students || [];
+//     const total = students.length;
+//     const completed = students.filter((s) => s.status === 'completed').length;
+//     const started = students.filter((s) => s.status === 'started').length;
+//     const assigned = students.filter((s) => s.status === 'assigned').length;
+//     const absent = students.filter((s) => s.status === 'absent').length;
+
+//     return res.status(200).json({
+//       status: true,
+//       message: 'Student status loaded',
+//       summary: { total, completed, started, assigned, absent },
+//       data: students
+//     });
+//   } catch (err) {
+//     return next(err);
+//   }
+// };
+
+// ─── GET STUDENT STATUS ───────────────────────────────────────────────────────
+const getStudentStatus = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     const examId = safeTrim(req.body?.examId);
     const batchId = safeTrim(req.body?.batchId);
-
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
     if (!examId) return res.status(400).json({ status: false, message: 'examId is required' });
     if (!batchId) return res.status(400).json({ status: false, message: 'batchId is required' });
-
     const assign = await MockExamBatchAssign.findOne({ tenantId, examId, batchId, isdeleted: false }).lean();
     if (!assign) return res.status(404).json({ status: false, message: 'Assignment not found for this exam and batch' });
-
-    const students = assign.students || [];
-    const total = students.length;
-    const completed = students.filter((s) => s.status === 'completed').length;
-    const started = students.filter((s) => s.status === 'started').length;
-    const assigned = students.filter((s) => s.status === 'assigned').length;
-    const absent = students.filter((s) => s.status === 'absent').length;
-
+    const assignedStudents = assign.students || [];
+    if (!assignedStudents.length) {
+      return res.status(200).json({
+        status: true,
+        message: 'No students assigned',
+        summary: { total: 0, completed: 0, started: 0, notStarted: 0, absent: 0 },
+        completed: [],
+        started: [],
+        notStarted: []
+      });
+    }
+    const admissionNos = assignedStudents.map((s) => safeTrim(s.admissionNo)).filter(Boolean);
+    const profiles = await StudentProfile.find({ tenantId, admissionNo: { $in: admissionNos }, isdeleted: false }, { admissionNo: 1, studentId: 1, 'student.name': 1, 'student.phone': 1 }).lean();
+    const profileMap = new Map(profiles.map((p) => [safeTrim(p.admissionNo), p]));
+    const results = await MockExamResult.find(
+      { tenantId, examId, admissionNo: { $in: admissionNos }, isdeleted: false },
+      {
+        admissionNo: 1,
+        status: 1,
+        obtainedMarks: 1,
+        totalMarks: 1,
+        rank: 1,
+        percentile: 1,
+        timeTaken: 1,
+        isLate: 1,
+        startedAt: 1,
+        completedAt: 1,
+        sectionResults: 1,
+        correctCount: 1,
+        wrongCount: 1,
+        skippedCount: 1
+      }
+    ).lean();
+    const resultMap = new Map(results.map((r) => [safeTrim(r.admissionNo), r]));
+    const completed = [];
+    const started = [];
+    const notStarted = [];
+    let absentCount = 0;
+    for (const s of assignedStudents) {
+      const admNo = safeTrim(s.admissionNo);
+      const profile = profileMap.get(admNo) || null;
+      const result = resultMap.get(admNo) || null;
+      const row = {
+        admissionNo: admNo,
+        studentId: s.studentId || null,
+        studentName: profile?.student?.name || null,
+        studentPhone: profile?.student?.phone || null,
+        assignedAt: s.assignedAt || null,
+        status: result?.status || s.status,
+        startedAt: result?.startedAt || s.startedAt || null,
+        completedAt: result?.completedAt || s.completedAt || null,
+        obtainedMarks: result?.obtainedMarks ?? s.obtainedMarks ?? null,
+        totalMarks: result?.totalMarks ?? null,
+        rank: result?.rank ?? s.rank ?? null,
+        percentile: result?.percentile ?? s.percentile ?? null,
+        timeTaken: result?.timeTaken ?? null,
+        isLate: result?.isLate ?? s.isLate ?? false,
+        correctCount: result?.correctCount ?? null,
+        wrongCount: result?.wrongCount ?? null,
+        skippedCount: result?.skippedCount ?? null,
+        sectionResults: result?.sectionResults || []
+      };
+      if (s.status === 'absent') {
+        absentCount++;
+        notStarted.push(row);
+      } else if (result?.status === 'completed' || s.status === 'completed') {
+        completed.push(row);
+      } else if (result?.startedAt || s.status === 'started') {
+        started.push(row);
+      } else {
+        notStarted.push(row);
+      }
+    }
+    completed.sort((a, b) => (a.rank ?? 99999) - (b.rank ?? 99999));
     return res.status(200).json({
       status: true,
       message: 'Student status loaded',
-      summary: { total, completed, started, assigned, absent },
-      data: students
+      summary: {
+        total: assignedStudents.length,
+        completed: completed.length,
+        started: started.length,
+        notStarted: notStarted.length,
+        absent: absentCount
+      },
+      completed,
+      started,
+      notStarted
     });
   } catch (err) {
     return next(err);
