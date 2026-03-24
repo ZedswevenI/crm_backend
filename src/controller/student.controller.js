@@ -1649,13 +1649,12 @@ const getStudentAttendance = async (req, res, next) => {
         updatedBy: record?.updatedBy || null,
         topicTaught: record?.topicTaught || null,
         status,
-        remarks: studentData?.remarks || null
+        remarks: studentData?.remarks || null,
+        feedback: record?.feedback || null
       };
     });
-    console.log('attendanceRecords ', attendanceRecords);
     const scheduledPeriodNos = new Set(scheduledPeriods.map((p) => toInt(p.periodNo)));
     for (const record of attendanceRecords) {
-      console.log('record ', record);
       const pNo = toInt(record.periodNo);
       if (scheduledPeriodNos.has(pNo)) continue;
       const studentData = record.students?.find((s) => s.studentId === student.studentId);
@@ -1671,7 +1670,8 @@ const getStudentAttendance = async (req, res, next) => {
         updatedBy: record.updatedBy || null,
         topicTaught: record.topicTaught || null,
         status: studentData ? studentData.status : 'NOT_MARKED',
-        remarks: studentData?.remarks || null
+        remarks: studentData?.remarks || null,
+        feedback: record?.feedback || null
       });
     }
     studentAttendance.sort((a, b) => (a.periodNo || 0) - (b.periodNo || 0));
