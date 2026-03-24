@@ -628,8 +628,10 @@ const changePeriod = async (req, res, next) => {
         const toNo = toObj.periodNo;
         const fromTime = fromObj.time;
         const toTime = toObj.time;
-        periods[fromIdx] = { ...toObj, periodNo: fromNo, time: fromTime };
-        periods[toIdx] = { ...fromObj, periodNo: toNo, time: toTime };
+        // periods[fromIdx] = { ...toObj, periodNo: fromNo, time: fromTime };
+        // periods[toIdx] = { ...fromObj, periodNo: toNo, time: toTime };
+        periods[fromIdx] = { ...toObj, periodNo: fromNo, time: fromTime, replacementFacultyId: null };
+        periods[toIdx] = { ...fromObj, periodNo: toNo, time: toTime, replacementFacultyId: null };
       } else {
         periods.splice(fromIdx, 1);
         periods.push({ ...fromObj, periodNo: toPeriodNo });
@@ -641,9 +643,13 @@ const changePeriod = async (req, res, next) => {
       return res.json({ status: true, message: 'Period moved (draft)' });
     }
     if (!date) return res.status(400).json({ status: false, message: 'date required for published timetable' });
-    const fromBase = findEffectivePeriodBase(tt, day, fromPeriodNo, date);
-    if (!fromBase) return res.status(400).json({ status: false, message: 'Source period not found' });
-    const toBase = findEffectivePeriodBase(tt, day, toPeriodNo, date);
+    // const fromBase = findEffectivePeriodBase(tt, day, fromPeriodNo, date);
+    // if (!fromBase) return res.status(400).json({ status: false, message: 'Source period not found' });
+    // const toBase = findEffectivePeriodBase(tt, day, toPeriodNo, date);
+    const daySchedule = buildDaySchedule(tt, date);
+    const fromBase = (daySchedule.periods || []).find((p) => toInt(p?.periodNo) === fromPeriodNo && !p.isCancelled) || null;
+    if (!fromBase) return res.status(400).json({ status: false, message: 'Source period not found or cancelled' });
+    const toBase = (daySchedule.periods || []).find((p) => toInt(p?.periodNo) === toPeriodNo && !p.isCancelled) || null;
     if (toBase) {
       const checkFrom = await checkStaffConflicts(tenantId, fromBase.replacementFacultyId || fromBase.facultyId, date, day, toInt(toBase.time?.startMin), toInt(toBase.time?.endMin), timetableId, false, fromBase.periodType, fromBase.mode);
       if (checkFrom.conflict) return res.status(400).json({ status: false, message: `Swap conflict (source faculty): ${checkFrom.message}` });

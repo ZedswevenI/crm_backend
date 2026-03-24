@@ -406,13 +406,14 @@ const getCircularReadList = async (req, res, next) => {
     const skip = (page - 1) * limit;
     const [readList, count] = await Promise.all([CircularRead.find({ tenantId, circularId }).sort({ readAt: -1 }).skip(skip).limit(limit).lean(), CircularRead.countDocuments({ tenantId, circularId })]);
     const studentNos = readList.map((r) => r.studentNo);
+    console.log('studentNos ', studentNos);
     const students = await StudentProfile.find(
       {
         tenantId,
         isdeleted: false,
         $or: [{ studentId: { $in: studentNos } }, { admissionNo: { $in: studentNos } }, { registrationNumber: { $in: studentNos } }]
       },
-      'studentId admissionNo registrationNumber firstName lastName batchCode centerCode student'
+      'studentId admissionNo registrationNumber firstName lastName batchCode centerName student'
     ).lean();
     const formattedList = readList.map((record) => {
       const stu = students.find((s) => s.studentId === record.studentNo || s.admissionNo === record.studentNo || s.registrationNumber === record.studentNo);
@@ -420,7 +421,7 @@ const getCircularReadList = async (req, res, next) => {
         ...record,
         studentName: stu ? stu.student?.name || 'Unknown' : 'Unknown',
         batchCode: stu ? stu.batchCode : null,
-        centerCode: stu ? stu.centerCode : null
+        centerCode: stu ? stu.centerName : null
       };
     });
     return res.status(200).json({
