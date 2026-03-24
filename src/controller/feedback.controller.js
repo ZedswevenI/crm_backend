@@ -3,6 +3,8 @@ import FeedbackTemplate from '../models/feedbackTemplate.model.js';
 import FeedbackForm from '../models/feedbackForm.model.js';
 import FeedbackResponse from '../models/feedbackResponse.model.js';
 import StudentProfile from '../models/studentProfile.model.js';
+import Batch from '../models/batch.model.js';
+import { buildBatchQuestionSnapshots } from '../helpers/feedbackExpansion.helper.js';
 
 const pickTenantId = (req) => (req.body?.entiId || req.body?.tenantId || '').toString().trim();
 const safeTrim = (v) => (v === null || v === undefined ? '' : String(v)).trim();
@@ -240,14 +242,88 @@ const deleteTemplate = async (req, res, next) => {
   }
 };
 
+// const createFeedbackForm = async (req, res, next) => {
+//   try {
+//     const tenantId = pickTenantId(req);
+//     const userId = safeTrim(req.body?.userId);
+//     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+//     const { title, description, templateId, assignedBatches, startDate, endDate } = req.body;
+//     const staffIds = Array.isArray(req.body?.staffIds) ? req.body.staffIds.map((s) => safeTrim(String(s))).filter(Boolean) : [];
+//     const staffNames = Array.isArray(req.body?.staffNames) ? req.body.staffNames.map((s) => safeTrim(String(s))).filter(Boolean) : [];
+//     if (!title || !templateId || !startDate || !endDate)
+//       return res.status(400).json({
+//         status: false,
+//         message: 'title, templateId, startDate and endDate are required'
+//       });
+//     if (Number(endDate) <= Number(startDate))
+//       return res.status(400).json({
+//         status: false,
+//         message: 'endDate must be after startDate'
+//       });
+//     const batches = Array.isArray(assignedBatches) ? assignedBatches.map((b) => safeTrim(String(b))).filter(Boolean) : [];
+//     if (!batches.length)
+//       return res.status(400).json({
+//         status: false,
+//         message: 'At least one batch must be assigned'
+//       });
+//     const template = await FeedbackTemplate.findOne({
+//       _id: templateId,
+//       tenantId,
+//       status: 'ACTIVE',
+//       isdeleted: false
+//     }).lean();
+//     if (!template)
+//       return res.status(404).json({
+//         status: false,
+//         message: 'Template not found or not ACTIVE. Only ACTIVE templates can be used.'
+//       });
+//     if (template.category === 'STAFF' && !staffIds.length)
+//       return res.status(400).json({
+//         status: false,
+//         message: 'At least one staffId is required for STAFF category template'
+//       });
+//     const totalAssignedStudents = await StudentProfile.countDocuments({
+//       tenantId,
+//       batchCode: { $in: batches },
+//       status: 'ACTIVE',
+//       isdeleted: false
+//     });
+//     const now = Date.now();
+//     const initialStatus = now >= Number(startDate) ? 'ACTIVE' : 'DRAFT';
+//     const form = await FeedbackForm.create({
+//       tenantId,
+//       title: safeTrim(title),
+//       description: description ? safeTrim(description) : null,
+//       templateId: template._id,
+//       templateTitle: template.title,
+//       category: template.category,
+//       staffIds,
+//       staffNames,
+//       questions: template.questions,
+//       assignedBatches: batches,
+//       startDate: Number(startDate),
+//       endDate: Number(endDate),
+//       totalAssignedStudents,
+//       status: initialStatus,
+//       isdeleted: false,
+//       createdBy: userId
+//     });
+//     return res.status(201).json({
+//       status: true,
+//       message: 'Feedback form created successfully',
+//       data: form
+//     });
+//   } catch (err) {
+//     return next(err);
+//   }
+// };
+
 const createFeedbackForm = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     const userId = safeTrim(req.body?.userId);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-    const { title, description, templateId, assignedBatches, startDate, endDate } = req.body;
-    const staffIds = Array.isArray(req.body?.staffIds) ? req.body.staffIds.map((s) => safeTrim(String(s))).filter(Boolean) : [];
-    const staffNames = Array.isArray(req.body?.staffNames) ? req.body.staffNames.map((s) => safeTrim(String(s))).filter(Boolean) : [];
+    const { title, description, templateId, staffIds, staffNames, assignedBatches, startDate, endDate } = req.body;
     if (!title || !templateId || !startDate || !endDate)
       return res.status(400).json({
         status: false,
@@ -273,24 +349,26 @@ const createFeedbackForm = async (req, res, next) => {
     if (!template)
       return res.status(404).json({
         status: false,
-        message: 'Template not found or not ACTIVE. Only ACTIVE templates can be used.'
+        message: 'Template not found or not ACTIVE'
       });
-    if (template.category === 'STAFF' && !staffIds.length)
+    const sIds = Array.isArray(staffIds) ? staffIds.map((s) => safeTrim(String(s))).filter(Boolean) : [];
+    const sNames = Array.isArray(staffNames) ? staffNames.map((s) => safeTrim(String(s))).filter(Boolean) : [];
+    if (template.category === 'STAFF' && !sIds.length)
       return res.status(400).json({
         status: false,
-        message: 'At least one staffId is required for STAFF category template'
+        message: 'At least one staffId is required for STAFF category'
       });
-    // if (template.category === 'STAFF' )
-    //   return res.status(400).json({
-    //     status: false,
-    //     message: 'staffId is required for STAFF category template'
-    //   });
     const totalAssignedStudents = await StudentProfile.countDocuments({
       tenantId,
       batchCode: { $in: batches },
       status: 'ACTIVE',
       isdeleted: false
     });
+    const batchQuestions = await buildBatchQuestionSnapshots(tenantId, batches, template.questions);
+    const hasSubjectQuestions = template.questions.some((q) => q.isSubjectBased);
+    const mergedQuestions = hasSubjectQuestions
+      ? batchQuestions[0]?.questions || [] // use first batch as reference
+      : batchQuestions[0]?.questions || [];
     const now = Date.now();
     const initialStatus = now >= Number(startDate) ? 'ACTIVE' : 'DRAFT';
     const form = await FeedbackForm.create({
@@ -300,10 +378,11 @@ const createFeedbackForm = async (req, res, next) => {
       templateId: template._id,
       templateTitle: template.title,
       category: template.category,
-      staffIds,
-      staffNames,
-      questions: template.questions,
+      staffIds: sIds,
+      staffNames: sNames,
       assignedBatches: batches,
+      batchQuestions,
+      questions: mergedQuestions,
       startDate: Number(startDate),
       endDate: Number(endDate),
       totalAssignedStudents,
@@ -502,64 +581,223 @@ const deleteFeedbackForm = async (req, res, next) => {
   }
 };
 
+// const viewFeedbackResults = async (req, res, next) => {
+//   try {
+//     const tenantId = pickTenantId(req);
+//     const formId = safeTrim(req.body?.formId || req.query?.formId);
+//     if (!tenantId || !formId)
+//       return res.status(400).json({
+//         status: false,
+//         message: 'tenantId and formId are required'
+//       });
+//     const form = await FeedbackForm.findOne({
+//       _id: formId,
+//       tenantId,
+//       isdeleted: false
+//     }).lean();
+//     if (!form) return res.status(404).json({ status: false, message: 'Form not found' });
+//     const responses = await FeedbackResponse.find({ formId, tenantId, isdeleted: false }, { answers: 1, submittedAt: 1, batchCode: 1, _id: 0 }).lean();
+//     const totalResponses = responses.length;
+//     const responseRate = form.totalAssignedStudents > 0 ? Math.round((totalResponses / form.totalAssignedStudents) * 1000) / 10 : 0;
+//     const batchBreakdown = {};
+//     responses.forEach((r) => {
+//       batchBreakdown[r.batchCode] = (batchBreakdown[r.batchCode] || 0) + 1;
+//     });
+//     const questionSummary = form.questions.map((q) => {
+//       if (q.fieldType === 'text') {
+//         const textAnswers = responses.map((r) => r.answers.find((a) => a.fieldId === q.fieldId)?.fieldValue).filter((v) => v && String(v).trim());
+//         return {
+//           fieldId: q.fieldId,
+//           fieldType: q.fieldType,
+//           fieldText: q.fieldText,
+//           totalAnswered: textAnswers.length,
+//           textAnswers
+//         };
+//       }
+//       const optionCounts = {};
+//       q.fieldOptions.forEach((opt) => {
+//         optionCounts[opt] = 0;
+//       });
+//       let totalAnswered = 0;
+//       responses.forEach((r) => {
+//         const ans = r.answers.find((a) => a.fieldId === q.fieldId);
+//         if (!ans || ans.fieldValue === null) return;
+//         const vals = Array.isArray(ans.fieldValue) ? ans.fieldValue : [ans.fieldValue];
+//         vals.forEach((v) => {
+//           const key = String(v).trim();
+//           if (key && optionCounts[key] !== undefined) optionCounts[key]++;
+//         });
+//         totalAnswered++;
+//       });
+//       return {
+//         fieldId: q.fieldId,
+//         fieldType: q.fieldType,
+//         fieldText: q.fieldText,
+//         fieldOptions: q.fieldOptions,
+//         totalAnswered,
+//         optionCounts,
+//         optionPercentages: Object.fromEntries(Object.entries(optionCounts).map(([opt, count]) => [opt, totalAnswered > 0 ? Math.round((count / totalAnswered) * 1000) / 10 : 0]))
+//       };
+//     });
+//     return res.status(200).json({
+//       status: true,
+//       data: {
+//         formId: form._id,
+//         title: form.title,
+//         description: form.description,
+//         category: form.category,
+//         templateTitle: form.templateTitle,
+//         status: form.status,
+//         staffNames: form.staffNames,
+//         assignedBatches: form.assignedBatches,
+//         startDate: form.startDate,
+//         endDate: form.endDate,
+//         totalAssignedStudents: form.totalAssignedStudents,
+//         totalResponses,
+//         responseRate,
+//         batchBreakdown,
+//         questionSummary
+//       }
+//     });
+//   } catch (err) {
+//     return next(err);
+//   }
+// };
+
+// const getActiveFormsForStudent = async (req, res, next) => {
+//   try {
+//     const tenantId = pickTenantId(req);
+//     const batchCode = safeTrim(req.body?.batchCode || req.query?.batchCode);
+//     const studentId = safeTrim(req.body?.studentId || req.query?.studentId);
+//     if (!tenantId || !batchCode || !studentId)
+//       return res.status(400).json({
+//         status: false,
+//         message: 'tenantId, batchCode and studentId are required'
+//       });
+//     await autoUpdateStatuses(tenantId);
+//     const forms = await FeedbackForm.find({
+//       tenantId,
+//       isdeleted: false,
+//       status: 'ACTIVE',
+//       assignedBatches: batchCode
+//     }).lean();
+//     const formIds = forms.map((f) => f._id);
+//     const submitted = await FeedbackResponse.find({ tenantId, formId: { $in: formIds }, studentId, isdeleted: false }, { formId: 1 }).lean();
+//     const submittedSet = new Set(submitted.map((r) => r.formId.toString()));
+//     const data = forms.map((f) => ({
+//       _id: f._id,
+//       title: f.title,
+//       description: f.description,
+//       category: f.category,
+//       staffName: f.staffName,
+//       templateTitle: f.templateTitle,
+//       startDate: f.startDate,
+//       endDate: f.endDate,
+//       questions: f.questions,
+//       alreadySubmitted: submittedSet.has(f._id.toString())
+//     }));
+//     return res.status(200).json({ status: true, data });
+//   } catch (err) {
+//     return next(err);
+//   }
+// };
+
 const viewFeedbackResults = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     const formId = safeTrim(req.body?.formId || req.query?.formId);
+    // Optional — filter results for one specific batch
+    const batchCode = safeTrim(req.body?.batchCode || req.query?.batchCode || '');
+
     if (!tenantId || !formId)
       return res.status(400).json({
         status: false,
         message: 'tenantId and formId are required'
       });
+
     const form = await FeedbackForm.findOne({
       _id: formId,
       tenantId,
       isdeleted: false
     }).lean();
     if (!form) return res.status(404).json({ status: false, message: 'Form not found' });
-    const responses = await FeedbackResponse.find({ formId, tenantId, isdeleted: false }, { answers: 1, submittedAt: 1, batchCode: 1, _id: 0 }).lean();
+
+    // Fetch responses — exclude studentId always
+    const responseFilter = { formId, tenantId, isdeleted: false };
+    if (batchCode) responseFilter.batchCode = batchCode;
+
+    const responses = await FeedbackResponse.find(responseFilter, { answers: 1, batchCode: 1, submittedAt: 1, _id: 0 }).lean();
+
     const totalResponses = responses.length;
     const responseRate = form.totalAssignedStudents > 0 ? Math.round((totalResponses / form.totalAssignedStudents) * 1000) / 10 : 0;
+
+    // Per-batch breakdown count
     const batchBreakdown = {};
     responses.forEach((r) => {
       batchBreakdown[r.batchCode] = (batchBreakdown[r.batchCode] || 0) + 1;
     });
-    const questionSummary = form.questions.map((q) => {
-      if (q.fieldType === 'text') {
-        const textAnswers = responses.map((r) => r.answers.find((a) => a.fieldId === q.fieldId)?.fieldValue).filter((v) => v && String(v).trim());
+
+    // ── Aggregate per batch since questions differ ──
+    const batchResults = form.batchQuestions.map((bq) => {
+      // Only responses from this batch
+      const batchResponses = responses.filter((r) => r.batchCode === bq.batchCode);
+
+      const questionSummary = bq.questions.map((q) => {
+        if (q.fieldType === 'text') {
+          const textAnswers = batchResponses.map((r) => r.answers.find((a) => a.fieldId === q.fieldId)?.fieldValue).filter((v) => v && String(v).trim());
+
+          return {
+            fieldId: q.fieldId,
+            fieldType: q.fieldType,
+            fieldText: q.fieldText,
+            isSubjectBased: q.isSubjectBased,
+            subjectName: q.subjectName,
+            staffName: q.staffName,
+            totalAnswered: textAnswers.length,
+            textAnswers
+          };
+        }
+
+        // Radio / Checkbox
+        const optionCounts = {};
+        q.fieldOptions.forEach((opt) => {
+          optionCounts[opt] = 0;
+        });
+        let totalAnswered = 0;
+
+        batchResponses.forEach((r) => {
+          const ans = r.answers.find((a) => a.fieldId === q.fieldId);
+          if (!ans || ans.fieldValue === null) return;
+          const vals = Array.isArray(ans.fieldValue) ? ans.fieldValue : [ans.fieldValue];
+          vals.forEach((v) => {
+            const key = String(v).trim();
+            if (key && optionCounts[key] !== undefined) optionCounts[key]++;
+          });
+          totalAnswered++;
+        });
+
         return {
           fieldId: q.fieldId,
           fieldType: q.fieldType,
           fieldText: q.fieldText,
-          totalAnswered: textAnswers.length,
-          textAnswers
+          fieldOptions: q.fieldOptions,
+          isSubjectBased: q.isSubjectBased,
+          subjectName: q.subjectName,
+          staffName: q.staffName,
+          totalAnswered,
+          optionCounts,
+          optionPercentages: Object.fromEntries(Object.entries(optionCounts).map(([opt, count]) => [opt, totalAnswered > 0 ? Math.round((count / totalAnswered) * 1000) / 10 : 0]))
         };
-      }
-      const optionCounts = {};
-      q.fieldOptions.forEach((opt) => {
-        optionCounts[opt] = 0;
       });
-      let totalAnswered = 0;
-      responses.forEach((r) => {
-        const ans = r.answers.find((a) => a.fieldId === q.fieldId);
-        if (!ans || ans.fieldValue === null) return;
-        const vals = Array.isArray(ans.fieldValue) ? ans.fieldValue : [ans.fieldValue];
-        vals.forEach((v) => {
-          const key = String(v).trim();
-          if (key && optionCounts[key] !== undefined) optionCounts[key]++;
-        });
-        totalAnswered++;
-      });
+
       return {
-        fieldId: q.fieldId,
-        fieldType: q.fieldType,
-        fieldText: q.fieldText,
-        fieldOptions: q.fieldOptions,
-        totalAnswered,
-        optionCounts,
-        optionPercentages: Object.fromEntries(Object.entries(optionCounts).map(([opt, count]) => [opt, totalAnswered > 0 ? Math.round((count / totalAnswered) * 1000) / 10 : 0]))
+        batchCode: bq.batchCode,
+        batchName: bq.batchName,
+        totalResponses: batchResponses.length,
+        questionSummary
       };
     });
+
     return res.status(200).json({
       status: true,
       data: {
@@ -577,7 +815,10 @@ const viewFeedbackResults = async (req, res, next) => {
         totalResponses,
         responseRate,
         batchBreakdown,
-        questionSummary
+        // Per-batch results — each batch has its own question set
+        batchResults,
+        // Filtered batch (if batchCode passed)
+        filteredBatch: batchCode || null
       }
     });
   } catch (err) {
@@ -590,33 +831,46 @@ const getActiveFormsForStudent = async (req, res, next) => {
     const tenantId = pickTenantId(req);
     const batchCode = safeTrim(req.body?.batchCode || req.query?.batchCode);
     const studentId = safeTrim(req.body?.studentId || req.query?.studentId);
+
     if (!tenantId || !batchCode || !studentId)
       return res.status(400).json({
         status: false,
         message: 'tenantId, batchCode and studentId are required'
       });
+
     await autoUpdateStatuses(tenantId);
+
     const forms = await FeedbackForm.find({
       tenantId,
       isdeleted: false,
       status: 'ACTIVE',
       assignedBatches: batchCode
     }).lean();
+
     const formIds = forms.map((f) => f._id);
     const submitted = await FeedbackResponse.find({ tenantId, formId: { $in: formIds }, studentId, isdeleted: false }, { formId: 1 }).lean();
     const submittedSet = new Set(submitted.map((r) => r.formId.toString()));
-    const data = forms.map((f) => ({
-      _id: f._id,
-      title: f.title,
-      description: f.description,
-      category: f.category,
-      staffName: f.staffName,
-      templateTitle: f.templateTitle,
-      startDate: f.startDate,
-      endDate: f.endDate,
-      questions: f.questions,
-      alreadySubmitted: submittedSet.has(f._id.toString())
-    }));
+
+    const data = forms.map((f) => {
+      // ── Find this student's batch-specific questions ──
+      const batchSnapshot = f.batchQuestions?.find((bq) => bq.batchCode === batchCode);
+      // Fallback to merged questions if batch snapshot not found
+      const questions = batchSnapshot?.questions || f.questions || [];
+
+      return {
+        _id: f._id,
+        title: f.title,
+        description: f.description,
+        category: f.category,
+        staffNames: f.staffNames,
+        templateTitle: f.templateTitle,
+        startDate: f.startDate,
+        endDate: f.endDate,
+        questions,
+        alreadySubmitted: submittedSet.has(f._id.toString())
+      };
+    });
+
     return res.status(200).json({ status: true, data });
   } catch (err) {
     return next(err);
