@@ -63,7 +63,13 @@ const feedbackQuestionSchema = new mongoose.Schema(
     fieldType: { type: String, enum: ['text', 'radio', 'checkbox'], required: true },
     fieldText: { type: String, required: true, trim: true },
     fieldOptions: { type: [String], default: [] },
-    fieldValue: { type: mongoose.Schema.Types.Mixed, default: null }
+    fieldValue: { type: mongoose.Schema.Types.Mixed, default: null },
+    isSubjectBased: { type: Boolean, default: false },
+    subjectCode: { type: String, default: null, trim: true },
+    subjectName: { type: String, default: null, trim: true },
+    subjectId: { type: String, default: null, trim: true },
+    staffId: { type: String, default: null, trim: true },
+    staffName: { type: String, default: null, trim: true }
   },
   { _id: false }
 );

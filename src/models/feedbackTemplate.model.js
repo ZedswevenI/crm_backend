@@ -6,7 +6,8 @@ const questionSchema = new mongoose.Schema(
     fieldType: { type: String, enum: ['text', 'radio', 'checkbox'], required: true },
     fieldText: { type: String, required: true, trim: true },
     fieldOptions: { type: [String], default: [] },
-    sortOrder: { type: Number, default: 0 }
+    sortOrder: { type: Number, default: 0 },
+    isSubjectBased: { type: Boolean, default: false }
   },
   { _id: false }
 );

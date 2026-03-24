@@ -37,7 +37,7 @@ const bookmarkSchema = new mongoose.Schema(
     assignmentId: { type: String, default: null },
     examId: { type: String, default: null, trim: true },
     sectionId: { type: String, default: null, trim: true },
-    subjectId: { type: String, default: null },
+    subjectId: { type: mongoose.Schema.Types.ObjectId, ref: 'subject', required: false, allow: null },
     note: { type: String, trim: true, default: null },
     isdeleted: { type: Boolean, default: false, index: true },
     createdBy: { type: String, default: null },

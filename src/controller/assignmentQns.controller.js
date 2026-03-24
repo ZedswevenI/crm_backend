@@ -904,19 +904,23 @@ const removeBookmark = async (req, res, next) => {
 
 const listBookmarks = async (req, res, next) => {
   try {
+    console.log('list bookmarks');
     const tenantId = req.body.entiId;
     const studentId = req.query.studentId;
     const subjectId = req.query.subjectId;
     const filter = { tenantId, studentId, isdeleted: false };
     if (subjectId) filter.subjectId = subjectId;
-    const list = await StudentBookmark.find(filter).sort({ createdAt: -1 }).populate({
-      path: 'questionId',
-      localField: 'questionId',
-      foreignField: 'questionId',
-      model: 'assignmentqns',
-      justOne: true,
-      select: ''
-    });
+    const list = await StudentBookmark.find(filter)
+      .sort({ createdAt: -1 })
+      .populate({
+        path: 'questionId',
+        localField: 'questionId',
+        foreignField: 'questionId',
+        model: 'assignmentqns',
+        justOne: true,
+        select: ''
+      })
+      .populate('subjectId', 'subjectName subjectCode');
     return res.status(200).json({ status: true, data: list });
   } catch (err) {
     next(err);

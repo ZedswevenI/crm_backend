@@ -6,7 +6,22 @@ const questionSnapshotSchema = new mongoose.Schema(
     fieldType: { type: String, enum: ['text', 'radio', 'checkbox'], required: true },
     fieldText: { type: String, required: true, trim: true },
     fieldOptions: { type: [String], default: [] },
-    sortOrder: { type: Number, default: 0 }
+    sortOrder: { type: Number, default: 0 },
+    isSubjectBased: { type: Boolean, default: false },
+    subjectCode: { type: String, default: null, trim: true },
+    subjectName: { type: String, default: null, trim: true },
+    subjectId: { type: String, default: null, trim: true },
+    staffId: { type: String, default: null, trim: true },
+    staffName: { type: String, default: null, trim: true }
+  },
+  { _id: false }
+);
+
+const batchQuestionSnapshotSchema = new mongoose.Schema(
+  {
+    batchCode: { type: String, required: true, trim: true },
+    batchName: { type: String, default: null, trim: true },
+    questions: { type: [questionSnapshotSchema], default: [] }
   },
   { _id: false }
 );
@@ -28,12 +43,11 @@ const feedbackFormSchema = new mongoose.Schema(
       enum: ['STAFF', 'BATCH', 'FACILITY', 'COURSE'],
       index: true
     },
-    // staffId: { type: String, default: null, trim: true },
     staffIds: { type: [String], default: [] },
     staffNames: { type: [String], default: [] },
-    staffName: { type: String, default: null, trim: true },
     questions: { type: [questionSnapshotSchema], default: [] },
     assignedBatches: { type: [String], default: [] },
+    batchQuestions: { type: [batchQuestionSnapshotSchema], default: [] },
     startDate: { type: Number, required: true },
     endDate: { type: Number, required: true },
     totalAssignedStudents: { type: Number, default: 0 },
