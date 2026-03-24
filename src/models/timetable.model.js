@@ -22,7 +22,7 @@ const PeriodSchema = new mongoose.Schema(
   {
     periodNo: { type: Number, min: 1 },
     time: { type: TimeRangeSchema },
-    periodType: { type: String, enum: ['LECTURE', 'EXAM', 'LAB', 'TUTORIAL', 'TEST', 'REVISION'], default: 'LECTURE' },
+    periodType: { type: String, enum: ['LECTURE', 'EXAM', 'LAB', 'TUTORIAL', 'TEST', 'REVISION', 'PT', 'YOGA'], default: 'LECTURE' },
     examId: { type: String, default: null, trim: true },
     examDescription: { type: String, default: null, trim: true },
     facultyId: { type: String, trim: true, index: true },
