@@ -1742,7 +1742,7 @@ const getStudentMaterialSubjects = async (req, res, next) => {
       status: 'Active',
       isdeleted: false,
       $and: [{ $or: [{ availableFrom: null }, { availableFrom: { $lte: now } }] }, { $or: [{ availableUntil: null }, { availableUntil: { $gte: now } }] }],
-      $or: [{ batchIds: batchCode }, { batchIds: batchId }, { studentIds: studentId }]
+      $or: [{ batchIds: batchCode }, { studentIds: studentId }]
     };
     const materials = await StudyMaterial.find(materialQuery, { subjectId: 1 }).populate('subjectId', 'subjectName subjectCode').lean();
     const subjectMap = new Map();
@@ -1841,37 +1841,32 @@ const getStudentMaterials = async (req, res, next) => {
     const tenantId = pickTenantId(req);
     const identifier = safeTrim(req.body?.studentNo || req.body?.studentId);
     const subjectId = safeTrim(req.body?.subjectId);
-
     if (!tenantId || !identifier) {
       return res.status(400).json({ status: false, message: 'tenantId and studentNo are required' });
     }
     if (!subjectId || !mongoose.Types.ObjectId.isValid(subjectId)) {
       return res.status(400).json({ status: false, message: 'A valid subjectId is required' });
     }
-
     const student = await StudentProfile.findOne({
       tenantId,
       status: 'ACTIVE',
       isdeleted: false,
       $or: [{ studentId: identifier }, { admissionNo: identifier }, { registrationNumber: identifier }]
     }).lean();
-
     if (!student) {
       return res.status(404).json({ status: false, message: 'Student profile not found' });
     }
-
-    const batchCode = safeTrim(student.batchCode);
-    const batchId = safeTrim(student.batchId);
+    let batchCode = safeTrim(student.batchCode);
+    let batchId = safeTrim(student.batchId);
     const studentId = safeTrim(student.studentId);
     const now = Date.now();
-
     const materialQuery = {
       tenantId,
       status: 'Active',
       isdeleted: false,
-      subjectId: new mongoose.Types.ObjectId(subjectId), // Force filter by specific subject
+      subjectId: new mongoose.Types.ObjectId(subjectId),
       $and: [{ $or: [{ availableFrom: null }, { availableFrom: { $lte: now } }] }, { $or: [{ availableUntil: null }, { availableUntil: { $gte: now } }] }],
-      $or: [{ batchIds: batchCode }, { batchIds: batchId }, { studentIds: studentId }]
+      $or: [{ batchIds: batchCode }, { studentIds: studentId }]
     };
     const materials = await StudyMaterial.find(materialQuery).sort({ createdAt: -1 }).populate('subjectId', 'subjectName subjectCode').lean();
     return res.status(200).json({
