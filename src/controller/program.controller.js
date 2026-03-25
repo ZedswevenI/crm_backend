@@ -1133,31 +1133,92 @@ const bulkImportFeedback = async (req, res, next) => {
   }
 };
 
+// const listPTMs = async (req, res, next) => {
+//   try {
+//     const tenantId = pickTenantId(req);
+//     const page = parseInt(req.query.page || req.body.page, 10) || 1;
+//     const limit = parseInt(req.query.limit || req.body.limit, 10) || 10;
+//     const skip = (page - 1) * limit;
+//     const sort = req.query.sort || req.body.sort || '-ptmDate';
+//     const centerCode = req.query.centerCode;
+//     const batchCode = req.query.batchCode;
+//     const admissionNo = req.query.admissionNo;
+//     const studentId = req.query.studentId;
+//     const status = req.query.status;
+//     const fromDate = req.query.fromDate;
+//     const toDate = req.query.toDate;
+//     const query = { tenantId, isdeleted: false };
+//     if (centerCode) query.centerCode = safeTrim(centerCode);
+//     if (batchCode) query.batchCode = safeTrim(batchCode);
+//     if (admissionNo) query.admissionNo = safeTrim(admissionNo);
+//     if (studentId) query.studentId = safeTrim(studentId);
+//     if (status) query.status = safeTrim(status);
+//     if (fromDate || toDate) {
+//       query.ptmDate = {};
+//       if (fromDate) query.ptmDate.$gte = Number(fromDate);
+//       if (toDate) query.ptmDate.$lte = Number(toDate);
+//     }
+//     const [rows, count] = await Promise.all([
+//       PTM.find(query)
+//         .sort(sort)
+//         .skip(skip)
+//         .limit(limit)
+//         .populate({
+//           path: 'studentId',
+//           model: 'studentprofile',
+//           localField: 'studentId',
+//           foreignField: 'studentId',
+//           select: 'admissionNo student.name student.phone parentName parentPhone'
+//         })
+//         .lean(),
+//       PTM.countDocuments(query)
+//     ]);
+//     return res.status(200).json({
+//       status: true,
+//       data: rows,
+//       page,
+//       limit,
+//       count,
+//       pages: Math.ceil(count / limit) || 0,
+//       message: 'PTMs retrieved'
+//     });
+//   } catch (err) {
+//     next(err);
+//   }
+// };
+
 const listPTMs = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
-    const page = parseInt(req.query.page || req.body.page, 10) || 1;
-    const limit = parseInt(req.query.limit || req.body.limit, 10) || 10;
+    const page = parseInt(req.query.page || req.body?.page, 10) || 1;
+    const limit = parseInt(req.query.limit || req.body?.limit, 10) || 10;
     const skip = (page - 1) * limit;
-    const sort = req.query.sort || req.body.sort || '-ptmDate';
-    const centerCode = req.query.centerCode;
-    const batchCode = req.query.batchCode;
-    const admissionNo = req.query.admissionNo;
-    const studentId = req.query.studentId;
-    const status = req.query.status;
-    const fromDate = req.query.fromDate;
-    const toDate = req.query.toDate;
+    const sort = req.query.sort || req.body?.sort || '-ptmDate';
+    const centerCode = safeTrim(req.query.centerCode || req.body?.centerCode || '');
+    const batchCode = safeTrim(req.query.batchCode || req.body?.batchCode || '');
+    const programCode = safeTrim(req.query.programCode || req.body?.programCode || '');
+    const admissionNo = safeTrim(req.query.admissionNo || req.body?.admissionNo || '');
+    const studentId = safeTrim(req.query.studentId || req.body?.studentId || '');
+    const status = safeTrim(req.query.status || req.body?.status || '');
+    const fromDate = req.query.fromDate || req.body?.fromDate;
+    const toDate = req.query.toDate || req.body?.toDate;
+    const startTime = req.query.startTime || req.body?.startTime;
+    const ptmDate = req.query.ptmDate || req.body?.ptmDate;
     const query = { tenantId, isdeleted: false };
-    if (centerCode) query.centerCode = safeTrim(centerCode);
-    if (batchCode) query.batchCode = safeTrim(batchCode);
-    if (admissionNo) query.admissionNo = safeTrim(admissionNo);
-    if (studentId) query.studentId = safeTrim(studentId);
-    if (status) query.status = safeTrim(status);
-    if (fromDate || toDate) {
+    if (centerCode) query.centerCode = centerCode;
+    if (batchCode) query.batchCode = batchCode;
+    if (programCode) query.programCode = programCode;
+    if (admissionNo) query.admissionNo = admissionNo;
+    if (studentId) query.studentId = studentId;
+    if (status) query.status = status;
+    if (ptmDate) {
+      query.ptmDate = Number(ptmDate);
+    } else if (fromDate || toDate) {
       query.ptmDate = {};
       if (fromDate) query.ptmDate.$gte = Number(fromDate);
       if (toDate) query.ptmDate.$lte = Number(toDate);
     }
+    if (startTime) query.startTime = Number(startTime);
     const [rows, count] = await Promise.all([
       PTM.find(query)
         .sort(sort)

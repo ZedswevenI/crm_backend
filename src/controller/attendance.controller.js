@@ -439,6 +439,7 @@ const getStudentsForAttendance = async (req, res, next) => {
         message: 'tenantId, batchCode, date, and periodNo are required'
       });
     }
+    console.log('batchCode ', batchCode);
     const students = await StudentProfile.find({ tenantId, batchCode, status: 'ACTIVE', isdeleted: false }, { studentId: 1, admissionNo: 1, 'student.name': 1 }).sort({ 'student.name': 1 }).lean();
     if (!students.length) {
       return res.status(200).json({
