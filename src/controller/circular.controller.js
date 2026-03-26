@@ -272,11 +272,9 @@ const publishCircular = async (req, res, next) => {
     const tenantId = picktenantId(req);
     const circularId = safeTrim(req.body?.circularId);
     const userId = safeTrim(req.body?.userId);
-
     if (!tenantId || !circularId) {
       return res.status(400).json({ status: false, message: 'tenantId and circularId are required' });
     }
-
     const updatedCircular = await Circular.findOneAndUpdate(
       { tenantId, circularId, isdeleted: false },
       {
@@ -288,11 +286,9 @@ const publishCircular = async (req, res, next) => {
       },
       { new: true }
     ).lean();
-
     if (!updatedCircular) {
       return res.status(404).json({ status: false, message: 'Circular not found or already deleted' });
     }
-
     return res.status(200).json({
       status: true,
       message: 'Circular published successfully',
@@ -307,53 +303,43 @@ const getStudentCirculars = async (req, res, next) => {
   try {
     const tenantId = picktenantId(req);
     const studentNo = safeTrim(req.query.studentNo || req.body.studentNo);
-
     if (!tenantId || !studentNo) {
       return res.status(400).json({ status: false, message: 'tenantId and studentNo are required' });
     }
-
     const student = await StudentProfile.findOne({
       tenantId: tenantId,
       isdeleted: false,
       $or: [{ studentId: studentNo }, { admissionNo: studentNo }, { registrationNumber: studentNo }]
-    }).lean();
-
+    })
+      .populate({ path: 'centerId', localField: 'centerId', foreignField: 'centerId', model: 'center', justOne: true, select: 'centerId centerCode centerName' })
+      .lean();
     if (!student) {
       return res.status(404).json({ status: false, message: 'Student profile not found' });
     }
-
-    const centerCode = safeTrim(student.centerCode);
+    const centerCode = safeTrim(student.centerId.centerCode);
     const batchCode = safeTrim(student.batchCode);
-
     const page = parseInt(req.query.page || req.body.page, 10) || 1;
     const limit = parseInt(req.query.limit || req.body.limit, 10) || 10;
     const skip = (page - 1) * limit;
     const sort = req.query.sort || req.body.sort || '-publishedAt';
-
     const query = {
       tenantId,
       isdeleted: false,
       status: 'PUBLISHED',
       $or: [{ scope: 'INSTITUTE' }, { scope: 'CENTER', centerCode: centerCode }, { scope: 'BATCH', batchCode: batchCode }]
     };
-
     const [rows, count] = await Promise.all([Circular.find(query).sort(sort).skip(skip).limit(limit).lean(), Circular.countDocuments(query)]);
-
-    // --- Check which circulars have been read by this student ---
     const circularIds = rows.map((c) => c.circularId);
     const readRecords = await CircularRead.find({
       tenantId,
       studentNo,
       circularId: { $in: circularIds }
     }).lean();
-
     const readSet = new Set(readRecords.map((r) => r.circularId));
-
     const formattedRows = rows.map((circular) => ({
       ...circular,
       isRead: readSet.has(circular.circularId)
     }));
-
     return res.status(constants.HTTPS_SUCCESS || 200).json({
       status: true,
       message: 'Student circulars retrieved successfully',
