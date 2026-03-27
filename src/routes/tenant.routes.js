@@ -12,6 +12,7 @@ import programCtrl from '../controller/program.controller.js';
 import academicYearCtrl from '../controller/academicyear.controller.js';
 import packageCtrl from '../controller/package.controller.js';
 import userCtrl from '../controller/user.controller.js';
+import schlexamCtrl from '../controller/schoolExam.controller.js';
 
 routes.post('/register', tenantCtrl.createInstitute);
 routes.post('/view', validatetoken, tenantCtrl.viewInstitute);
@@ -167,11 +168,11 @@ routes.post('/package/view', validatetoken, packageCtrl.viewPackage);
 routes.post('/package/list/enadisa', validatetoken, packageCtrl.listPackageTargets);
 
 // Package Reports
-routes.post('/school/exam/create', validatetoken, manageCtrl.createSchoolExam);
-routes.post('/school/exam/list', validatetoken, manageCtrl.listSchoolExams);
-routes.post('/school/exam/delete', validatetoken, manageCtrl.deleteSchoolExam);
-routes.post('/school/exam/import', validatetoken, manageCtrl.bulkUploadSchoolExams);
-routes.post('/school/exam/update', validatetoken, manageCtrl.updateSchoolExam);
+routes.post('/school/exam/upload', validatetoken, schlexamCtrl.createSchoolExam);
+routes.post('/school/exam/list', validatetoken, schlexamCtrl.listSchoolExams);
+routes.post('/school/exam/delete', validatetoken, schlexamCtrl.deleteSchoolExam);
+routes.post('/school/exam/import', validatetoken, schlexamCtrl.bulkUploadSchoolExams);
+routes.post('/school/exam/update', validatetoken, schlexamCtrl.updateSchoolExam);
 
 routes.post('/download', tenantCtrl.downloadFile);
 

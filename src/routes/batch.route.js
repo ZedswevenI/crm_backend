@@ -22,6 +22,7 @@ routes.post('/recalc', validatetoken, batchCtrl.recalcBatchStudentCount);
 routes.post('/subjects', validatetoken, batchCtrl.getBatchSubjects);
 routes.post('/ayinfo', validatetoken, batchCtrl.getBatchAyInfo);
 routes.post('/promote', validatetoken, batchCtrl.promoteBatch);
+routes.post('/class-teacher/assign', validatetoken, batchCtrl.assignClassTeacher);
 
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Batch routes' }));
 
