@@ -11,6 +11,7 @@ routes.post('/task/upload', validatetoken, upload.single('file'), taskCtrl.uploa
 routes.post('/task/create', validatetoken, taskCtrl.createTask);
 routes.post('/task/edit', validatetoken, taskCtrl.editTask);
 routes.post('/task/list', validatetoken, taskCtrl.listTasks);
+routes.post('/task/view', validatetoken, taskCtrl.viewTask);
 routes.post('/task/update-status', validatetoken, taskCtrl.updateTaskStatus);
 routes.post('/task/mark-in-progress', validatetoken, taskCtrl.markTaskInProgress);
 

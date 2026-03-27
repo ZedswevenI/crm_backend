@@ -686,7 +686,7 @@ const listActivities = async (req, res, next) => {
     const page = parseInt(req.query.page, 10) || 1;
     const limit = parseInt(req.query.limit, 10) || 10;
     const skip = (page - 1) * limit;
-    const sort = req.query.sort || 'startDate';
+    const sort = req.query.sort || '-createdAt';
     const search = req.query.search || '';
     const batchCode = req.query.batchCode;
     const centerCode = req.query.centerCode;
@@ -790,67 +790,13 @@ const bulkUploadActivities = async (req, res, next) => {
   }
 };
 
-// const listStudentActivities = async (req, res, next) => {
-//   try {
-//     const tenantId = pickTenantId(req);
-//     const identifier = safeTrim(req.body?.studentNo || req.body?.studentId);
-//     if (!tenantId || !identifier) {
-//       return res.status(400).json({ status: false, message: 'tenantId and studentNo are required' });
-//     }
-//     const student = await StudentProfile.findOne({
-//       tenantId,
-//       status: 'ACTIVE',
-//       isdeleted: false,
-//       $or: [{ studentId: identifier }, { admissionNo: identifier }, { registrationNumber: identifier }]
-//     }).lean();
-//     if (!student) {
-//       return res.status(404).json({ status: false, message: 'Student profile not found' });
-//     }
-//     if (!student.batchCode) {
-//       return res.status(200).json({
-//         status: true,
-//         message: 'Student is not assigned to a batch',
-//         data: [],
-//         count: 0
-//       });
-//     }
-//     const activities = await Activity.find({
-//       tenantId,
-//       batchCode: student.batchCode,
-//       isdeleted: false,
-//       status: { $ne: 'CANCELLED' }
-//     })
-//       .sort({ startDate: 1 })
-//       .lean();
-//     const formattedActivities = activities.map((act) => ({
-//       activityId: act.activityId,
-//       activityName: act.activityName,
-//       startDate: act.startDate,
-//       endDate: act.endDate,
-//       status: act.status,
-//       remarks: act.remarks || ''
-//     }));
-//     return res.status(200).json({
-//       status: true,
-//       message: 'Student activities retrieved successfully',
-//       data: formattedActivities,
-//       count: formattedActivities.length
-//     });
-//   } catch (err) {
-//     return next(err);
-//   }
-// };
-
 const listStudentActivities = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     const identifier = safeTrim(req.body?.studentNo || req.body?.studentId);
-
     if (!tenantId || !identifier) {
       return res.status(400).json({ status: false, message: 'tenantId and studentNo are required' });
     }
-
-    // 1. Resolve the student profile to find BOTH their batchCode and centerCode
     const student = await StudentProfile.findOne({
       tenantId,
       status: 'ACTIVE',
@@ -861,8 +807,6 @@ const listStudentActivities = async (req, res, next) => {
     if (!student) {
       return res.status(404).json({ status: false, message: 'Student profile not found' });
     }
-
-    // 2. Build the query to check for Batch-specific OR Center-wide activities
     const activityQuery = {
       tenantId,
       isdeleted: false,
