@@ -23,6 +23,7 @@ const StudentProfileSchema = new mongoose.Schema(
     registrationNumber: { type: String, trim: true, index: true },
     portalStudentId: { type: String, trim: true, index: true },
     studentSchoolId: { type: String, trim: true, default: null, index: true },
+    photoUrl: { type: String, default: null, trim: true },
     student: {
       name: { type: String, required: true, trim: true },
       phone: { type: String, required: false, trim: true },
