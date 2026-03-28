@@ -45,9 +45,13 @@ const uploadExamMarks = async (req, res, next) => {
     for (const row of rows) {
       const admNo = safeTrim(row.admissionNo);
       const excelSchoolId = safeTrim(row.studentSchoolId);
-      if (!admNo || !excelSchoolId) continue;
+      if (!admNo || !excelSchoolId) {
+        continue;
+      }
       const profile = profileMap.get(admNo);
-      if (!profile) continue;
+      if (!profile) {
+        continue;
+      }
       if (!safeTrim(profile.studentSchoolId)) {
         updateOps.push({
           updateOne: {
@@ -58,14 +62,15 @@ const uploadExamMarks = async (req, res, next) => {
         profile.studentSchoolId = excelSchoolId;
       }
     }
+    console.log(`Total updateOps: ${updateOps.length}`);
     if (updateOps.length) {
       await StudentProfile.bulkWrite(updateOps, { ordered: false });
     }
-    const results = [];
     const warnings = [];
     let matchedCount = 0;
     let unmatchedCount = 0;
     const subjectNamesSet = new Set();
+    const incomingMap = new Map();
     for (const row of rows) {
       const admissionNo = safeTrim(row.admissionNo) || null;
       const studentName = safeTrim(row.studentName) || null;
@@ -82,7 +87,6 @@ const uploadExamMarks = async (req, res, next) => {
       }
       const subjects = Array.isArray(row.subjects)
         ? row.subjects.map((s) => {
-            const { marks, isAbsent } = parseMarks(s.isAbsent ? 'AB' : s.marks);
             subjectNamesSet.add(safeTrim(s.subjectName));
             return {
               subjectName: safeTrim(s.subjectName),
@@ -94,8 +98,8 @@ const uploadExamMarks = async (req, res, next) => {
       const autoTotal = subjects.reduce((sum, s) => sum + (s.marks ?? 0), 0);
       const totalMarks = excelTotal !== null ? excelTotal : autoTotal;
       const resolvedSchoolId = safeTrim(profile?.studentSchoolId) || excelSchoolId || null;
-      results.push({
-        admissionNo: admissionNo || null,
+      incomingMap.set(admissionNo, {
+        admissionNo,
         studentId: profile ? safeTrim(profile.studentId) : null,
         studentSchoolId: resolvedSchoolId,
         studentName: studentName || profile?.student?.name || null,
@@ -105,12 +109,34 @@ const uploadExamMarks = async (req, res, next) => {
         isMatched
       });
     }
-    const subjectNames = Array.from(subjectNamesSet).filter(Boolean);
+    // const subjectNames = Array.from(subjectNamesSet).filter(Boolean);
+    const existingSubjectNames = existingDoc?.subjectNames || [];
+    const mergedSubjectNames = Array.from(new Set([...existingSubjectNames, ...Array.from(subjectNamesSet)])).filter(Boolean);
     const firstProfile = profiles[0] || null;
     const resolvedBatchCode = batchCode || firstProfile?.batchCode || null;
     const resolvedBatchId = batchId || firstProfile?.batchId || null;
     const resolvedCenterId = centerId || firstProfile?.centerId || null;
     const resolvedClassNo = rows[0]?.classNo ? Number(rows[0].classNo) || null : null;
+    const existingDoc = await SchoolExamLog.findOne({ tenantId, examName, examDate, batchCode: resolvedBatchCode, isdeleted: false }).lean();
+    let mergedResults = [];
+    if (existingDoc?.results?.length) {
+      mergedResults = existingDoc.results.map((existing) => {
+        const admNo = safeTrim(existing.admissionNo);
+        if (incomingMap.has(admNo)) {
+          const updated = incomingMap.get(admNo);
+          incomingMap.delete(admNo);
+          return updated;
+        }
+        return existing;
+      });
+      for (const [, newRow] of incomingMap) {
+        mergedResults.push(newRow);
+      }
+    } else {
+      mergedResults = Array.from(incomingMap.values());
+    }
+    const finalMatched = mergedResults.filter((r) => r.isMatched).length;
+    const finalUnmatched = mergedResults.filter((r) => !r.isMatched).length;
     const doc = await SchoolExamLog.findOneAndUpdate(
       { tenantId, examName, examDate, batchCode: resolvedBatchCode, isdeleted: false },
       {
@@ -122,11 +148,11 @@ const uploadExamMarks = async (req, res, next) => {
           centerId: resolvedCenterId,
           classNo: resolvedClassNo,
           academicYear,
-          subjectNames,
-          results,
-          totalStudents: results.length,
-          matchedCount,
-          unmatchedCount,
+          subjectNames: mergedSubjectNames,
+          results: mergedResults,
+          totalStudents: mergedResults.length,
+          matchedCount: finalMatched,
+          unmatchedCount: finalUnmatched,
           uploadedBy: userId || null,
           uploadedAt: Date.now(),
           updatedBy: userId || null
@@ -135,6 +161,7 @@ const uploadExamMarks = async (req, res, next) => {
       },
       { new: true, upsert: true }
     );
+
     return res.status(200).json({
       status: true,
       message: 'Exam marks imported successfully',
@@ -164,6 +191,12 @@ const listExams = async (req, res, next) => {
     const limit = Math.min(Math.max(parseInt(req.body?.limit || '20', 10), 1), 100);
     const skip = (page - 1) * limit;
     const query = { tenantId, isdeleted: false };
+    if (req.body?.examLogId) {
+      query.examLogId = safeTrim(req.body.examLogId);
+      const doc = await SchoolExamLog.findOne(query).lean();
+      if (!doc) return res.status(404).json({ status: false, message: 'Exam not found' });
+      return res.status(200).json({ status: true, data: doc });
+    }
     if (req.body?.batchCode) query.batchCode = safeTrim(req.body.batchCode);
     if (req.body?.centerId) query.centerId = safeTrim(req.body.centerId);
     if (req.body?.academicYear) query.academicYear = safeTrim(req.body.academicYear);
