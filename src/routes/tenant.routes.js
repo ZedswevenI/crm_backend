@@ -168,7 +168,7 @@ routes.post('/package/view', validatetoken, packageCtrl.viewPackage);
 routes.post('/package/list/enadisa', validatetoken, packageCtrl.listPackageTargets);
 
 // Package Reports
-routes.post('/school/exam/upload', validatetoken, schlexamCtrl.uploadExamMarks);
+routes.post('/school/exam/import', validatetoken, schlexamCtrl.uploadExamMarks);
 routes.post('/school/exam/view', validatetoken, schlexamCtrl.viewExam);
 routes.post('/school/exam/delete', validatetoken, schlexamCtrl.deleteExam);
 routes.post('/school/exam/list', validatetoken, schlexamCtrl.listExams);
