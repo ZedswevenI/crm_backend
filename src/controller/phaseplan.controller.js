@@ -5,6 +5,8 @@ import Phase from '../models/phaseplan.model.js';
 import Topic from '../models/topic.model.js';
 import Activity from '../models/activity.model.js';
 import StudentProfile from '../models/studentProfile.model.js';
+import TimeTable from '../models/timetable.model.js';
+import Batch from '../models/batch.model.js';
 
 const parseDateToEpoch = (dateString) => {
   if (!dateString) return null;
@@ -18,6 +20,7 @@ const toInt = (v, def = 0) => {
   const n = Number(v);
   return Number.isFinite(n) ? Math.trunc(n) : def;
 };
+const normDay = (d) => String(d || '').toUpperCase();
 
 const deletePhase = async (req, res, next) => {
   try {
@@ -847,4 +850,216 @@ const listStudentActivities = async (req, res, next) => {
   }
 };
 
-export default { createPhase, updatePhase, listPhases, deletePhase, getAvailableTopics, bulkUploadPhases, createActivity, editActivity, changeStatus, viewActivity, deleteActivity, listActivities, bulkUploadActivities, listStudentActivities };
+const phasePlanReport = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const batchCode = safeTrim(req.body?.batchCode);
+    const subjectId = safeTrim(req.body?.subjectId);
+    const classNo = toInt(req.body?.classNo, 0);
+    if (!tenantId || !batchCode || !subjectId || !classNo) return res.status(400).json({ status: false, message: 'tenantId, batchCode, subjectId and classNo are required' });
+    const batch = await Batch.findOne({ tenantId, batchCode, isdeleted: false }).lean();
+    if (!batch) return res.status(404).json({ status: false, message: 'Batch not found' });
+    const programId = safeTrim(batch.programId);
+    const phases = await Phase.find({
+      tenantId,
+      programId,
+      classNo,
+      subjectId,
+      isdeleted: false
+    })
+      .sort({ sortOrder: 1, phaseName: 1 })
+      .lean();
+    const timetables = await TimeTable.find({
+      tenantId,
+      batchCode,
+      isdeleted: false,
+      status: 'Active'
+    }).lean();
+
+    // ── 4. Compute allotted minutes per phaseId from all timetable periods ─────
+    // Also track topic-level minutes: phaseId → topicName(lower) → minutes
+    // Also track unassigned minutes (no phaseId, but matching subjectId)
+
+    const phaseMinutes = new Map(); // phaseId → total minutes
+    const topicMinutes = new Map(); // phaseId → Map(topicNameLower → minutes)
+    let unassignedMins = 0;
+
+    const countPeriod = (p) => {
+      // Only count periods matching our subjectId, not cancelled
+      if (safeTrim(p?.subjectId) !== subjectId) return;
+      if (p?.isCancelled) return;
+      const start = toInt(p?.time?.startMin, -1);
+      const end = toInt(p?.time?.endMin, -1);
+      if (start < 0 || end <= start) return;
+      const mins = end - start;
+      const pid = safeTrim(p?.phaseId) || null;
+
+      if (!pid) {
+        unassignedMins += mins;
+        return;
+      }
+
+      // Phase-level
+      phaseMinutes.set(pid, (phaseMinutes.get(pid) || 0) + mins);
+
+      // Topic-level — match period.topic string against phase topics
+      const topicRaw = safeTrim(p?.topic).toLowerCase();
+      if (topicRaw) {
+        if (!topicMinutes.has(pid)) topicMinutes.set(pid, new Map());
+        const tMap = topicMinutes.get(pid);
+        tMap.set(topicRaw, (tMap.get(topicRaw) || 0) + mins);
+      }
+    };
+
+    for (const tt of timetables) {
+      // ── Base week template ───────────────────────────────────────────────────
+      for (const dayObj of tt.week || []) {
+        for (const p of dayObj.periods || []) {
+          countPeriod(p);
+        }
+      }
+
+      // ── Day overrides ────────────────────────────────────────────────────────
+      for (const ov of tt.dayOverrides || []) {
+        if (ov.action === 'CANCEL_DAY') continue; // whole day cancelled — no hours
+        if (ov.action === 'REPLACE_DAY') {
+          // REPLACE_DAY periods replace that day — count override periods instead of base
+          for (const p of ov.periods || []) countPeriod(p);
+        }
+      }
+
+      // ── Period overrides ─────────────────────────────────────────────────────
+      // Collect cancelled and replaced period keys per date so we don't double-count
+      // Build: dateDay+periodNo → action for fast lookup
+      const overrideMap = new Map(); // key: `${date}_${day}_${periodNo}` → action + period
+      for (const ov of tt.periodOverrides || []) {
+        const key = `${ov.date}_${normDay(ov.day)}_${ov.periodNo}`;
+        // Last override wins (upsert behaviour matches backend)
+        overrideMap.set(key, ov);
+      }
+
+      // For periods that have overrides — subtract base and add override
+      for (const ov of overrideMap.values()) {
+        if (ov.action === 'CANCEL_PERIOD') {
+          // Period cancelled — find base period and subtract its minutes
+          const dayObj = (tt.week || []).find((d) => normDay(d.day) === normDay(ov.day));
+          const basePeriod = (dayObj?.periods || []).find((p) => toInt(p?.periodNo) === toInt(ov.periodNo));
+          if (basePeriod) {
+            // Subtract base period (it was already counted above)
+            if (safeTrim(basePeriod?.subjectId) === subjectId && !basePeriod?.isCancelled) {
+              const start = toInt(basePeriod?.time?.startMin, -1);
+              const end = toInt(basePeriod?.time?.endMin, -1);
+              if (start >= 0 && end > start) {
+                const mins = end - start;
+                const pid = safeTrim(basePeriod?.phaseId) || null;
+                if (!pid) unassignedMins = Math.max(0, unassignedMins - mins);
+                else phaseMinutes.set(pid, Math.max(0, (phaseMinutes.get(pid) || 0) - mins));
+              }
+            }
+          }
+        } else if (ov.action === 'REPLACE_PERIOD' && ov.period) {
+          // Subtract base period, add replacement
+          const dayObj = (tt.week || []).find((d) => normDay(d.day) === normDay(ov.day));
+          const basePeriod = (dayObj?.periods || []).find((p) => toInt(p?.periodNo) === toInt(ov.periodNo));
+          if (basePeriod && safeTrim(basePeriod?.subjectId) === subjectId && !basePeriod?.isCancelled) {
+            const start = toInt(basePeriod?.time?.startMin, -1);
+            const end = toInt(basePeriod?.time?.endMin, -1);
+            if (start >= 0 && end > start) {
+              const mins = end - start;
+              const pid = safeTrim(basePeriod?.phaseId) || null;
+              if (!pid) unassignedMins = Math.max(0, unassignedMins - mins);
+              else phaseMinutes.set(pid, Math.max(0, (phaseMinutes.get(pid) || 0) - mins));
+            }
+          }
+          // Add replacement period
+          countPeriod({ ...ov.period, periodNo: ov.periodNo });
+        } else if (ov.action === 'ADD_PERIOD' && ov.period) {
+          // Extra period added — count it
+          countPeriod({ ...ov.period, periodNo: ov.periodNo });
+        } else if (ov.action === 'MOVE_PERIOD') {
+          // MOVE_PERIOD swaps content between slots — time changes but content stays
+          // Base periods already counted — no subject/phase change so no adjustment needed
+        }
+      }
+    }
+
+    // ── 5. Build response ──────────────────────────────────────────────────────
+    const toHours = (mins) => Math.round((mins / 60) * 100) / 100; // 2 decimal places
+
+    const phaseList = phases.map((ph) => {
+      const pid = safeTrim(ph.phaseId);
+      const allottedMins = phaseMinutes.get(pid) || 0;
+      const tMap = topicMinutes.get(pid) || new Map();
+
+      // Phase-level estHours = sum of all topic estHours
+      const phaseEstHours = (ph.topics || []).reduce((sum, t) => sum + (t.estHours || 0), 0);
+      const allottedHours = toHours(allottedMins);
+      const remainingHours = Math.round((phaseEstHours - allottedHours) * 100) / 100;
+
+      // Topic-level
+      const topics = (ph.topics || []).map((t) => {
+        const topicKey = safeTrim(t.topicName).toLowerCase();
+        const topicAllottedMins = tMap.get(topicKey) || 0;
+        const topicAllotted = toHours(topicAllottedMins);
+        const topicEst = t.estHours || 0;
+        const topicRemaining = Math.round((topicEst - topicAllotted) * 100) / 100;
+        return {
+          topicName: t.topicName,
+          sortOrder: t.sortOrder,
+          estHours: topicEst,
+          allottedHours: topicAllotted,
+          remainingHours: topicRemaining
+        };
+      });
+
+      return {
+        phaseId: pid,
+        phaseName: ph.phaseName,
+        sortOrder: ph.sortOrder,
+        subjectId: safeTrim(ph.subjectId),
+        classNo: ph.classNo,
+        estHours: phaseEstHours,
+        allottedHours,
+        remainingHours,
+        topics
+      };
+    });
+
+    // ── 6. Unassigned bucket ──────────────────────────────────────────────────
+    const unassigned =
+      unassignedMins > 0
+        ? {
+            phaseId: null,
+            phaseName: 'Unassigned',
+            estHours: null,
+            allottedHours: toHours(unassignedMins),
+            remainingHours: null,
+            topics: []
+          }
+        : null;
+    const totalEstHours = phaseList.reduce((s, p) => s + (p.estHours || 0), 0);
+    const totalAllottedHours = phaseList.reduce((s, p) => s + (p.allottedHours || 0), 0) + (unassigned?.allottedHours || 0);
+    const totalRemaining = Math.round((totalEstHours - totalAllottedHours) * 100) / 100;
+
+    return res.status(200).json({
+      status: true,
+      data: {
+        batchCode,
+        programId,
+        classNo,
+        subjectId,
+        summary: {
+          totalEstHours: Math.round(totalEstHours * 100) / 100,
+          totalAllottedHours: Math.round(totalAllottedHours * 100) / 100,
+          totalRemainingHours: totalRemaining
+        },
+        phases: phaseList,
+        unassigned: unassigned || null
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+export default { createPhase, updatePhase, listPhases, deletePhase, getAvailableTopics, bulkUploadPhases, createActivity, editActivity, changeStatus, viewActivity, deleteActivity, listActivities, bulkUploadActivities, listStudentActivities, phasePlanReport };

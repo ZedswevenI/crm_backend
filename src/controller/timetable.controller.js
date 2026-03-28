@@ -1045,24 +1045,19 @@ const viewBatchScheduleByDate = async (req, res, next) => {
     const activeOnly = req.body?.activeOnly !== false;
     if (!tenantId || !batchCode || !fromDate) return res.status(400).json({ status: false, message: 'tenantId, batchCode, and fromDate are required' });
     if (toDate < fromDate) return res.status(400).json({ status: false, message: 'toDate cannot be before fromDate' });
-
     const msPerDay = 24 * 60 * 60 * 1000;
     if (toDate - fromDate > 31 * msPerDay) return res.status(400).json({ status: false, message: 'Date range cannot exceed 31 days' });
-
     const weekStarts = new Set();
     let curr = fromDate;
     while (curr <= toDate) {
       weekStarts.add(getPreviousMonday(curr));
       curr += msPerDay;
     }
-
     const ttQuery = { tenantId, batchCode, wkStartOn: { $in: [...weekStarts] }, isdeleted: false };
-    if (activeOnly) ttQuery.status = 'Active'; // FIX G10 variant: student-safe view only shows Active
-
+    if (activeOnly) ttQuery.status = 'Active';
     const timetables = await TimeTable.find(ttQuery).lean();
     const ttMap = {};
     for (const tt of timetables) ttMap[tt.wkStartOn] = tt;
-
     const schedule = [];
     curr = fromDate;
     while (curr <= toDate) {
@@ -1070,9 +1065,11 @@ const viewBatchScheduleByDate = async (req, res, next) => {
       const tt = ttMap[wkStart];
       if (!tt) {
         const d = new Date(curr);
-        schedule.push({ date: curr, day: DAYS[d.getUTCDay() === 0 ? 6 : d.getUTCDay() - 1], isHoliday: false, holidayReason: null, periods: [] });
+        schedule.push({ date: curr, day: DAYS[d.getUTCDay() === 0 ? 6 : d.getUTCDay() - 1], isHoliday: false, holidayReason: null, periods: [], timetableId: null });
       } else {
-        schedule.push(buildDaySchedule(tt, curr));
+        // schedule.push(buildDaySchedule(tt, curr));
+        const daySchedule = buildDaySchedule(tt, curr);
+        schedule.push({ ...daySchedule, timetableId: String(tt._id) });
       }
       curr += msPerDay;
     }
@@ -1086,17 +1083,25 @@ const logLateEntry = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     const userId = safeTrim(req.body?.userId);
-    const { type, personId, personName, timetableId, batchCode, date, periodNo, scheduledStartMin, delayMinutes, reason } = req.body;
-
+    const { type, personId, personName, timetableId, batchCode, date, periodNo, scheduledStartMin, delayMinutes, reason, entryType } = req.body;
     if (!tenantId || !type || !personId || !timetableId || !date || !periodNo || scheduledStartMin === undefined || delayMinutes === undefined) return res.status(400).json({ status: false, message: 'Missing required fields for late entry' });
 
     const upperType = String(type).toUpperCase();
     if (!['STAFF', 'STUDENT'].includes(upperType)) return res.status(400).json({ status: false, message: 'type must be STAFF or STUDENT' });
-
     const doc = await LateEntryLog.findOneAndUpdate(
       { tenantId, type: upperType, personId, date: toInt(date), periodNo: toInt(periodNo), isdeleted: false },
       {
-        $set: { personName: safeTrim(personName), timetableId: safeTrim(timetableId), batchCode: safeTrim(batchCode), scheduledStartMin: toInt(scheduledStartMin), actualEntryTime: Date.now(), delayMinutes: toInt(delayMinutes), reason: safeTrim(reason) || null, updatedBy: userId },
+        $set: {
+          personName: safeTrim(personName),
+          entryType: safeTrim(entryType),
+          timetableId: safeTrim(timetableId),
+          batchCode: safeTrim(batchCode),
+          scheduledStartMin: toInt(scheduledStartMin),
+          actualEntryTime: Date.now(),
+          delayMinutes: toInt(delayMinutes),
+          reason: safeTrim(reason) || null,
+          updatedBy: userId
+        },
         $setOnInsert: { createdBy: userId }
       },
       { new: true, upsert: true }
@@ -1324,6 +1329,110 @@ const validateSchedule = async (req, res, next) => {
   }
 };
 
+const subjectHoursReport = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const batchCode = safeTrim(req.body?.batchCode);
+    const phaseId = safeTrim(req.body?.phaseId) || null;
+    if (!tenantId || !batchCode) return res.status(400).json({ status: false, message: 'tenantId and batchCode are required' });
+    const timetables = await TimeTable.find({
+      tenantId,
+      batchCode,
+      isdeleted: false,
+      status: 'Active'
+    }).lean();
+    if (!timetables.length) return res.status(200).json({ status: true, data: [], count: 0, message: 'No published timetables found for this batch' });
+    const subjectMins = new Map();
+    const subjectMeta = new Map();
+    const countSubjectPeriod = (p) => {
+      if (p?.isCancelled) return;
+      const sid = safeTrim(p?.subjectId);
+      if (!sid) return;
+      if (phaseId && safeTrim(p?.phaseId) !== phaseId) return;
+      const start = toInt(p?.time?.startMin, -1);
+      const end = toInt(p?.time?.endMin, -1);
+      if (start < 0 || end <= start) return;
+      const mins = end - start;
+      subjectMins.set(sid, (subjectMins.get(sid) || 0) + mins);
+      if (!subjectMeta.has(sid)) {
+        subjectMeta.set(sid, {
+          subjectCode: safeTrim(p?.subjectCode) || null,
+          subjectName: safeTrim(p?.subjectName) || null
+        });
+      }
+    };
+    for (const tt of timetables) {
+      for (const dayObj of tt.week || []) {
+        for (const p of dayObj.periods || []) countSubjectPeriod(p);
+      }
+      for (const ov of tt.dayOverrides || []) {
+        if (ov.action === 'CANCEL_DAY') continue;
+        if (ov.action === 'REPLACE_DAY') {
+          for (const p of ov.periods || []) countSubjectPeriod(p);
+        }
+      }
+      const overrideMap = new Map();
+      for (const ov of tt.periodOverrides || []) {
+        const key = `${ov.date}_${normDay(ov.day)}_${ov.periodNo}`;
+        overrideMap.set(key, ov);
+      }
+      for (const ov of overrideMap.values()) {
+        if (ov.action === 'CANCEL_PERIOD') {
+          const dayObj = (tt.week || []).find((d) => normDay(d.day) === normDay(ov.day));
+          const basePeriod = (dayObj?.periods || []).find((p) => toInt(p?.periodNo) === toInt(ov.periodNo));
+          if (basePeriod && !basePeriod?.isCancelled) {
+            const sid = safeTrim(basePeriod?.subjectId);
+            const start = toInt(basePeriod?.time?.startMin, -1);
+            const end = toInt(basePeriod?.time?.endMin, -1);
+            if (sid && start >= 0 && end > start) {
+              if (!phaseId || safeTrim(basePeriod?.phaseId) === phaseId) {
+                subjectMins.set(sid, Math.max(0, (subjectMins.get(sid) || 0) - (end - start)));
+              }
+            }
+          }
+        } else if (ov.action === 'REPLACE_PERIOD' && ov.period) {
+          const dayObj = (tt.week || []).find((d) => normDay(d.day) === normDay(ov.day));
+          const basePeriod = (dayObj?.periods || []).find((p) => toInt(p?.periodNo) === toInt(ov.periodNo));
+          if (basePeriod && !basePeriod?.isCancelled) {
+            const sid = safeTrim(basePeriod?.subjectId);
+            const start = toInt(basePeriod?.time?.startMin, -1);
+            const end = toInt(basePeriod?.time?.endMin, -1);
+            if (sid && start >= 0 && end > start) {
+              if (!phaseId || safeTrim(basePeriod?.phaseId) === phaseId) {
+                subjectMins.set(sid, Math.max(0, (subjectMins.get(sid) || 0) - (end - start)));
+              }
+            }
+          }
+          countSubjectPeriod({ ...ov.period, periodNo: ov.periodNo });
+        } else if (ov.action === 'ADD_PERIOD' && ov.period) {
+          countSubjectPeriod({ ...ov.period, periodNo: ov.periodNo });
+        }
+      }
+    }
+    const toHours = (mins) => Math.round((mins / 60) * 100) / 100;
+    const data = Array.from(subjectMins.entries())
+      .map(([sid, mins]) => {
+        const meta = subjectMeta.get(sid) || {};
+        return {
+          subjectId: sid,
+          subjectCode: meta.subjectCode || null,
+          subjectName: meta.subjectName || null,
+          allottedHours: toHours(mins)
+        };
+      })
+      .sort((a, b) => (a.subjectName || '').localeCompare(b.subjectName || ''));
+    const totalAllottedHours = toHours(Array.from(subjectMins.values()).reduce((s, m) => s + m, 0));
+    return res.status(200).json({
+      status: true,
+      data,
+      count: data.length,
+      summary: { totalAllottedHours }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   createTimeTable,
   publishTimeTable,
@@ -1347,5 +1456,6 @@ export default {
   validateSchedule,
   listTimeTables,
   viewTimeTable,
-  listTimeTablesByBatch
+  listTimeTablesByBatch,
+  subjectHoursReport
 };

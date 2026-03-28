@@ -16,6 +16,7 @@ const lateEntrySchema = new mongoose.Schema(
     actualEntryTime: { type: Number, required: true },
     delayMinutes: { type: Number, required: true },
     reason: { type: String, trim: true, default: null },
+    entryType: { type: String, enum: ['LATE', 'EARLY_LEAVE'], default: 'LATE', trim: true },
     isdeleted: { type: Boolean, default: false, index: true },
     createdBy: { type: String, default: null },
     updatedBy: { type: String, default: null }
