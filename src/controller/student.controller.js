@@ -1,4 +1,8 @@
 import mongoose from 'mongoose';
+import path from 'path';
+import crypto from 'crypto';
+import { PutObjectCommand } from '@aws-sdk/client-s3';
+import s3Client from '../middlewares/s3config.js';
 import constants from '../helpers/constants.js';
 import StudentProfile from '../models/studentProfile.model.js';
 import Admission from '../models/admission.model.js';
@@ -22,6 +26,10 @@ import StudyMaterial from '../models/studymaterial.model.js';
 import SchoolExam from '../models/schoolexam.model.js';
 import SchoolExamResult from '../models/schoolexamresult.model.js';
 import StudentRemark from '../models/studentremark.model.js';
+import LateEntryLog from '../models/lateEntrylog.model.js';
+
+const QUESTION_BUCKET = process.env.AWS_S3_QUESTION_BUCKET;
+const REGION = process.env.AWS_REGION || 'ap-south-1';
 
 const pickTenantId = (req) => String(req?.body?.tenantId || req?.body?.entiId || '').trim();
 const safeTrim = (v) => (v === undefined || v === null ? '' : String(v).trim());
@@ -2134,6 +2142,164 @@ const getStudentRemarks = async (req, res, next) => {
   }
 };
 
+const bulkUpdateStudents = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const students = Array.isArray(req.body?.students) ? req.body.students : [];
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+    if (!students.length) return res.status(400).json({ status: false, message: 'students array is required' });
+
+    let successCount = 0;
+    let failedCount = 0;
+    const errors = [];
+
+    for (const s of students) {
+      const admissionNo = safeTrim(s['Enrolment Number'] || s['Admission No'] || s.admissionNo || '');
+      if (!admissionNo) {
+        failedCount++;
+        errors.push({ admissionNo: '-', reason: 'Missing admissionNo' });
+        continue;
+      }
+
+      const profileUpdate = {};
+      if (safeTrim(s['Full Name'] || s.fullName)) profileUpdate['student.name'] = safeTrim(s['Full Name'] || s.fullName);
+      if (safeTrim(s['Mobile'] || s.mobile)) profileUpdate['student.phone'] = safeTrim(s['Mobile'] || s.mobile);
+      if (safeTrim(s['Email'] || s.email)) profileUpdate['student.email'] = safeTrim(s['Email'] || s.email);
+      if (safeTrim(s['Parent Name'] || s.parentName)) profileUpdate['student.parentName'] = safeTrim(s['Parent Name'] || s.parentName);
+      if (safeTrim(s['Parent Mobile'] || s.parentMobile)) profileUpdate['student.parentPhone'] = safeTrim(s['Parent Mobile'] || s.parentMobile);
+
+      if (!Object.keys(profileUpdate).length) {
+        failedCount++;
+        errors.push({ admissionNo, reason: 'No fields to update' });
+        continue;
+      }
+
+      const result = await StudentProfile.updateOne({ tenantId, admissionNo, isdeleted: false }, { $set: { ...profileUpdate, updatedBy: safeTrim(req.body?.userId || '') } });
+
+      if (result.matchedCount === 0) {
+        failedCount++;
+        errors.push({ admissionNo, reason: 'Student not found' });
+      } else {
+        successCount++;
+      }
+    }
+
+    return res.status(200).json({
+      status: true,
+      message: 'Bulk update completed',
+      data: { successCount, failedCount, errors }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const bulkUploadPhotos = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+    if (!req.files || !req.files.length) return res.status(400).json({ status: false, message: 'No files uploaded' });
+    if (!QUESTION_BUCKET) return res.status(500).json({ status: false, message: 'S3 bucket not configured' });
+
+    let successCount = 0;
+    let failedCount = 0;
+    const errors = [];
+
+    for (const file of req.files) {
+      // filename without extension = admissionNo
+      const admissionNo = path.basename(file.originalname, path.extname(file.originalname)).trim();
+      if (!admissionNo) {
+        failedCount++;
+        errors.push({ file: file.originalname, reason: 'Cannot determine admissionNo from filename' });
+        continue;
+      }
+
+      try {
+        // Build S3 key under students/ prefix
+        const ext = path.extname(file.originalname) || '.jpg';
+        const random = crypto.randomBytes(6).toString('hex');
+        const key = `students/${admissionNo}-${Date.now()}-${random}${ext}`;
+
+        await s3Client.send(
+          new PutObjectCommand({
+            Bucket: QUESTION_BUCKET,
+            Key: key,
+            Body: file.buffer,
+            ContentType: file.mimetype
+          })
+        );
+
+        const photoUrl = `https://${QUESTION_BUCKET}.s3.${REGION}.amazonaws.com/${key}`;
+
+        const result = await StudentProfile.updateOne({ tenantId, admissionNo, isdeleted: false }, { $set: { photoUrl, updatedBy: safeTrim(req.body?.userId || '') } });
+
+        if (result.matchedCount === 0) {
+          failedCount++;
+          errors.push({ admissionNo, file: file.originalname, reason: 'Student not found' });
+        } else {
+          successCount++;
+        }
+      } catch (uploadErr) {
+        failedCount++;
+        errors.push({ admissionNo, file: file.originalname, reason: uploadErr.message || 'Upload failed' });
+      }
+    }
+
+    return res.status(200).json({
+      status: true,
+      message: 'Bulk photo upload completed',
+      data: { successCount, failedCount, errors }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const getStudentLateEntries = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const identifier = safeTrim(req.body?.studentNo || req.body?.studentId);
+    if (!tenantId || !identifier) {
+      return res.status(400).json({ status: false, message: 'tenantId and studentNo are required' });
+    }
+
+    // Resolve studentId from profile
+    const student = await StudentProfile.findOne(
+      {
+        tenantId,
+        isdeleted: false,
+        $or: [{ studentId: identifier }, { admissionNo: identifier }, { registrationNumber: identifier }]
+      },
+      { studentId: 1, admissionNo: 1 }
+    ).lean();
+
+    if (!student) return res.status(404).json({ status: false, message: 'Student not found' });
+
+    const page = Math.max(1, toInt(req.query?.page, 1));
+    const limit = Math.min(100, Math.max(1, toInt(req.query?.limit, 20)));
+    const skip = (page - 1) * limit;
+
+    const query = {
+      tenantId,
+      type: 'STUDENT',
+      personId: student.studentId,
+      isdeleted: false
+    };
+
+    const [rows, count] = await Promise.all([LateEntryLog.find(query).sort({ date: -1, createdAt: -1 }).skip(skip).limit(limit).lean(), LateEntryLog.countDocuments(query)]);
+
+    return res.status(200).json({
+      status: true,
+      data: rows,
+      count,
+      page,
+      limit
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   listStudents,
   viewProfile,
@@ -2153,5 +2319,8 @@ export default {
   toggleTabletAccess,
   addSchoolExamMarks,
   addStudentRemark,
-  getStudentRemarks
+  getStudentRemarks,
+  bulkUpdateStudents,
+  bulkUploadPhotos,
+  getStudentLateEntries
 };

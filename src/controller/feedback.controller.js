@@ -585,6 +585,7 @@ const deleteFeedbackForm = async (req, res, next) => {
 //   try {
 //     const tenantId = pickTenantId(req);
 //     const formId = safeTrim(req.body?.formId || req.query?.formId);
+//     const batchCode = safeTrim(req.body?.batchCode || req.query?.batchCode || '');
 //     if (!tenantId || !formId)
 //       return res.status(400).json({
 //         status: false,
@@ -596,49 +597,67 @@ const deleteFeedbackForm = async (req, res, next) => {
 //       isdeleted: false
 //     }).lean();
 //     if (!form) return res.status(404).json({ status: false, message: 'Form not found' });
-//     const responses = await FeedbackResponse.find({ formId, tenantId, isdeleted: false }, { answers: 1, submittedAt: 1, batchCode: 1, _id: 0 }).lean();
+//     const responseFilter = { formId, tenantId, isdeleted: false };
+//     if (batchCode) responseFilter.batchCode = batchCode;
+//     const responses = await FeedbackResponse.find(responseFilter, { answers: 1, batchCode: 1, submittedAt: 1, _id: 0 }).lean();
 //     const totalResponses = responses.length;
 //     const responseRate = form.totalAssignedStudents > 0 ? Math.round((totalResponses / form.totalAssignedStudents) * 1000) / 10 : 0;
 //     const batchBreakdown = {};
 //     responses.forEach((r) => {
 //       batchBreakdown[r.batchCode] = (batchBreakdown[r.batchCode] || 0) + 1;
 //     });
-//     const questionSummary = form.questions.map((q) => {
-//       if (q.fieldType === 'text') {
-//         const textAnswers = responses.map((r) => r.answers.find((a) => a.fieldId === q.fieldId)?.fieldValue).filter((v) => v && String(v).trim());
+//     const batchResults = form.batchQuestions.map((bq) => {
+//       const batchResponses = responses.filter((r) => r.batchCode === bq.batchCode);
+//       const questionSummary = bq.questions.map((q) => {
+//         if (q.fieldType === 'text') {
+//           const textAnswers = batchResponses.map((r) => r.answers.find((a) => a.fieldId === q.fieldId)?.fieldValue).filter((v) => v && String(v).trim());
+//           return {
+//             fieldId: q.fieldId,
+//             fieldType: q.fieldType,
+//             fieldText: q.fieldText,
+//             isSubjectBased: q.isSubjectBased,
+//             subjectName: q.subjectName,
+//             staffName: q.staffName,
+//             totalAnswered: textAnswers.length,
+//             textAnswers
+//           };
+//         }
+//         const optionCounts = {};
+//         q.fieldOptions.forEach((opt) => {
+//           optionCounts[opt] = 0;
+//         });
+//         let totalAnswered = 0;
+//         batchResponses.forEach((r) => {
+//           const ans = r.answers.find((a) => a.fieldId === q.fieldId);
+//           if (!ans || ans.fieldValue === null) return;
+//           const vals = Array.isArray(ans.fieldValue) ? ans.fieldValue : [ans.fieldValue];
+//           vals.forEach((v) => {
+//             const key = String(v).trim();
+//             if (key && optionCounts[key] !== undefined) optionCounts[key]++;
+//           });
+//           totalAnswered++;
+//         });
 //         return {
 //           fieldId: q.fieldId,
 //           fieldType: q.fieldType,
 //           fieldText: q.fieldText,
-//           totalAnswered: textAnswers.length,
-//           textAnswers
+//           fieldOptions: q.fieldOptions,
+//           isSubjectBased: q.isSubjectBased,
+//           subjectName: q.subjectName,
+//           staffName: q.staffName,
+//           totalAnswered,
+//           optionCounts,
+//           optionPercentages: Object.fromEntries(Object.entries(optionCounts).map(([opt, count]) => [opt, totalAnswered > 0 ? Math.round((count / totalAnswered) * 1000) / 10 : 0]))
 //         };
-//       }
-//       const optionCounts = {};
-//       q.fieldOptions.forEach((opt) => {
-//         optionCounts[opt] = 0;
-//       });
-//       let totalAnswered = 0;
-//       responses.forEach((r) => {
-//         const ans = r.answers.find((a) => a.fieldId === q.fieldId);
-//         if (!ans || ans.fieldValue === null) return;
-//         const vals = Array.isArray(ans.fieldValue) ? ans.fieldValue : [ans.fieldValue];
-//         vals.forEach((v) => {
-//           const key = String(v).trim();
-//           if (key && optionCounts[key] !== undefined) optionCounts[key]++;
-//         });
-//         totalAnswered++;
 //       });
 //       return {
-//         fieldId: q.fieldId,
-//         fieldType: q.fieldType,
-//         fieldText: q.fieldText,
-//         fieldOptions: q.fieldOptions,
-//         totalAnswered,
-//         optionCounts,
-//         optionPercentages: Object.fromEntries(Object.entries(optionCounts).map(([opt, count]) => [opt, totalAnswered > 0 ? Math.round((count / totalAnswered) * 1000) / 10 : 0]))
+//         batchCode: bq.batchCode,
+//         batchName: bq.batchName,
+//         totalResponses: batchResponses.length,
+//         questionSummary
 //       };
 //     });
+
 //     return res.status(200).json({
 //       status: true,
 //       data: {
@@ -656,48 +675,14 @@ const deleteFeedbackForm = async (req, res, next) => {
 //         totalResponses,
 //         responseRate,
 //         batchBreakdown,
-//         questionSummary
+//         // Per-batch results — each batch has its own question set
+//         batchResults,
+//         // Filtered batch (if batchCode passed)
+//         filteredBatch: batchCode || null
 //       }
 //     });
 //   } catch (err) {
-//     return next(err);
-//   }
-// };
-
-// const getActiveFormsForStudent = async (req, res, next) => {
-//   try {
-//     const tenantId = pickTenantId(req);
-//     const batchCode = safeTrim(req.body?.batchCode || req.query?.batchCode);
-//     const studentId = safeTrim(req.body?.studentId || req.query?.studentId);
-//     if (!tenantId || !batchCode || !studentId)
-//       return res.status(400).json({
-//         status: false,
-//         message: 'tenantId, batchCode and studentId are required'
-//       });
-//     await autoUpdateStatuses(tenantId);
-//     const forms = await FeedbackForm.find({
-//       tenantId,
-//       isdeleted: false,
-//       status: 'ACTIVE',
-//       assignedBatches: batchCode
-//     }).lean();
-//     const formIds = forms.map((f) => f._id);
-//     const submitted = await FeedbackResponse.find({ tenantId, formId: { $in: formIds }, studentId, isdeleted: false }, { formId: 1 }).lean();
-//     const submittedSet = new Set(submitted.map((r) => r.formId.toString()));
-//     const data = forms.map((f) => ({
-//       _id: f._id,
-//       title: f.title,
-//       description: f.description,
-//       category: f.category,
-//       staffName: f.staffName,
-//       templateTitle: f.templateTitle,
-//       startDate: f.startDate,
-//       endDate: f.endDate,
-//       questions: f.questions,
-//       alreadySubmitted: submittedSet.has(f._id.toString())
-//     }));
-//     return res.status(200).json({ status: true, data });
-//   } catch (err) {
+//     console.log('err ', err);
 //     return next(err);
 //   }
 // };
@@ -706,23 +691,23 @@ const viewFeedbackResults = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     const formId = safeTrim(req.body?.formId || req.query?.formId);
-    // Optional — filter results for one specific batch
     const batchCode = safeTrim(req.body?.batchCode || req.query?.batchCode || '');
 
-    if (!tenantId || !formId)
+    if (!tenantId || !formId) {
       return res.status(400).json({
         status: false,
         message: 'tenantId and formId are required'
       });
+    }
 
     const form = await FeedbackForm.findOne({
       _id: formId,
       tenantId,
       isdeleted: false
     }).lean();
+
     if (!form) return res.status(404).json({ status: false, message: 'Form not found' });
 
-    // Fetch responses — exclude studentId always
     const responseFilter = { formId, tenantId, isdeleted: false };
     if (batchCode) responseFilter.batchCode = batchCode;
 
@@ -731,43 +716,46 @@ const viewFeedbackResults = async (req, res, next) => {
     const totalResponses = responses.length;
     const responseRate = form.totalAssignedStudents > 0 ? Math.round((totalResponses / form.totalAssignedStudents) * 1000) / 10 : 0;
 
-    // Per-batch breakdown count
     const batchBreakdown = {};
     responses.forEach((r) => {
       batchBreakdown[r.batchCode] = (batchBreakdown[r.batchCode] || 0) + 1;
     });
 
-    // ── Aggregate per batch since questions differ ──
-    const batchResults = form.batchQuestions.map((bq) => {
-      // Only responses from this batch
-      const batchResponses = responses.filter((r) => r.batchCode === bq.batchCode);
+    // Determine the list of batches to process.
+    // If a specific batchCode was requested, only process that one.
+    // Otherwise, process all assignedBatches.
+    const batchesToProcess = batchCode ? [batchCode] : form.assignedBatches || Object.keys(batchBreakdown);
 
-      const questionSummary = bq.questions.map((q) => {
+    // Map over the batches, using the ROOT form.questions array
+    const batchResults = batchesToProcess.map((currentBatchCode) => {
+      const batchResponses = responses.filter((r) => r.batchCode === currentBatchCode);
+
+      const questionSummary = (form.questions || []).map((q) => {
         if (q.fieldType === 'text') {
-          const textAnswers = batchResponses.map((r) => r.answers.find((a) => a.fieldId === q.fieldId)?.fieldValue).filter((v) => v && String(v).trim());
+          const textAnswers = batchResponses.map((r) => (r.answers || []).find((a) => a.fieldId === q.fieldId)?.fieldValue).filter((v) => v && String(v).trim());
 
           return {
             fieldId: q.fieldId,
             fieldType: q.fieldType,
             fieldText: q.fieldText,
             isSubjectBased: q.isSubjectBased,
-            subjectName: q.subjectName,
-            staffName: q.staffName,
+            subjectName: q.subjectName, // Might be undefined at root level, which is fine
+            staffName: form.staffName || q.staffName, // Pull staffName from root if available
             totalAnswered: textAnswers.length,
             textAnswers
           };
         }
 
-        // Radio / Checkbox
         const optionCounts = {};
-        q.fieldOptions.forEach((opt) => {
+        (q.fieldOptions || []).forEach((opt) => {
           optionCounts[opt] = 0;
         });
-        let totalAnswered = 0;
 
+        let totalAnswered = 0;
         batchResponses.forEach((r) => {
-          const ans = r.answers.find((a) => a.fieldId === q.fieldId);
+          const ans = (r.answers || []).find((a) => a.fieldId === q.fieldId);
           if (!ans || ans.fieldValue === null) return;
+
           const vals = Array.isArray(ans.fieldValue) ? ans.fieldValue : [ans.fieldValue];
           vals.forEach((v) => {
             const key = String(v).trim();
@@ -780,10 +768,10 @@ const viewFeedbackResults = async (req, res, next) => {
           fieldId: q.fieldId,
           fieldType: q.fieldType,
           fieldText: q.fieldText,
-          fieldOptions: q.fieldOptions,
+          fieldOptions: q.fieldOptions || [],
           isSubjectBased: q.isSubjectBased,
           subjectName: q.subjectName,
-          staffName: q.staffName,
+          staffName: form.staffName || q.staffName,
           totalAnswered,
           optionCounts,
           optionPercentages: Object.fromEntries(Object.entries(optionCounts).map(([opt, count]) => [opt, totalAnswered > 0 ? Math.round((count / totalAnswered) * 1000) / 10 : 0]))
@@ -791,8 +779,8 @@ const viewFeedbackResults = async (req, res, next) => {
       });
 
       return {
-        batchCode: bq.batchCode,
-        batchName: bq.batchName,
+        batchCode: currentBatchCode,
+        batchName: currentBatchCode, // You might need a lookup to get the real batch name if needed
         totalResponses: batchResponses.length,
         questionSummary
       };
@@ -807,7 +795,7 @@ const viewFeedbackResults = async (req, res, next) => {
         category: form.category,
         templateTitle: form.templateTitle,
         status: form.status,
-        staffNames: form.staffNames,
+        staffNames: form.staffNames || [form.staffName].filter(Boolean), // Normalize to array if needed
         assignedBatches: form.assignedBatches,
         startDate: form.startDate,
         endDate: form.endDate,
@@ -815,13 +803,12 @@ const viewFeedbackResults = async (req, res, next) => {
         totalResponses,
         responseRate,
         batchBreakdown,
-        // Per-batch results — each batch has its own question set
         batchResults,
-        // Filtered batch (if batchCode passed)
         filteredBatch: batchCode || null
       }
     });
   } catch (err) {
+    console.log('err ', err);
     return next(err);
   }
 };
