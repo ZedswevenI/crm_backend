@@ -103,6 +103,7 @@ const listTasks = async (req, res, next) => {
       isdeleted: false
     };
     if (staffId) query.staffId = staffId.trim();
+    console.log('query ', query);
     if (status) query.status = status.trim();
     if (search) {
       const rx = { $regex: search.trim(), $options: 'i' };
@@ -222,11 +223,42 @@ const markTaskInProgress = async (req, res, next) => {
   }
 };
 
+const viewTask = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const taskId = safeTrim(req.query?.taskId || req.body?.taskId);
+    if (!tenantId || !taskId) {
+      return res.status(400).json({ status: false, message: 'tenantId and taskId are required' });
+    }
+    const task = await Task.findOne({ tenantId, taskId, isdeleted: false })
+      .populate({
+        path: 'staffId',
+        localField: 'staffId',
+        foreignField: 'staffId',
+        model: 'staff',
+        justOne: true,
+        select: 'staffName staffCode facultyType _id'
+      })
+      .lean();
+    if (!task) {
+      return res.status(404).json({ status: false, message: 'Task not found' });
+    }
+    return res.status(200).json({
+      status: true,
+      message: 'Task retrieved successfully',
+      data: task
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   uploadTaskAttachment,
   createTask,
   listTasks,
   updateTaskStatus,
   markTaskInProgress,
-  editTask
+  editTask,
+  viewTask
 };

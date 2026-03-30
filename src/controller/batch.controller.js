@@ -1563,6 +1563,40 @@ const promoteBatch = async (req, res, next) => {
   }
 };
 
+const assignClassTeacher = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    const payload = req.body || {};
+    const batchId = safeTrim(payload.batchId);
+    const staffId = safeTrim(payload.staffId) || null;
+    const staffName = safeTrim(payload.staffName) || null;
+    const userId = payload.userId || null;
+    if (!batchId) {
+      return res.status(400).json({ status: false, message: 'batchId is required' });
+    }
+    const batch = await Batch.findOne({ tenantId, batchId, isdeleted: false });
+    if (!batch) {
+      return res.status(404).json({ status: false, message: 'Batch not found' });
+    }
+    const guard = ensureBatchEditable(batch);
+    if (!guard.ok) {
+      return res.status(400).json({ status: false, message: guard.msg });
+    }
+    batch.classTeacherId = staffId;
+    batch.classTeacherName = staffName;
+    batch.updatedBy = userId;
+    await batch.save();
+    return res.status(constants.HTTPS_SUCCESS).json({
+      status: true,
+      message: staffId ? 'Class teacher assigned successfully' : 'Class teacher removed',
+      data: batch
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   createBatch,
   listBatches,
@@ -1582,5 +1616,6 @@ export default {
   listBatchesForEnablement,
   listTopicsForEnablement,
   listTestsForEnablement,
-  promoteBatch
+  promoteBatch,
+  assignClassTeacher
 };

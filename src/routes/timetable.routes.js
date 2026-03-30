@@ -27,6 +27,7 @@ routes.post('/bulk/zoomlink/upload', validatetoken, timeTableController.bulkUpda
 routes.post('/late-entry/log', validatetoken, timeTableController.logLateEntry);
 routes.post('/late-entry/list/student', validatetoken, timeTableController.listStudentLateEntries);
 routes.post('/late-entry/list/staff', validatetoken, timeTableController.listStaffLateEntries);
+routes.post('/subject/report', validatetoken, timeTableController.subjectHoursReport);
 
 routes.post('/publish', validatetoken, timeTableController.publishTimeTable);
 routes.post('/unpublish', validatetoken, timeTableController.unpublishTimeTable);

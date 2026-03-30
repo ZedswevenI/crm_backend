@@ -22,6 +22,8 @@ const StudentProfileSchema = new mongoose.Schema(
     admissionNo: { type: String, required: true, index: true },
     registrationNumber: { type: String, trim: true, index: true },
     portalStudentId: { type: String, trim: true, index: true },
+    studentSchoolId: { type: String, trim: true, default: null, index: true },
+    photoUrl: { type: String, default: null, trim: true },
     student: {
       name: { type: String, required: true, trim: true },
       phone: { type: String, required: false, trim: true },
@@ -62,6 +64,7 @@ const StudentProfileSchema = new mongoose.Schema(
 
 StudentProfileSchema.index({ tenantId: 1, admissionNo: 1 }, { unique: true });
 StudentProfileSchema.index({ tenantId: 1, registrationNumber: 1 });
+StudentProfileSchema.index({ tenantId: 1, studentSchoolId: 1 });
 
 const StudentProfile = mongoose.model('studentprofile', StudentProfileSchema);
 export default StudentProfile;
