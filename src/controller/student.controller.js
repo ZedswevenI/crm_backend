@@ -397,6 +397,76 @@ const studentLogin = async (req, res, next) => {
   }
 };
 
+// const getStudentSubjects = async (req, res, next) => {
+//   try {
+//     const tenantId = pickTenantId(req);
+//     if (!tenantId) {
+//       return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+//     }
+//     const regNo = safeTrim(req.body?.regNo);
+//     if (!regNo) {
+//       return res.status(400).json({ status: false, message: 'regNo (admissionNo or registrationNumber) is required' });
+//     }
+//     const student = await StudentProfile.findOne({
+//       tenantId,
+//       isdeleted: false,
+//       status: 'ACTIVE',
+//       $or: [{ admissionNo: regNo }, { registrationNumber: regNo }, { portalStudentId: regNo }]
+//     }).lean();
+//     if (!student) {
+//       return res.status(404).json({ status: false, message: 'Student not found' });
+//     }
+//     const programId = student.programId;
+//     if (!programId) {
+//       return res.status(400).json({ status: false, message: 'Student program not found' });
+//     }
+//     const program = await Program.findOne({
+//       tenantId,
+//       programId,
+//       isdeleted: false
+//     }).lean();
+//     if (!program) {
+//       return res.status(404).json({ status: false, message: 'Program not found' });
+//     }
+//     const subjectIds = (program.subjects || []).map((s) => s);
+//     const subjects = await Subject.find({
+//       tenantId,
+//       _id: { $in: subjectIds },
+//       isdeleted: false
+//     }).lean();
+//     const enriched = subjects.map((sub) => {
+//       const mapping = program.subjects.find((s) => String(s.subjectId) === String(sub._id));
+//       return {
+//         subjectId: sub._id,
+//         subjectName: sub.subjectName,
+//         subjectCode: sub.subjectCode || null,
+//         classNo: mapping?.classNo || student.classNo,
+//         sortOrder: mapping?.sortOrder || 0
+//       };
+//     });
+//     enriched.sort((a, b) => Number(a.sortOrder) - Number(b.sortOrder));
+//     return res.status(constants.HTTPS_SUCCESS).json({
+//       status: true,
+//       message: 'Subjects loaded successfully',
+//       data: {
+//         student: {
+//           studentId: student.studentId,
+//           name: student.student.name,
+//           classNo: student.classNo,
+//           currentAcademicYear: student.currentAcademicYear
+//         },
+//         program: {
+//           programId: program.programId,
+//           programName: program.programName
+//         },
+//         subjects: enriched
+//       }
+//     });
+//   } catch (err) {
+//     return next(err);
+//   }
+// };
+
 const getStudentSubjects = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
@@ -407,44 +477,84 @@ const getStudentSubjects = async (req, res, next) => {
     if (!regNo) {
       return res.status(400).json({ status: false, message: 'regNo (admissionNo or registrationNumber) is required' });
     }
+
     const student = await StudentProfile.findOne({
       tenantId,
       isdeleted: false,
       status: 'ACTIVE',
       $or: [{ admissionNo: regNo }, { registrationNumber: regNo }, { portalStudentId: regNo }]
     }).lean();
-    if (!student) {
-      return res.status(404).json({ status: false, message: 'Student not found' });
-    }
+    if (!student) return res.status(404).json({ status: false, message: 'Student not found' });
+
     const programId = student.programId;
-    if (!programId) {
-      return res.status(400).json({ status: false, message: 'Student program not found' });
+    if (!programId) return res.status(400).json({ status: false, message: 'Student program not found' });
+
+    const program = await Program.findOne({ tenantId, programId, isdeleted: false }).lean();
+    if (!program) return res.status(404).json({ status: false, message: 'Program not found' });
+
+    // ── Extract unique subjectIds from examMappings ────────────────────────
+    const examMappings = Array.isArray(program.examMappings) ? program.examMappings : [];
+
+    // Collect all subjectIds across all mapping entries, deduplicate by string key
+    const subjectIdMap = new Map(); // key: string(_id) → ObjectId
+    for (const mapping of examMappings) {
+      const subIds = Array.isArray(mapping.subjectIds) ? mapping.subjectIds : [];
+      for (const sid of subIds) {
+        const key = String(sid);
+        if (!subjectIdMap.has(key)) {
+          subjectIdMap.set(key, sid);
+        }
+      }
     }
-    const program = await Program.findOne({
-      tenantId,
-      programId,
-      isdeleted: false
-    }).lean();
-    if (!program) {
-      return res.status(404).json({ status: false, message: 'Program not found' });
+
+    // If no examMappings have subjectIds at all, fall back to program.subjects
+    // so the API doesn't silently return empty
+    let subjectObjectIds;
+    if (subjectIdMap.size > 0) {
+      subjectObjectIds = Array.from(subjectIdMap.values());
+    } else {
+      // fallback — some programs may not have subjectIds scoped on examMappings
+      subjectObjectIds = Array.isArray(program.subjects) ? program.subjects : [];
     }
-    const subjectIds = (program.subjects || []).map((s) => s);
+
+    if (!subjectObjectIds.length) {
+      return res.status(constants.HTTPS_SUCCESS).json({
+        status: true,
+        message: 'No subjects configured for this program',
+        data: {
+          student: {
+            studentId: student.studentId,
+            name: student.student.name,
+            classNo: student.classNo,
+            currentAcademicYear: student.currentAcademicYear
+          },
+          program: {
+            programId: program.programId,
+            programName: program.programName
+          },
+          subjects: []
+        }
+      });
+    }
+
+    // ── Fetch subject documents ───────────────────────────────────────────
     const subjects = await Subject.find({
       tenantId,
-      _id: { $in: subjectIds },
+      _id: { $in: subjectObjectIds },
       isdeleted: false
     }).lean();
-    const enriched = subjects.map((sub) => {
-      const mapping = program.subjects.find((s) => String(s.subjectId) === String(sub._id));
-      return {
-        subjectId: sub._id,
-        subjectName: sub.subjectName,
-        subjectCode: sub.subjectCode || null,
-        classNo: mapping?.classNo || student.classNo,
-        sortOrder: mapping?.sortOrder || 0
-      };
-    });
+
+    // ── Enrich with classNo from student ─────────────────────────────────
+    const enriched = subjects.map((sub) => ({
+      subjectId: sub._id,
+      subjectName: sub.subjectName,
+      subjectCode: sub.subjectCode || null,
+      classNo: student.classNo,
+      sortOrder: sub.sortOrder || 0
+    }));
+
     enriched.sort((a, b) => Number(a.sortOrder) - Number(b.sortOrder));
+
     return res.status(constants.HTTPS_SUCCESS).json({
       status: true,
       message: 'Subjects loaded successfully',

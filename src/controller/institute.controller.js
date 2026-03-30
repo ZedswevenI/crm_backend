@@ -162,6 +162,8 @@ const toStaffResponse = (d) => {
     payroll: d.payroll,
     department: d.department,
     weekoff: d.weekoff,
+    salaryCtc: d.salaryCtc ?? 0,
+    monthlySalary: d.monthlySalary ?? 0,
     status: d.status,
     createdBy: d.createdBy || null,
     updatedBy: d.updatedBy || null,
@@ -1816,6 +1818,8 @@ const createStaff = async (req, res, next) => {
     const status = safeTrim(payload.status) || 'Active';
     const employeeId = safeTrim(payload.employeeId);
     const createSystemAccess = payload.createSystemAccess === true;
+    const salaryCtc = payload.salaryCtc !== undefined ? toNum(payload.salaryCtc) : 0;
+    const monthlySalary = payload.monthlySalary !== undefined ? toNum(payload.monthlySalary) : 0;
     if (!staffName) return res.status(400).json({ status: false, message: 'staffName is required' });
     if (!staffCode) return res.status(400).json({ status: false, message: 'staffCode is required' });
     if (!employeeId) return res.status(400).json({ status: false, message: 'employeeId is required' });
@@ -1892,6 +1896,8 @@ const createStaff = async (req, res, next) => {
       payroll,
       department,
       weekoff,
+      salaryCtc,
+      monthlySalary,
       status: status === 'Inactive' ? 'Inactive' : 'Active',
       isdeleted: false,
       createdBy: payload.createdBy || null,
@@ -2027,6 +2033,8 @@ const updateStaff = async (req, res, next) => {
     if (patch.employeeId !== undefined && !patch.employeeId) {
       return res.status(400).json({ status: false, message: 'employeeId cannot be empty' });
     }
+    if (payload.salaryCtc !== undefined) patch.salaryCtc = toNum(payload.salaryCtc);
+    if (payload.monthlySalary !== undefined) patch.monthlySalary = toNum(payload.monthlySalary);
     const existing = await Staff.findOne({ _id: recId, tenantId, isdeleted: false }).lean();
     if (!existing) return res.status(404).json({ status: false, message: 'Staff not found' });
     const nextRole = patch.role !== undefined ? patch.role : existing.role;
@@ -2078,18 +2086,14 @@ const updateStaff = async (req, res, next) => {
     if (req.body.createSystemAccess === true && !doc.userId) {
       const email = (doc.email || '').trim();
       if (!email) {
-        // Staff updated OK, but can't create user without email — warn but don't fail
         return res.status(200).json({
           status: true,
           message: 'Staff updated. Portal access skipped — email is required to create a login account.',
           data: toStaffResponse(doc)
         });
       }
-
-      // Check if a user with this email already exists for this tenant
       const existingUser = await User.findOne({ tenantId, email, isdeleted: false }).lean();
       if (existingUser) {
-        // Email already has a user — link them instead of creating duplicate
         await Staff.updateOne({ tenantId, staffId: doc.staffId, isdeleted: false }, { $set: { userId: existingUser.userId } });
         await User.updateOne({ tenantId, userId: existingUser.userId, isdeleted: false }, { $set: { staffId: doc.staffId, empCode: doc.employeeId } });
         return res.status(200).json({
@@ -2098,12 +2102,32 @@ const updateStaff = async (req, res, next) => {
           data: toStaffResponse({ ...doc, userId: existingUser.userId })
         });
       }
-
-      // Create a new User account
+      const deletedUser = await User.findOne({ tenantId, email, isdeleted: true }).lean();
+      if (deletedUser) {
+        const newUserId = deletedUser.userId;
+        await User.updateOne(
+          { tenantId, userId: newUserId },
+          {
+            $set: {
+              isdeleted: false,
+              status: 'Active',
+              staffId: doc.staffId,
+              empCode: doc.employeeId || deletedUser.empCode,
+              name: doc.staffName,
+              phone: doc.phone || deletedUser.phone
+            }
+          }
+        );
+        await Staff.updateOne({ tenantId, staffId: doc.staffId, isdeleted: false }, { $set: { userId: newUserId } });
+        return res.status(200).json({
+          status: true,
+          message: 'Staff updated. Previous user account reactivated and linked.',
+          data: toStaffResponse({ ...doc, userId: newUserId })
+        });
+      }
       const newUserId = uuid();
       const hashedPassword = await bcrypt.hash('Welcome@123', Rounds);
       const roleLevel = 'L4';
-
       await User.create({
         tenantId,
         userId: newUserId,
@@ -2119,17 +2143,13 @@ const updateStaff = async (req, res, next) => {
         status: 'Active',
         isdeleted: false
       });
-
-      // Back-link userId on Staff
       await Staff.updateOne({ tenantId, staffId: doc.staffId, isdeleted: false }, { $set: { userId: newUserId } });
-
       return res.status(200).json({
         status: true,
         message: 'Staff updated and portal access granted. Default password: Welcome@123',
         data: toStaffResponse({ ...doc, userId: newUserId })
       });
     }
-
     return res.status(200).json({
       status: true,
       message: 'Staff updated successfully',
@@ -2258,6 +2278,8 @@ const bulkImportStaff = async (req, res, next) => {
         department: dHit?._id ? String(dHit._id) : null,
         facultyType: role === 'Faculty' ? facultyType : null,
         subject: role === 'Faculty' && facultyType === 'TEACHING' ? (sHit?._id ? String(sHit._id) : null) : null,
+        salaryCtc: toNum(x.salaryCtc || x.salary_ctc || x.SalaryCtc || 0),
+        monthlySalary: toNum(x.monthlySalary || x.monthly_salary || x.MonthlySalary || 0),
         weekoff: parseWeekoff(x.weekoff),
         status: safeTrim(x.status) === 'Inactive' ? 'Inactive' : 'Active',
         _resolved: {
@@ -2324,6 +2346,8 @@ const bulkImportStaff = async (req, res, next) => {
       payroll: r.payroll.toLowerCase(),
       department: r.department,
       weekoff: r.weekoff,
+      salaryCtc: r.salaryCtc || 0,
+      monthlySalary: r.monthlySalary || 0,
       status: r.status,
       isdeleted: false,
       createdBy: req.body.userId || null,
