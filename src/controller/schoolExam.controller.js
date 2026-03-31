@@ -87,13 +87,13 @@ const uploadExamMarks = async (req, res, next) => {
       }
       const subjects = Array.isArray(row.subjects)
         ? row.subjects.map((s) => {
-            subjectNamesSet.add(safeTrim(s.subjectName));
-            return {
-              subjectName: safeTrim(s.subjectName),
-              marks: s.isAbsent ? null : s.marks != null ? toNum(s.marks) : null,
-              isAbsent: !!s.isAbsent
-            };
-          })
+          subjectNamesSet.add(safeTrim(s.subjectName));
+          return {
+            subjectName: safeTrim(s.subjectName),
+            marks: s.isAbsent ? null : s.marks != null ? toNum(s.marks) : null,
+            isAbsent: !!s.isAbsent
+          };
+        })
         : [];
       const autoTotal = subjects.reduce((sum, s) => sum + (s.marks ?? 0), 0);
       const totalMarks = excelTotal !== null ? excelTotal : autoTotal;
@@ -110,14 +110,25 @@ const uploadExamMarks = async (req, res, next) => {
       });
     }
     // const subjectNames = Array.from(subjectNamesSet).filter(Boolean);
-    const existingSubjectNames = existingDoc?.subjectNames || [];
-    const mergedSubjectNames = Array.from(new Set([...existingSubjectNames, ...Array.from(subjectNamesSet)])).filter(Boolean);
     const firstProfile = profiles[0] || null;
     const resolvedBatchCode = batchCode || firstProfile?.batchCode || null;
     const resolvedBatchId = batchId || firstProfile?.batchId || null;
     const resolvedCenterId = centerId || firstProfile?.centerId || null;
     const resolvedClassNo = rows[0]?.classNo ? Number(rows[0].classNo) || null : null;
-    const existingDoc = await SchoolExamLog.findOne({ tenantId, examName, examDate, batchCode: resolvedBatchCode, isdeleted: false }).lean();
+
+    const existingDoc = await SchoolExamLog.findOne({
+      tenantId,
+      examName,
+      examDate,
+      batchCode: resolvedBatchCode,
+      isdeleted: false
+    }).lean();
+
+    const existingSubjectNames = existingDoc?.subjectNames || [];
+
+    const mergedSubjectNames = Array.from(
+      new Set([...existingSubjectNames, ...Array.from(subjectNamesSet)])
+    ).filter(Boolean);
     let mergedResults = [];
     if (existingDoc?.results?.length) {
       mergedResults = existingDoc.results.map((existing) => {

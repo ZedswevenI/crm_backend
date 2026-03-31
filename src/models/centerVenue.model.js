@@ -10,6 +10,8 @@ const centerVenueSchema = new mongoose.Schema(
     area: { type: String, required: false, trim: true, lowercase: true },
     city: { type: String, required: false, trim: true },
     state: { type: String, required: false, trim: true },
+    venueCode: { type: String, required: false, trim: true },
+    phone: { type: Number, required: false, trim: true },
     pincode: { type: String, required: false, trim: true, match: [/^\d{6}$/, 'Please enter a valid pincode.'] },
     capacity: { type: Number, required: false },
     status: { type: String, enum: ['Active', 'Inactive'], default: 'Active' },
@@ -20,7 +22,7 @@ const centerVenueSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-centerVenueSchema.index({ tenantId: 1, centerRecId: 1, venueName: 1 }, { unique: true, partialFilterExpression: { isdeleted: false } });
+centerVenueSchema.index({ tenantId: 1, centerRecId: 1, venueName: 1, venueCode : 1  }, { unique: true, partialFilterExpression: { isdeleted: false } });
 centerVenueSchema.index({ tenantId: 1, centerRecId: 1, isdeleted: 1, createdAt: -1 });
 
 const CenterVenue = mongoose.model('center_venue', centerVenueSchema);
