@@ -397,27 +397,36 @@ const listPhases = async (req, res, next) => {
       return res.status(400).json({ status: false, message: 'tenantId is required' });
     }
 
-    // Base query
     const query = { tenantId, isdeleted: false };
 
-    // If not requesting the full list, enforce the mandatory filters
+    // ✅ UPDATED: subjectId removed from mandatory check
     if (listMode !== 'full') {
-      if (!programId || !classNo || !subjectId) {
+      if (!programId || !classNo) {
         return res.status(400).json({
           status: false,
-          message: 'programId, classNo, and subjectId are required unless list=full'
+          message: 'programId and classNo are required unless list=full'
         });
       }
     }
 
-    // Apply filters if they are provided (works for both full and filtered lists)
+    // Apply filters dynamically
     if (programId) query.programId = programId;
     if (classNo) query.classNo = toInt(classNo);
+
+    // ✅ Optional filter
     if (subjectId) query.subjectId = subjectId;
 
-    const phases = await Phase.find(query).sort({ sortOrder: 1, phaseName: 1 }).populate('subjectId', 'subjectName subjectCode').lean();
+    const phases = await Phase.find(query)
+      .sort({ sortOrder: 1, phaseName: 1 })
+      .populate('subjectId', 'subjectName subjectCode')
+      .lean();
 
-    return res.status(200).json({ status: true, data: phases, count: phases.length });
+    return res.status(200).json({
+      status: true,
+      data: phases,
+      count: phases.length
+    });
+
   } catch (err) {
     return next(err);
   }
@@ -1029,13 +1038,13 @@ const phasePlanReport = async (req, res, next) => {
     const unassigned =
       unassignedMins > 0
         ? {
-            phaseId: null,
-            phaseName: 'Unassigned',
-            estHours: null,
-            allottedHours: toHours(unassignedMins),
-            remainingHours: null,
-            topics: []
-          }
+          phaseId: null,
+          phaseName: 'Unassigned',
+          estHours: null,
+          allottedHours: toHours(unassignedMins),
+          remainingHours: null,
+          topics: []
+        }
         : null;
     const totalEstHours = phaseList.reduce((s, p) => s + (p.estHours || 0), 0);
     const totalAllottedHours = phaseList.reduce((s, p) => s + (p.allottedHours || 0), 0) + (unassigned?.allottedHours || 0);
