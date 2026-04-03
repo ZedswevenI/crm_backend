@@ -349,6 +349,7 @@ const createBatch = async (req, res, next) => {
       staffMap: Array.isArray(payload.staffMap) ? payload.staffMap : [],
       studentCount: 0,
       remarks: safeTrim(payload.remarks) || null,
+      section: safeTrim(payload.section) || null,
       isdeleted: false,
       createdBy: userId || null,
       updatedBy: userId || null
@@ -480,6 +481,7 @@ const updateBatch = async (req, res, next) => {
     if (payload.startDate !== undefined) patch.startDate = toEpoch(payload.startDate);
     if (payload.endDate !== undefined) patch.endDate = toEpoch(payload.endDate);
     if (payload.programStartAy !== undefined) patch.programStartAy = safeTrim(payload.programStartAy);
+    if (payload.section !== undefined) patch.section = safeTrim(payload.section) || null;
     if (payload.status !== undefined) {
       const newStatus = safeTrim(payload.status);
       if (newStatus && !BATCH_STATUSES.includes(newStatus)) {
@@ -1571,6 +1573,7 @@ const assignClassTeacher = async (req, res, next) => {
     const batchId = safeTrim(payload.batchId);
     const staffId = safeTrim(payload.staffId) || null;
     const staffName = safeTrim(payload.staffName) || null;
+    const section = payload.section !== undefined ? safeTrim(payload.section) || null : undefined;
     const userId = payload.userId || null;
     if (!batchId) {
       return res.status(400).json({ status: false, message: 'batchId is required' });
@@ -1586,6 +1589,7 @@ const assignClassTeacher = async (req, res, next) => {
     batch.classTeacherId = staffId;
     batch.classTeacherName = staffName;
     batch.updatedBy = userId;
+    if (section !== undefined) batch.section = section;
     await batch.save();
     return res.status(constants.HTTPS_SUCCESS).json({
       status: true,

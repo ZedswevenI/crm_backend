@@ -2718,6 +2718,8 @@ const createVenue = async (req, res, next) => {
       tenantId,
       centerRecId,
       venueName,
+      venueCode: req.body.venueCode ? safeTrim(req.body.venueCode) : null,
+      phone: req.body.phone ? safeTrim(req.body.phone) : null,
       address1: req.body.address1 ? safeTrim(req.body.address1) : null,
       address2: req.body.address2 ? safeTrim(req.body.address2) : null,
       area: req.body.area ? safeTrim(req.body.area).toLowerCase() : null,
@@ -2800,6 +2802,8 @@ const updateVenue = async (req, res, next) => {
     if (req.body.venueName !== undefined) updateDoc.venueName = safeTrim(req.body.venueName);
     if (req.body.address1 !== undefined) updateDoc.address1 = safeTrim(req.body.address1) || null;
     if (req.body.address2 !== undefined) updateDoc.address2 = safeTrim(req.body.address2) || null;
+    if (req.body.venueCode !== undefined) updateDoc.venueCode = safeTrim(req.body.venueCode) || null;
+    if (req.body.phone !== undefined) updateDoc.phone = safeTrim(req.body.phone) || null;
     if (req.body.area !== undefined) updateDoc.area = safeTrim(req.body.area).toLowerCase() || null;
     if (req.body.city !== undefined) updateDoc.city = safeTrim(req.body.city) || null;
     if (req.body.state !== undefined) updateDoc.state = safeTrim(req.body.state) || null;
