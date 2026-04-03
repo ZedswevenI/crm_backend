@@ -7,7 +7,7 @@ const studentRemarkSchema = new mongoose.Schema(
     remarkId: { type: String, required: true, default: uuid, index: true },
     admissionNo: { type: String, required: true, index: true },
     studentId: { type: String, required: true, index: true },
-    type: { type: String, enum: ['LEAVE', 'LATE', 'GENERAL'], required: true },
+    type: { type: String, enum: ['ACADEMIC', 'BEHAVIOUR', 'ATTENDANCE', 'HEALTH', 'OTHER'], required: true },
     dateOfIncident: { type: Number, required: true }, // Epoch MS for the day of leave/late
     remark: { type: String, required: true, trim: true },
     reportedByParent: { type: Boolean, default: true },

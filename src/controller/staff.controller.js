@@ -61,7 +61,7 @@ const viewTeachingStaff = async (req, res, next) => {
     if (!tenantId || !staffId) {
       return res.status(400).json({ status: false, message: 'tenantId and staffId are required' });
     }
-    const staff = await Staff.findOne({ tenantId, staffId, isdeleted: false }).populate('subject', 'subjectName').populate('department', 'departmentName').lean();
+    const staff = await Staff.findOne({ tenantId, staffId, isdeleted: false }).populate('subject', 'subjectName subjectCode').populate('department', 'departmentName').lean();
     if (!staff) {
       return res.status(404).json({ status: false, message: 'Staff profile not found' });
     }

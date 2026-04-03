@@ -2033,10 +2033,43 @@ const getStudentAttendanceReport = async (req, res, next) => {
       if (fromDate) matchQuery.date.$gte = fromDate;
       if (toDate) matchQuery.date.$lte = toDate;
     }
-    const pipeline = [
+   const pipeline = [
       { $match: matchQuery },
+
       { $unwind: '$students' },
+
       { $match: { 'students.studentId': student.studentId } },
+
+      // ✅ FIX: convert string → ObjectId
+      {
+        $addFields: {
+          subjectId: {
+            $cond: [
+              { $eq: [{ $type: "$subjectId" }, "string"] },
+              { $toObjectId: "$subjectId" },
+              "$subjectId"
+            ]
+          }
+        }
+      },
+
+      // ✅ Lookup
+      {
+        $lookup: {
+          from: 'subjects',
+          localField: 'subjectId',
+          foreignField: '_id',
+          as: 'subject'
+        }
+      },
+
+      {
+        $unwind: {
+          path: '$subject',
+          preserveNullAndEmptyArrays: true
+        }
+      },
+
       {
         $project: {
           _id: 0,
@@ -2045,11 +2078,17 @@ const getStudentAttendanceReport = async (req, res, next) => {
           periodNo: 1,
           facultyId: 1,
           subjectId: 1,
+
+          // ✅ Now works
+          subjectName: '$subject.subjectName',
+          subjectCode: '$subject.subjectCode',
+
           topicTaught: 1,
           status: '$students.status',
           remarks: '$students.remarks'
         }
       },
+
       { $sort: { date: -1, periodNo: 1 } }
     ];
     const detailedRecords = await Attendance.aggregate(pipeline);
