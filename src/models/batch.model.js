@@ -31,6 +31,8 @@ const BatchSchema = new mongoose.Schema(
     classNo: { type: Number, default: 0, index: true },
     classTeacherId: { type: String, default: null },
     classTeacherName: { type: String, default: null },
+    // Add after classTeacherName field:
+    section: { type: String, trim: true, default: null },
     status: {
       type: String,
       enum: ['DRAFT', 'ACTIVE', 'CLOSED', 'INACTIVE'],
