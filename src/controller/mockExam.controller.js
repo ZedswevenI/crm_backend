@@ -476,7 +476,10 @@ const listExamsForStudent = async (req, res, next) => {
     const data = exams.map((e) => {
       const isLive = !!(e.startTime && e.endTime && now >= e.startTime && now <= e.endTime);
       const isAttempted = attemptedIds.has(e.examId);
-      const resultReady = e.status === 'result_published' && e.autoPublishAt && now >= e.autoPublishAt;
+      // const resultReady = e.status === 'result_published' && e.autoPublishAt && now >= e.autoPublishAt;
+      const manuallyPublished = !!e.resultPublishedAt;
+      const autoPublishPassed = e.autoPublishAt && now >= e.autoPublishAt;
+      const resultReady = e.status === 'result_published' && (manuallyPublished || autoPublishPassed);
       return { ...e, isLive, isAttempted, canAttempt: isLive && !isAttempted, isResultVisible: resultReady };
     });
     return res.status(200).json({ status: true, message: 'Exams loaded', data, count: data.length });
