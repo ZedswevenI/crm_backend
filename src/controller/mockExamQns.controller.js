@@ -26,7 +26,7 @@ const uuid = () => (typeof crypto.randomUUID === 'function' ? crypto.randomUUID(
 
 const BUCKET = process.env.AWS_S3_QUESTION_BUCKET;
 const REGION = process.env.AWS_REGION || 'ap-south-1';
-const ALLOWED_TYPES = new Set(['mcq_single', 'mcq_multi', 'true_false', 'short_answer', 'integer', 'subjective', 'numeric', 'passage_qns']);
+const ALLOWED_TYPES = new Set(['mcq_single', 'mcq_multi', 'true_false', 'short_answer', 'integer', 'subjective', 'numeric', 'passage_qns', 'matrix']);
 const ALLOWED_DIFF = new Set(['easy', 'medium', 'hard']);
 
 function buildImageKey(name) {

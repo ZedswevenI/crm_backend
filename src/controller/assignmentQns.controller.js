@@ -62,7 +62,7 @@ function uuid() {
   return crypto.randomBytes(16).toString('hex');
 }
 
-const ALLOWED_TYPES = new Set(['mcq_single', 'mcq_multi', 'true_false', 'short_answer', 'integer', 'subjective', 'numeric', 'passage_qns']);
+const ALLOWED_TYPES = new Set(['mcq_single', 'mcq_multi', 'true_false', 'short_answer', 'integer', 'subjective', 'numeric', 'passage_qns', 'matrix']);
 const ALLOWED_DIFFICULTY = new Set(['easy', 'medium', 'hard']);
 
 function needsOptions(qt) {
