@@ -62,6 +62,14 @@ const MockExamQnsSchema = new mongoose.Schema(
     enableInstruction: { type: Boolean, default: false },
     enableSolution: { type: Boolean, default: false },
     questionOptions: { type: [OptionSchema], default: [] },
+    leftColumn: {
+      type: [{ key: { type: String }, text: { type: String, default: '' } }],
+      default: []
+    },
+    rightColumn: {
+      type: [{ key: { type: String }, text: { type: String, default: '' } }],
+      default: []
+    },
     correctAnswer: { type: String, default: '' },
     tags: { type: [String], default: [] },
     sortOrder: { type: Number, default: 0 },

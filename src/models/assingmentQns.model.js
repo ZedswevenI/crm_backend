@@ -45,6 +45,14 @@ const QuestionSchema = new mongoose.Schema(
     passageHtml: { type: String, default: '', trim: false },
     instructionHtml: { type: String, default: '', trim: false },
     questionOptions: { type: [OptionSchema], default: [] },
+    leftColumn: {
+      type: [{ key: { type: String }, text: { type: String, default: '' } }],
+      default: []
+    },
+    rightColumn: {
+      type: [{ key: { type: String }, text: { type: String, default: '' } }],
+      default: []
+    },
     solutionHtml: { type: String, default: '', trim: false },
     enablePassage: { type: Boolean, default: false },
     enableInstruction: { type: Boolean, default: false },
