@@ -100,6 +100,16 @@ function normalizeOptions(options) {
   }));
 }
 
+function normalizeColumns(arr) {
+  if (!Array.isArray(arr)) return [];
+  return arr
+    .filter((c) => c?.key || c?.text)
+    .map((c) => ({
+      key: safeTrim(c.key || ''),
+      text: safeTrim(c.text || '')
+    }));
+}
+
 const uploadSingleQuestionImage = async (req, res) => {
   try {
     if (!req.files || req.files.length === 0) {
@@ -184,7 +194,6 @@ const getQuestionImage = async (req, res) => {
 
 const createQuestionsBulk = async (req, res, next) => {
   try {
-    console.log('method called');
     const tenantId = req.body.entiId;
     const userId = req.user?.userId || req.body?.userId || null;
     const testId = req.body.testId;
@@ -243,6 +252,8 @@ const createQuestionsBulk = async (req, res, next) => {
         enablePassage: q.enablePassage === true,
         enableInstruction: q.enableInstruction === true,
         enableSolution: q.enableSolution === true,
+        leftColumn: normalizeColumns(q.leftColumn),
+        rightColumn: normalizeColumns(q.rightColumn),
         correctAnswer: String(q.correctAnswer) || '',
         tags: Array.isArray(q.tags) ? q.tags.map((t) => safeTrim(t)).filter(Boolean) : [],
         status: q.status || 'active',
@@ -681,6 +692,8 @@ const updateQuestion = async (req, res, next) => {
     if (typeof solutionHtml === 'string') update.solutionHtml = solutionHtml;
     if (Array.isArray(images)) update.images = normalizeImages(images);
     if (Array.isArray(questionOptions)) update.questionOptions = normalizeOptions(questionOptions);
+    if (Array.isArray(req.body?.leftColumn)) update.leftColumn = normalizeColumns(req.body.leftColumn);
+    if (Array.isArray(req.body?.rightColumn)) update.rightColumn = normalizeColumns(req.body.rightColumn);
     if (enablePassage !== undefined) update.enablePassage = enablePassage === true;
     if (enableInstruction !== undefined) update.enableInstruction = enableInstruction === true;
     if (enableSolution !== undefined) update.enableSolution = enableSolution === true;
@@ -832,6 +845,8 @@ const createQuestion = async (req, res, next) => {
       passageHtml: passageHtml ?? '',
       instructionHtml: instructionHtml ?? '',
       questionOptions: normalizedOptions,
+      leftColumn: normalizeColumns(req.body?.leftColumn),
+      rightColumn: normalizeColumns(req.body?.rightColumn),
       solutionHtml: solutionHtml ?? '',
       enablePassage: enablePassage === true,
       enableInstruction: enableInstruction === true,
