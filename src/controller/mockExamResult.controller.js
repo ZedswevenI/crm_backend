@@ -438,7 +438,7 @@ const getMyResultWithAnswers = async (req, res, next) => {
       });
     }
 
-    const result = await MockExamResult.findOne({ tenantId, examId, admissionNo, isdeleted: false }).lean();
+    const result = await MockExamResult.findOne({ tenantId, examId, admissionNo, isdeleted: false }).populate('sectionResults.subjectId', 'subjectName').lean();
     if (!result) return res.status(404).json({ status: false, message: 'Result not found for this student' });
     if (!result.isResultVisible) return res.status(403).json({ status: false, message: 'Result is not visible yet' });
     const questions = await MockExamQns.find(
