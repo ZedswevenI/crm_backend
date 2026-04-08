@@ -74,6 +74,19 @@ const feedbackQuestionSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const staffRemarkSchema = new mongoose.Schema(
+  {
+    staffId: { type: String, required: true, trim: true },
+    staffName: { type: String, default: null, trim: true },
+    subjectId: { type: String, default: null, trim: true },
+    subjectName: { type: String, default: null, trim: true },
+    subjectCode: { type: String, default: null, trim: true },
+    remarks: { type: String, default: null, trim: true },
+    submittedAt: { type: Number, default: null }
+  },
+  { _id: false }
+);
+
 const ptmSchema = new mongoose.Schema(
   {
     tenantId: { type: String, required: true, index: true, trim: true },
@@ -98,8 +111,10 @@ const ptmSchema = new mongoose.Schema(
     postPtmQuestions: { type: [feedbackQuestionSchema], default: [] },
     postPtmRemarks: { type: String, trim: true, default: null },
     postPtmSubmittedAt: { type: Number, default: null },
-    staffRemarks: { type: String, trim: true, default: null },
-    staffId: { type: String, default: null, trim: true },
+    // staffRemarks: { type: String, trim: true, default: null },
+    // staffId: { type: String, default: null, trim: true },
+    // staffFeedbackSubmittedAt: { type: Number, default: null },
+    staffRemarks: { type: [staffRemarkSchema], default: [] },
     staffFeedbackSubmittedAt: { type: Number, default: null },
     status: {
       type: String,
