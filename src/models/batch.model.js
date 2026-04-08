@@ -40,6 +40,18 @@ const BatchSchema = new mongoose.Schema(
       index: true
     },
     staffMap: { type: [BatchStaffSchema], default: [] },
+    staffMapHistory: {
+      type: [
+        {
+          academicYear: { type: String, trim: true },
+          yearNo: { type: Number },
+          classNo: { type: Number },
+          archivedAt: { type: Number },
+          staffMap: { type: [BatchStaffSchema], default: [] }
+        }
+      ],
+      default: []
+    },
     studentCount: { type: Number, default: 0 },
     remarks: { type: String, trim: true },
     isdeleted: { type: Boolean, default: false, index: true },
