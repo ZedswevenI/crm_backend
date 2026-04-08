@@ -24,6 +24,7 @@ routes.post('/subjects', validatetoken, batchCtrl.getBatchSubjects);
 routes.post('/ayinfo', validatetoken, batchCtrl.getBatchAyInfo);
 routes.post('/promote', validatetoken, batchCtrl.promoteBatch);
 routes.post('/class-teacher/assign', validatetoken, batchCtrl.assignClassTeacher);
+routes.post('/staffmap-history', validatetoken, batchCtrl.getBatchStaffMapHistory);
 
 routes.post('/school-attendance/batches', validatetoken, sclAtdnceCtrl.listBatchesForSchoolAttendance);
 routes.post('/school-attendance/students', validatetoken, sclAtdnceCtrl.getSchoolAttendanceStudents);
