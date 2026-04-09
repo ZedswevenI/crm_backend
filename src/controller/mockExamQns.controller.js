@@ -26,7 +26,7 @@ const uuid = () => (typeof crypto.randomUUID === 'function' ? crypto.randomUUID(
 
 const BUCKET = process.env.AWS_S3_QUESTION_BUCKET;
 const REGION = process.env.AWS_REGION || 'ap-south-1';
-const ALLOWED_TYPES = new Set(['mcq_single', 'mcq_multi', 'true_false', 'short_answer', 'integer', 'subjective', 'numeric', 'passage_qns']);
+const ALLOWED_TYPES = new Set(['mcq_single', 'mcq_multi', 'true_false', 'short_answer', 'integer', 'subjective', 'numeric', 'passage_qns', 'matrix']);
 const ALLOWED_DIFF = new Set(['easy', 'medium', 'hard']);
 
 function buildImageKey(name) {
@@ -61,6 +61,15 @@ function normalizeOptions(options) {
     partialMark: toNum(o?.partialMark, 0)
   }));
 }
+function normalizeColumns(arr) {
+  if (!Array.isArray(arr)) return [];
+  return arr
+    .filter((c) => c?.key || c?.text)
+    .map((c) => ({
+      key: safeTrim(c.key || ''),
+      text: safeTrim(c.text || '')
+    }));
+}
 function needsOptions(qt) {
   return ['mcq_single', 'mcq_multi', 'true_false'].includes(qt);
 }
@@ -79,6 +88,10 @@ function validateQDoc(d, label) {
     if (needsOneCorrect(d.questionType) && !d.questionOptions.some((o) => o.isCorrect)) return `${label}: at least one correct option required`;
   }
   if (d.questionType === 'numeric' && d.numericMin != null && d.numericMax != null && d.numericMin > d.numericMax) return `${label}: numericMin must be <= numericMax`;
+  if (d.questionType === 'matrix') {
+    if (!d.leftColumn?.length) return `${label}: leftColumn is required for matrix`;
+    if (!d.rightColumn?.length) return `${label}: rightColumn is required for matrix`;
+  }
   return null;
 }
 
@@ -163,6 +176,8 @@ const createQuestion = async (req, res, next) => {
       enablePassage: req.body?.enablePassage === true,
       enableInstruction: req.body?.enableInstruction === true,
       enableSolution: req.body?.enableSolution === true,
+      leftColumn: normalizeColumns(req.body?.leftColumn),
+      rightColumn: normalizeColumns(req.body?.rightColumn),
       questionOptions: opts,
       correctAnswer: String(req.body?.correctAnswer || ''),
       tags: Array.isArray(req.body?.tags) ? req.body.tags.map(safeTrim).filter(Boolean) : [],
@@ -232,6 +247,8 @@ const createQuestionsBulk = async (req, res, next) => {
         enableInstruction: q?.enableInstruction === true,
         enableSolution: q?.enableSolution === true,
         questionOptions: normalizeOptions(q?.questionOptions),
+        leftColumn: normalizeColumns(q?.leftColumn),
+        rightColumn: normalizeColumns(q?.rightColumn),
         correctAnswer: String(q?.correctAnswer || ''),
         tags: Array.isArray(q?.tags) ? q.tags.map(safeTrim).filter(Boolean) : [],
         sortOrder: toNum(q?.sortOrder, idx),
@@ -284,6 +301,8 @@ const updateQuestion = async (req, res, next) => {
     if (Array.isArray(req.body?.images)) set.images = normalizeImages(req.body.images);
     if (Array.isArray(req.body?.questionOptions)) set.questionOptions = normalizeOptions(req.body.questionOptions);
     if (Array.isArray(req.body?.tags)) set.tags = req.body.tags.map(safeTrim).filter(Boolean);
+    if (Array.isArray(req.body?.leftColumn)) set.leftColumn = normalizeColumns(req.body.leftColumn);
+    if (Array.isArray(req.body?.rightColumn)) set.rightColumn = normalizeColumns(req.body.rightColumn);
     if (req.body?.passageId !== undefined) {
       if (req.body.passageId && !mustObjId(req.body.passageId)) return res.status(400).json({ status: false, message: 'Invalid passageId' });
       set.passageId = req.body.passageId ? new mongoose.Types.ObjectId(String(req.body.passageId)) : null;
@@ -415,7 +434,7 @@ const getQuestionsByCode = async (req, res, next) => {
     if (!examId && !examCode) return res.status(400).json({ status: false, message: 'examId or examCode is required' });
     if (!password) return res.status(400).json({ status: false, message: 'password is required' });
     const examQuery = { tenantId, isdeleted: false, ...(examId ? { examId } : { examCode }) };
-    const exam = await MockExam.findOne(examQuery).lean();
+    const exam = await MockExam.findOne(examQuery).populate('instructionId', 'title contentHtml language').lean();
     if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
     if (safeTrim(exam.password) !== password) return res.status(401).json({ status: false, message: 'Invalid password' });
     const now = Date.now();
@@ -459,6 +478,7 @@ const getQuestionsByCode = async (req, res, next) => {
         startTime: exam.startTime,
         endTime: exam.endTime,
         calculatorType: exam.calculatorType,
+        instructions: exam.instructionId,
         sections
       }
     });
@@ -512,7 +532,6 @@ const createQuestionInBank = async (req, res, next) => {
     const tenantId = pickTid(req);
     const userId = pickUid(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-
     const {
       questionType,
       subjectId,
@@ -573,6 +592,8 @@ const createQuestionInBank = async (req, res, next) => {
       enableSolution: !!enableSolution,
       correctAnswer: safeTrim(correctAnswer) || '',
       questionOptions: normalizeOptions(questionOptions),
+      leftColumn: normalizeColumns(q?.leftColumn || req.body?.leftColumn),
+      rightColumn: normalizeColumns(q?.rightColumn || req.body?.rightColumn),
       images: normalizeImages(images),
       tags: Array.isArray(tags) ? tags.map(safeTrim).filter(Boolean) : [],
       sortOrder: toNum(sortOrder, 0),

@@ -1000,29 +1000,126 @@ const submitParentPTMFeedback = async (req, res, next) => {
   }
 };
 
+// const submitStaffFeedback = async (req, res, next) => {
+//   try {
+//     const tenantId = pickTenantId(req);
+//     const staffId = safeTrim(req.body?.userId);
+//     const { ptmId, staffRemarks, status } = req.body;
+//     if (!tenantId || !ptmId || !status) {
+//       return res.status(400).json({ status: false, message: 'tenantId, ptmId, and status are required' });
+//     }
+//     const updated = await PTM.findOneAndUpdate(
+//       { tenantId, ptmId, isdeleted: false },
+//       {
+//         $set: {
+//           staffRemarks: safeTrim(staffRemarks),
+//           status: safeTrim(status),
+//           staffId,
+//           staffFeedbackSubmittedAt: Date.now(),
+//           updatedBy: staffId
+//         }
+//       },
+//       { new: true }
+//     ).lean();
+//     if (!updated) return res.status(404).json({ status: false, message: 'PTM not found' });
+//     return res.status(200).json({ status: true, message: 'Staff feedback saved', data: updated });
+//   } catch (err) {
+//     return next(err);
+//   }
+// };
+
 const submitStaffFeedback = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
-    const staffId = safeTrim(req.body?.userId);
-    const { ptmId, staffRemarks, status } = req.body;
-    if (!tenantId || !ptmId || !status) {
-      return res.status(400).json({ status: false, message: 'tenantId, ptmId, and status are required' });
+    const ptmId = safeTrim(req.body?.ptmId);
+    const status = safeTrim(req.body?.status);
+    const userId = safeTrim(req.body?.userId);
+    if (!tenantId || !ptmId) {
+      return res.status(400).json({ status: false, message: 'tenantId and ptmId are required' });
     }
-    const updated = await PTM.findOneAndUpdate(
-      { tenantId, ptmId, isdeleted: false },
-      {
-        $set: {
-          staffRemarks: safeTrim(staffRemarks),
-          status: safeTrim(status),
-          staffId,
-          staffFeedbackSubmittedAt: Date.now(),
-          updatedBy: staffId
-        }
-      },
-      { new: true }
-    ).lean();
-    if (!updated) return res.status(404).json({ status: false, message: 'PTM not found' });
-    return res.status(200).json({ status: true, message: 'Staff feedback saved', data: updated });
+    const ptm = await PTM.findOne({ tenantId, ptmId, isdeleted: false });
+    if (!ptm) return res.status(404).json({ status: false, message: 'PTM not found' });
+    const now = Date.now();
+    if (Array.isArray(req.body?.remarks)) {
+      const incoming = req.body.remarks;
+      if (!incoming.length) {
+        return res.status(400).json({ status: false, message: 'remarks array cannot be empty' });
+      }
+      // const existingMap = new Map((ptm.staffRemarks || []).map((r) => [`${safeTrim(r.staffId)}__${safeTrim(r.subjectId || '')}`, r]));
+      const existingMap = new Map(
+        (ptm.staffRemarks || []).map((r) => {
+          const plain = r.toObject ? r.toObject() : r;
+          return [`${safeTrim(plain.staffId)}__${safeTrim(plain.subjectId || '')}`, plain];
+        })
+      );
+      for (const r of incoming) {
+        const sid = safeTrim(r.staffId);
+        const subjId = safeTrim(r.subjectId || '');
+        if (!sid) continue;
+        const key = `${sid}__${subjId}`;
+        existingMap.set(key, {
+          staffId: sid,
+          staffName: safeTrim(r.staffName || ''),
+          subjectId: subjId || null,
+          subjectName: safeTrim(r.subjectName || '') || null,
+          subjectCode: safeTrim(r.subjectCode || '') || null,
+          remarks: safeTrim(r.remarks || '') || null,
+          submittedAt: now
+        });
+      }
+      const updatedRemarks = Array.from(existingMap.values());
+      const patch = {
+        staffRemarks: updatedRemarks,
+        staffFeedbackSubmittedAt: now,
+        updatedBy: userId
+      };
+      if (status) patch.status = status;
+      const updated = await PTM.findOneAndUpdate({ tenantId, ptmId, isdeleted: false }, { $set: patch }, { new: true }).lean();
+      return res.status(200).json({
+        status: true,
+        message: 'Staff feedback saved',
+        data: updated
+      });
+    }
+    const staffId = safeTrim(req.body?.staffId || userId);
+    const subjectId = safeTrim(req.body?.subjectId || '');
+    const subjectName = safeTrim(req.body?.subjectName || '');
+    const subjectCode = safeTrim(req.body?.subjectCode || '');
+    const remarks = safeTrim(req.body?.staffRemarks || req.body?.remarks || '');
+    const staffName = safeTrim(req.body?.staffName || '');
+    if (!staffId) {
+      return res.status(400).json({ status: false, message: 'staffId is required' });
+    }
+    const key = `${staffId}__${subjectId}`;
+    // const existingList = ptm.staffRemarks || [];
+    const existingList = (ptm.staffRemarks || []).map((r) => (r.toObject ? r.toObject() : r));
+    const idx = existingList.findIndex((r) => `${safeTrim(r.staffId)}__${safeTrim(r.subjectId || '')}` === key);
+    const entry = {
+      staffId,
+      staffName: staffName || null,
+      subjectId: subjectId || null,
+      subjectName: subjectName || null,
+      subjectCode: subjectCode || null,
+      remarks: remarks || null,
+      submittedAt: now
+    };
+    if (idx >= 0) {
+      existingList[idx] = entry;
+    } else {
+      existingList.push(entry);
+    }
+    const patch = {
+      staffRemarks: existingList,
+      staffFeedbackSubmittedAt: now,
+      updatedBy: userId
+    };
+    if (status) patch.status = status;
+    const updated = await PTM.findOneAndUpdate({ tenantId, ptmId, isdeleted: false }, { $set: patch }, { new: true }).lean();
+    return res.status(200).json({
+      status: true,
+      message: 'Staff feedback saved',
+      data: updated
+    });
   } catch (err) {
     return next(err);
   }
@@ -1034,26 +1131,49 @@ const submitStaffFeedback = async (req, res, next) => {
 //     const staffId = safeTrim(req.body?.userId);
 //     const rows = req.body?.rows;
 //     if (!tenantId || !Array.isArray(rows) || rows.length === 0) {
-//       return res.status(400).json({ status: false, message: 'tenantId and rows array are required' });
+//       return res.status(400).json({
+//         status: false,
+//         message: 'tenantId and rows array are required'
+//       });
 //     }
+//     const validStatuses = ['COMPLETED', 'NO_SHOW', 'CANCELLED'];
 //     const bulkOps = [];
 //     const report = { successCount: 0, failedCount: 0, errors: [] };
 //     for (let i = 0; i < rows.length; i++) {
 //       const r = rows[i];
-//       const eno = safeTrim(r.Eno);
-//       const ptmDateMs = parseDateTimeToEpoch(r['PTM Date'], null) || Number(r['PTM Date']);
-//       if (!eno || !ptmDateMs) {
+//       const ptmId = safeTrim(r.ptmId || r['PTM ID'] || '');
+//       const staffRemarks = safeTrim(r.staffRemarks || r['Staff Remarks'] || '');
+//       const status = safeTrim(r.status || r['Status'] || '');
+//       if (!ptmId) {
 //         report.failedCount++;
-//         report.errors.push({ row: i + 1, reason: 'Missing Eno or PTM Date' });
+//         report.errors.push({ row: i + 1, reason: 'PTM ID is required' });
+//         continue;
+//       }
+//       if (!validStatuses.includes(status)) {
+//         report.failedCount++;
+//         report.errors.push({
+//           row: i + 1,
+//           reason: `Invalid status "${status}". Use COMPLETED, NO_SHOW or CANCELLED`
+//         });
 //         continue;
 //       }
 //       bulkOps.push({
 //         updateOne: {
-//           filter: { tenantId, admissionNo: eno, ptmDate: ptmDateMs, isdeleted: false },
+//           filter: { tenantId, ptmId, isdeleted: false },
 //           update: {
 //             $set: {
-//               staffRemarks: safeTrim(r['Staff Remarks']),
-//               status: safeTrim(r.Status) || 'COMPLETED',
+//               staffRemarks: [
+//                 {
+//                   staffId: staffId,
+//                   staffName: null,
+//                   subjectId: null,
+//                   subjectName: null,
+//                   subjectCode: null,
+//                   remarks: staffRemarks,
+//                   submittedAt: Date.now()
+//                 }
+//               ],
+//               status,
 //               staffId,
 //               staffFeedbackSubmittedAt: Date.now(),
 //               updatedBy: staffId
@@ -1066,7 +1186,7 @@ const submitStaffFeedback = async (req, res, next) => {
 //     if (bulkOps.length > 0) await PTM.bulkWrite(bulkOps, { ordered: false });
 //     return res.status(200).json({
 //       status: true,
-//       message: `Feedback import processed. Sent ${report.successCount} updates.`,
+//       message: `Feedback import processed. Success: ${report.successCount}, Failed: ${report.failedCount}`,
 //       data: report
 //     });
 //   } catch (err) {
@@ -1079,26 +1199,32 @@ const bulkImportFeedback = async (req, res, next) => {
     const tenantId = pickTenantId(req);
     const staffId = safeTrim(req.body?.userId);
     const rows = req.body?.rows;
+
     if (!tenantId || !Array.isArray(rows) || rows.length === 0) {
       return res.status(400).json({
         status: false,
         message: 'tenantId and rows array are required'
       });
     }
+
     const validStatuses = ['COMPLETED', 'NO_SHOW', 'CANCELLED'];
-    const bulkOps = [];
     const report = { successCount: 0, failedCount: 0, errors: [] };
+
+    // Group rows by ptmId — each ptmId may have multiple staff remark rows
+    const ptmMap = new Map(); // ptmId → { status, staffRemarks[] }
+
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i];
       const ptmId = safeTrim(r.ptmId || r['PTM ID'] || '');
-      const staffRemarks = safeTrim(r.staffRemarks || r['Staff Remarks'] || '');
       const status = safeTrim(r.status || r['Status'] || '');
+
       if (!ptmId) {
         report.failedCount++;
         report.errors.push({ row: i + 1, reason: 'PTM ID is required' });
         continue;
       }
-      if (!validStatuses.includes(status)) {
+
+      if (status && !validStatuses.includes(status)) {
         report.failedCount++;
         report.errors.push({
           row: i + 1,
@@ -1106,23 +1232,92 @@ const bulkImportFeedback = async (req, res, next) => {
         });
         continue;
       }
+
+      const remarkEntry = {
+        staffId: safeTrim(r.staffId || r['Staff ID'] || ''),
+        staffName: safeTrim(r.staffName || r['Staff Name'] || '') || null,
+        subjectId: safeTrim(r.subjectId || r['Subject ID'] || '') || null,
+        subjectName: safeTrim(r.subjectName || r['Subject Name'] || '') || null,
+        subjectCode: safeTrim(r.subjectCode || r['Subject Code'] || '') || null,
+        remarks: safeTrim(r.remarks || r['Staff Remarks'] || '') || null,
+        submittedAt: Date.now()
+      };
+
+      if (!remarkEntry.staffId) {
+        report.failedCount++;
+        report.errors.push({ row: i + 1, reason: 'staffId is required' });
+        continue;
+      }
+
+      if (!ptmMap.has(ptmId)) {
+        ptmMap.set(ptmId, { status, staffRemarks: [] });
+      }
+
+      const entry = ptmMap.get(ptmId);
+
+      // Keep latest status if multiple rows for same ptmId
+      if (status) entry.status = status;
+
+      // Upsert by staffId + subjectId key — avoid duplicate entries
+      const key = `${remarkEntry.staffId}__${safeTrim(remarkEntry.subjectId || '')}`;
+      const existingIdx = entry.staffRemarks.findIndex((r) => `${safeTrim(r.staffId)}__${safeTrim(r.subjectId || '')}` === key);
+      if (existingIdx >= 0) {
+        entry.staffRemarks[existingIdx] = remarkEntry;
+      } else {
+        entry.staffRemarks.push(remarkEntry);
+      }
+
+      report.successCount++;
+    }
+
+    if (!ptmMap.size) {
+      return res.status(400).json({
+        status: false,
+        message: 'No valid rows to process',
+        data: report
+      });
+    }
+
+    // Fetch existing PTM docs to merge staffRemarks (don't overwrite other teachers)
+    const ptmIds = Array.from(ptmMap.keys());
+    const ptmDocs = await PTM.find({ tenantId, ptmId: { $in: ptmIds }, isdeleted: false }, { ptmId: 1, staffRemarks: 1 }).lean();
+
+    const ptmDocMap = new Map(ptmDocs.map((d) => [d.ptmId, d]));
+
+    const now = Date.now();
+    const bulkOps = [];
+
+    for (const [ptmId, incoming] of ptmMap.entries()) {
+      const existing = ptmDocMap.get(ptmId);
+      const existingList = existing?.staffRemarks || [];
+
+      // Merge: upsert each incoming remark into existing list
+      const mergedMap = new Map(existingList.map((r) => [`${safeTrim(r.staffId)}__${safeTrim(r.subjectId || '')}`, r]));
+
+      for (const r of incoming.staffRemarks) {
+        const key = `${safeTrim(r.staffId)}__${safeTrim(r.subjectId || '')}`;
+        mergedMap.set(key, r);
+      }
+
+      const patch = {
+        staffRemarks: Array.from(mergedMap.values()),
+        staffFeedbackSubmittedAt: now,
+        updatedBy: staffId || null
+      };
+      if (incoming.status) patch.status = incoming.status;
+
       bulkOps.push({
         updateOne: {
           filter: { tenantId, ptmId, isdeleted: false },
-          update: {
-            $set: {
-              staffRemarks,
-              status,
-              staffId,
-              staffFeedbackSubmittedAt: Date.now(),
-              updatedBy: staffId
-            }
-          }
+          update: { $set: patch }
         }
       });
-      report.successCount++;
     }
-    if (bulkOps.length > 0) await PTM.bulkWrite(bulkOps, { ordered: false });
+
+    if (bulkOps.length) {
+      await PTM.bulkWrite(bulkOps, { ordered: false });
+    }
+
     return res.status(200).json({
       status: true,
       message: `Feedback import processed. Success: ${report.successCount}, Failed: ${report.failedCount}`,
@@ -1132,60 +1327,6 @@ const bulkImportFeedback = async (req, res, next) => {
     return next(err);
   }
 };
-
-// const listPTMs = async (req, res, next) => {
-//   try {
-//     const tenantId = pickTenantId(req);
-//     const page = parseInt(req.query.page || req.body.page, 10) || 1;
-//     const limit = parseInt(req.query.limit || req.body.limit, 10) || 10;
-//     const skip = (page - 1) * limit;
-//     const sort = req.query.sort || req.body.sort || '-ptmDate';
-//     const centerCode = req.query.centerCode;
-//     const batchCode = req.query.batchCode;
-//     const admissionNo = req.query.admissionNo;
-//     const studentId = req.query.studentId;
-//     const status = req.query.status;
-//     const fromDate = req.query.fromDate;
-//     const toDate = req.query.toDate;
-//     const query = { tenantId, isdeleted: false };
-//     if (centerCode) query.centerCode = safeTrim(centerCode);
-//     if (batchCode) query.batchCode = safeTrim(batchCode);
-//     if (admissionNo) query.admissionNo = safeTrim(admissionNo);
-//     if (studentId) query.studentId = safeTrim(studentId);
-//     if (status) query.status = safeTrim(status);
-//     if (fromDate || toDate) {
-//       query.ptmDate = {};
-//       if (fromDate) query.ptmDate.$gte = Number(fromDate);
-//       if (toDate) query.ptmDate.$lte = Number(toDate);
-//     }
-//     const [rows, count] = await Promise.all([
-//       PTM.find(query)
-//         .sort(sort)
-//         .skip(skip)
-//         .limit(limit)
-//         .populate({
-//           path: 'studentId',
-//           model: 'studentprofile',
-//           localField: 'studentId',
-//           foreignField: 'studentId',
-//           select: 'admissionNo student.name student.phone parentName parentPhone'
-//         })
-//         .lean(),
-//       PTM.countDocuments(query)
-//     ]);
-//     return res.status(200).json({
-//       status: true,
-//       data: rows,
-//       page,
-//       limit,
-//       count,
-//       pages: Math.ceil(count / limit) || 0,
-//       message: 'PTMs retrieved'
-//     });
-//   } catch (err) {
-//     next(err);
-//   }
-// };
 
 const listPTMs = async (req, res, next) => {
   try {
@@ -1262,14 +1403,6 @@ const viewPTM = async (req, res, next) => {
         localField: 'studentId',
         foreignField: 'studentId',
         select: 'admissionNo student.name student.phone parentName parentPhone'
-      })
-      .populate({
-        path: 'staffId',
-        localField: 'staffId',
-        foreignField: 'staffId',
-        model: 'staff',
-        justOne: true,
-        select: 'staffName staffCode facultyType _id'
       })
       .lean();
     if (!ptmRecord) {
