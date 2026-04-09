@@ -25,7 +25,7 @@ const QuestionSchema = new mongoose.Schema(
     questionType: {
       type: String,
       required: true,
-      enum: ['mcq_single', 'mcq_multi', 'true_false', 'short_answer', 'integer', 'subjective', 'numeric', 'passage_qns']
+      enum: ['mcq_single', 'mcq_multi', 'true_false', 'short_answer', 'integer', 'subjective', 'numeric', 'passage_qns', 'matrix']
     },
     difficulty: {
       type: String,
@@ -45,6 +45,14 @@ const QuestionSchema = new mongoose.Schema(
     passageHtml: { type: String, default: '', trim: false },
     instructionHtml: { type: String, default: '', trim: false },
     questionOptions: { type: [OptionSchema], default: [] },
+    leftColumn: {
+      type: [{ key: { type: String }, text: { type: String, default: '' } }],
+      default: []
+    },
+    rightColumn: {
+      type: [{ key: { type: String }, text: { type: String, default: '' } }],
+      default: []
+    },
     solutionHtml: { type: String, default: '', trim: false },
     enablePassage: { type: Boolean, default: false },
     enableInstruction: { type: Boolean, default: false },
