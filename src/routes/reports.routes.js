@@ -6,6 +6,7 @@ import constants from '../helpers/constants.js';
 import validatetoken from '../middlewares/auth.js';
 import batchReCtrl from '../controller/batchReports.controller.js';
 import studentReCtrl from '../controller/studentReports.controller.js';
+import staffReCtrl from '../controller/teacherReports.controller.js';
 
 routes.post('/batch/students', validatetoken, batchReCtrl.getStudentListReport);
 routes.post('/batch/staff', validatetoken, batchReCtrl.getStaffListReport);
@@ -22,6 +23,15 @@ routes.post('/batch/ptm', validatetoken, batchReCtrl.getBatchPtmReport);
 routes.post('/student/attendance', validatetoken, studentReCtrl.getStudentAttendanceReport);
 routes.post('/student/remarks', validatetoken, studentReCtrl.getStudentRemarksReport);
 routes.post('/student/late-entries', validatetoken, studentReCtrl.getStudentLateEntryReport);
+
+routes.post('/teacher/batches', validatetoken, staffReCtrl.getFacultyBatchReport);
+routes.post('/teacher/tasks', validatetoken, staffReCtrl.getTaskReport);
+routes.post('/teacher/late-entries', validatetoken, staffReCtrl.getStaffLateEntryReport);
+routes.post('/teacher/early-leaving', validatetoken, staffReCtrl.getStaffEarlyLeavingReport);
+routes.post('/teacher/assignments', validatetoken, staffReCtrl.getStaffAssignmentReport);
+routes.post('/teacher/attendance', validatetoken, staffReCtrl.getStaffAttendanceReport);
+routes.post('/teacher/feedback', validatetoken, staffReCtrl.getStaffFeedbackReport);
+routes.post('/teacher/exams', validatetoken, staffReCtrl.getStaffExamReport);
 
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Batch routes' }));
 
