@@ -15,6 +15,7 @@ import teacherRoute from './teacher.routes.js';
 import manageRoute from './manage.routes.js';
 import mockexamRoute from './mockExam.routes.js';
 import feedbackRoute from './feedback.routes.js';
+import reportRoute from './reports.routes.js';
 
 routes.post('/healthcheck', (req, res) => {
   try {
@@ -36,5 +37,6 @@ routes.use('/attendance', attendanceRoute);
 routes.use('/teacher', teacherRoute);
 routes.use('/exam', mockexamRoute);
 routes.use('/feedback', feedbackRoute);
+routes.use('/reports', reportRoute);
 
 export default routes;
