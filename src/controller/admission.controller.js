@@ -662,7 +662,7 @@ const submitForApproval = async (req, res, next) => {
     if (admission.workflow?.stage === 'DRAFT') {
       return res.status(400).json({ status: false, message: 'Submit payments first' });
     }
-    if (!['PAYMENTS_SUBMITTED', 'FEE_CALC_GENERATED'].includes(String(admission.workflow?.stage || ''))) {
+    if (!['PAYMENTS_SUBMITTED', 'FEE_CALC_GENERATED', 'UNDER_REVIEW'].includes(String(admission.workflow?.stage || ''))) {
       return res.status(400).json({ status: false, message: 'Payments must be submitted before sending for approval' });
     }
     admission.workflow.stage = 'APPROVAL_SENT';
@@ -717,6 +717,7 @@ const listAdmissions = async (req, res, next) => {
       if (statusFilter === 'approved') query['workflow.stage'] = 'CONFIRMED';
       else if (statusFilter === 'rejected') query['workflow.stage'] = 'REJECTED';
       else if (statusFilter === 'waiting' || statusFilter === 'waitingforapproval') query['workflow.stage'] = 'APPROVAL_SENT';
+      else if (statusFilter === 'underreview') query['workflow.stage'] = 'UNDER_REVIEW';
     }
     if (registrationNumber) {
       query.registrationNumber = { $regex: registrationNumber, $options: 'i' };
@@ -815,10 +816,10 @@ const updateAdmission = async (req, res, next) => {
     const admission = await Admission.findOne({ tenantId, admissionId, isdeleted: false });
     if (!admission) return res.status(404).json({ status: false, message: 'Admission not found' });
     const stage = safeTrim(admission?.workflow?.stage).toUpperCase();
-    if (!['DRAFT', 'REJECTED'].includes(stage)) {
+    if (!['DRAFT', 'REJECTED', 'UNDER_REVIEW'].includes(stage)) {
       return res.status(400).json({
         status: false,
-        message: 'Only DRAFT/REJECTED admissions can be edited'
+        message: 'Only DRAFT/REJECTED/UNDER_REVIEW admissions can be edited'
       });
     }
     const p = req.body || {};
@@ -871,6 +872,9 @@ const updateAdmission = async (req, res, next) => {
     if (stage === 'REJECTED') {
       admission.workflow.stage = 'DRAFT';
       admission.workflow.rejectionReason = admission.workflow.rejectionReason;
+    }
+    if (stage === 'UNDER_REVIEW') {
+      admission.workflow.stage = 'PAYMENTS_SUBMITTED';
     }
     admission.updatedBy = userId;
     await admission.save();
@@ -1655,6 +1659,40 @@ const bulkUploadStudents = async (req, res, next) => {
   }
 };
 
+const putUnderReview = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = pickUserId(req);
+    const admissionId = safeTrim(req.body?.admissionId);
+    const reviewRemarks = safeTrim(req.body?.reviewRemarks);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    if (!admissionId) return res.status(400).json({ status: false, message: 'admissionId is required' });
+    if (!userId) return res.status(400).json({ status: false, message: 'userId is required' });
+    if (!reviewRemarks) return res.status(400).json({ status: false, message: 'reviewRemarks is required' });
+    const admission = await Admission.findOne({ tenantId, admissionId, isdeleted: false });
+    if (!admission) return res.status(404).json({ status: false, message: 'Admission not found' });
+    if (admission.workflow?.stage !== 'APPROVAL_SENT') {
+      return res.status(400).json({
+        status: false,
+        message: 'Only admissions in APPROVAL_SENT stage can be put under review'
+      });
+    }
+    admission.workflow.stage = 'UNDER_REVIEW';
+    admission.workflow.reviewedAt = Date.now();
+    admission.workflow.reviewedBy = userId;
+    admission.workflow.reviewRemarks = reviewRemarks;
+    admission.updatedBy = userId;
+    await admission.save();
+    return res.status(200).json({
+      status: true,
+      message: 'Admission put under review',
+      data: { admissionId, stage: admission.workflow.stage }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   fetchScholarshipRegistration,
   createAdmissionDraft,
@@ -1668,5 +1706,6 @@ export default {
   getPaymentTemplate,
   listConfirmedAdmissionsWithoutProfile,
   createStudentProfileFromAdmission,
-  bulkUploadStudents
+  bulkUploadStudents,
+  putUnderReview
 };

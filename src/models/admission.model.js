@@ -106,7 +106,7 @@ const admissionSchema = new mongoose.Schema(
     workflow: {
       stage: {
         type: String,
-        enum: ['DRAFT', 'PAYMENTS_SUBMITTED', 'FEE_CALC_GENERATED', 'APPROVAL_SENT', 'CONFIRMED', 'REJECTED'],
+        enum: ['DRAFT', 'PAYMENTS_SUBMITTED', 'FEE_CALC_GENERATED', 'APPROVAL_SENT', 'UNDER_REVIEW', 'CONFIRMED', 'REJECTED'],
         default: 'DRAFT'
       },
       paymentsSubmittedAt: { type: Number, required: false, default: null },
@@ -117,7 +117,10 @@ const admissionSchema = new mongoose.Schema(
       approvedAt: { type: Number, required: false, default: null },
       rejectedAt: { type: Number, required: false, default: null },
       rejectedBy: { type: String, required: false, trim: true, default: null },
-      rejectionReason: { type: String, required: false, trim: true, default: null }
+      rejectionReason: { type: String, required: false, trim: true, default: null },
+      reviewedAt: { type: Number, required: false, default: null },
+      reviewedBy: { type: String, required: false, trim: true, default: null },
+      reviewRemarks: { type: String, required: false, trim: true, default: null }
     },
     print: {
       feeAcknowledgementPrintedAt: { type: Number, required: false, default: null },
