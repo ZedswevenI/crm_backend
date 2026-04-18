@@ -18,6 +18,7 @@ routes.post('/view', validatetoken, admisCtrl.viewAdmission);
 routes.post('/list', validatetoken, admisCtrl.listAdmissions);
 routes.post('/paymenttemplate', validatetoken, admisCtrl.getPaymentTemplate);
 routes.post('/bulkupload', validatetoken, admisCtrl.bulkUploadStudents);
+routes.post('/review', validatetoken, admisCtrl.putUnderReview);
 
 routes.post('/create/student', validatetoken, admisCtrl.createStudentProfileFromAdmission);
 
