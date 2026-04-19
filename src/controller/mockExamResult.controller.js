@@ -423,9 +423,6 @@ const getMyResultWithAnswers = async (req, res, next) => {
     if (!tenantId || !admissionNo || !examId) return res.status(400).json({ status: false, message: 'tenantId, admissionNo, examId are required' });
     const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }, { status: 1, autoPublishAt: 1, resultPublishedAt: 1 }).lean();
     if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
-    // if (exam.status !== 'result_published') return res.status(403).json({ status: false, message: 'Result not published yet', autoPublishAt: exam.autoPublishAt || null });
-    // const now = Date.now();
-    // if (exam.autoPublishAt && now < exam.autoPublishAt) return res.status(403).json({ status: false, message: 'Result not available yet', autoPublishAt: exam.autoPublishAt });
     const now = Date.now();
     const manuallyPublished = !!exam.resultPublishedAt;
     const autoPublishPassed = exam.autoPublishAt && now >= exam.autoPublishAt;
@@ -437,7 +434,6 @@ const getMyResultWithAnswers = async (req, res, next) => {
         autoPublishAt: exam.autoPublishAt || null
       });
     }
-
     const result = await MockExamResult.findOne({ tenantId, examId, admissionNo, isdeleted: false }).populate('sectionResults.subjectId', 'subjectName').lean();
     if (!result) return res.status(404).json({ status: false, message: 'Result not found for this student' });
     if (!result.isResultVisible) return res.status(403).json({ status: false, message: 'Result is not visible yet' });

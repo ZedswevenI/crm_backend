@@ -17,6 +17,7 @@ const upload = multer({ storage: multer.memoryStorage() });
 import { uploadQuestionImage } from '../middlewares/multer.js';
 
 routes.post('/create', validatetoken, mockExamController.createExam);
+routes.post('/duplicate', validatetoken, mockExamController.duplicateExam);
 routes.post('/update', validatetoken, mockExamController.updateExam);
 routes.post('/list', validatetoken, mockExamController.listExams);
 routes.post('/get', validatetoken, mockExamController.getExam);
