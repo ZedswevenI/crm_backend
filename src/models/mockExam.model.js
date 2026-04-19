@@ -21,6 +21,7 @@ const GraceSchema = new mongoose.Schema(
     sectionId: { type: String, default: null, trim: true },
     actionType: { type: String, required: true, enum: ['flat_add', 'remove_negative'] },
     flatMarks: { type: Number, default: 0 },
+    replacementMarks: { type: Number, default: 0 },
     appliedAt: { type: Number, default: null },
     appliedBy: { type: String, default: null },
     note: { type: String, default: null },
