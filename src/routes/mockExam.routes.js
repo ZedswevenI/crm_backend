@@ -24,10 +24,13 @@ routes.post('/get', validatetoken, mockExamController.getExam);
 routes.post('/delete', validatetoken, mockExamController.deleteExam);
 routes.post('/publish', validatetoken, mockExamController.publishExam);
 routes.post('/publish-result', validatetoken, mockExamController.publishResult);
-routes.post('/apply-grace', validatetoken, mockExamController.applyGrace);
-routes.post('/remove-grace', validatetoken, mockExamController.removeGrace);
+// routes.post('/apply-grace', validatetoken, mockExamController.applyGrace);
+// routes.post('/remove-grace', validatetoken, mockExamController.removeGrace);
 routes.post('/auto-publish-check', validatetoken, mockExamController.checkAndAutoPublish);
 routes.post('/student-list', mockExamController.listExamsForStudent);
+routes.post('/grace/add', validatetoken, mockExamController.addGrace);
+routes.post('/grace/remove', validatetoken, mockExamController.removeGrace);
+routes.post('/grace/reevaluate', validatetoken, mockExamController.reevaluate);
 
 routes.post('/batch/assign', validatetoken, mockExamBatchAssignController.assignToBatch);
 routes.post('/batch/disable', validatetoken, mockExamBatchAssignController.disableFromBatch);
