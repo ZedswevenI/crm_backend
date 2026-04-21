@@ -9,6 +9,7 @@ import MockExamQns from '../models/mockExamQns.model.js';
 import MockExam from '../models/mockExam.model.js';
 import ExamPassage from '../models/passage.model.js';
 import Counter from '../models/counter.model.js';
+import Subject from '../models/subject.model.js';
 
 const safeTrim = (v) => (v == null ? '' : String(v)).trim();
 const toNum = (v, def = 0) => {
@@ -95,9 +96,33 @@ function validateQDoc(d, label) {
   return null;
 }
 
-const generateQuestionNo = async (tenantId) => {
-  const doc = await Counter.findOneAndUpdate({ tenantId, key: 'questionNo' }, { $inc: { seq: 1 }, $setOnInsert: { tenantId, key: 'questionNo' } }, { new: true, upsert: true });
-  return `Q${String(doc.seq).padStart(5, '0')}`;
+// const generateQuestionNo = async (tenantId) => {
+//   const doc = await Counter.findOneAndUpdate({ tenantId, key: 'questionNo' }, { $inc: { seq: 1 }, $setOnInsert: { tenantId, key: 'questionNo' } }, { new: true, upsert: true });
+//   return `Q${String(doc.seq).padStart(5, '0')}`;
+// };
+
+const generateQuestionNo = async (tenantId, subjectId) => {
+  let subjectPrefix = 'GEN';
+  if (subjectId) {
+    const subjectDoc = await Subject.findOne({ _id: subjectId, isdeleted: false }, { subjectCode: 1 }).lean();
+    if (subjectDoc?.subjectCode) {
+      subjectPrefix = safeTrim(subjectDoc.subjectCode)
+        .toUpperCase()
+        .replace(/[^A-Z0-9]/g, '')
+        .substring(0, 3)
+        .padEnd(3, 'X');
+    }
+  }
+  const counterKey = `questionNo_${subjectPrefix}`;
+  const doc = await Counter.findOneAndUpdate(
+    { tenantId, key: counterKey },
+    {
+      $inc: { seq: 1 },
+      $setOnInsert: { tenantId, key: counterKey }
+    },
+    { new: true, upsert: true }
+  );
+  return `Q${subjectPrefix}${String(doc.seq).padStart(5, '0')}`;
 };
 
 // ─── UPLOAD IMAGE ─────────────────────────────────────────────────────────────
@@ -152,10 +177,12 @@ const createQuestion = async (req, res, next) => {
     const qt = safeTrim(req.body?.questionType).toLowerCase();
     const diff = safeTrim(req.body?.difficulty || 'medium').toLowerCase();
     const opts = normalizeOptions(req.body?.questionOptions);
+    const questionNo = await generateQuestionNo(tenantId, subjectIdRaw);
     const doc = {
       tenantId,
       examId,
       sectionId,
+      questionNo,
       subjectId: new mongoose.Types.ObjectId(String(subjectIdRaw)),
       questionId: safeTrim(req.body?.questionId) || uuid(),
       topicId: safeTrim(req.body?.topicId) || null,
@@ -564,7 +591,7 @@ const createQuestionInBank = async (req, res, next) => {
     if (!topicId) return res.status(400).json({ status: false, message: 'topicId is required for bank questions' });
     if (!subTopicId) return res.status(400).json({ status: false, message: 'subTopicId is required for bank questions' });
 
-    const questionNo = await generateQuestionNo(tenantId);
+    const questionNo = await generateQuestionNo(tenantId, subjectId);
 
     const doc = await MockExamQns.create({
       tenantId,
@@ -615,18 +642,15 @@ const createQuestionsBulkInBank = async (req, res, next) => {
     const tenantId = pickTid(req);
     const userId = pickUid(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-
     const questions = Array.isArray(req.body?.questions) ? req.body.questions : [];
     if (!questions.length) return res.status(400).json({ status: false, message: 'questions[] is required' });
-
     const docs = [];
     for (const q of questions) {
       if (!q.questionType) return res.status(400).json({ status: false, message: 'questionType is required for all questions' });
       if (!q.subjectId || !mustObjId(q.subjectId)) return res.status(400).json({ status: false, message: 'valid subjectId is required for all bank questions' });
       if (!q.topicId) return res.status(400).json({ status: false, message: 'topicId is required for all bank questions' });
       if (!q.subTopicId) return res.status(400).json({ status: false, message: 'subTopicId is required for all bank questions' });
-
-      const questionNo = await generateQuestionNo(tenantId);
+      const questionNo = await generateQuestionNo(tenantId, q.subjectId);
       docs.push({
         tenantId,
         examId: null,
@@ -662,7 +686,6 @@ const createQuestionsBulkInBank = async (req, res, next) => {
         isdeleted: false
       });
     }
-
     const inserted = await MockExamQns.insertMany(docs, { ordered: true });
     return res.status(200).json({ status: true, message: `${inserted.length} questions created in bank`, count: inserted.length, data: inserted });
   } catch (err) {
@@ -710,24 +733,18 @@ const mapQuestionToExam = async (req, res, next) => {
     const recId = safeTrim(req.body?.recId);
     const examId = safeTrim(req.body?.examId);
     const sectionId = safeTrim(req.body?.sectionId);
-
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
     if (!recId) return res.status(400).json({ status: false, message: 'recId (_id) is required' });
     if (!examId) return res.status(400).json({ status: false, message: 'examId is required' });
     if (!sectionId) return res.status(400).json({ status: false, message: 'sectionId is required' });
-
     const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }).lean();
     if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
     const section = (exam.sections || []).find((s) => s.sectionId === sectionId);
     if (!section) return res.status(400).json({ status: false, message: `Section ${sectionId} not found in exam` });
-
     const question = await MockExamQns.findOne({ _id: recId, tenantId, isdeleted: false });
     if (!question) return res.status(404).json({ status: false, message: 'Question not found' });
-
     const resolvedSubjectId = question.subjectId || (section.subjectId ? new mongoose.Types.ObjectId(String(section.subjectId)) : null);
-
     if (!question.examId) {
-      // First mapping — update in place
       question.examId = examId;
       question.sectionId = sectionId;
       question.subjectId = resolvedSubjectId;
@@ -735,15 +752,12 @@ const mapQuestionToExam = async (req, res, next) => {
       await question.save();
       return res.status(200).json({ status: true, message: 'Question mapped to exam', data: question });
     }
-
-    // Already mapped — duplicate with new questionNo
-    const questionNo = await generateQuestionNo(tenantId);
+    const questionNo = await generateQuestionNo(tenantId, question.subjectId);
     const raw = question.toObject();
     delete raw._id;
     delete raw.__v;
     delete raw.createdAt;
     delete raw.updatedAt;
-
     const duplicate = await MockExamQns.create({
       ...raw,
       examId,
@@ -794,20 +808,16 @@ const bulkMapQuestionsToExam = async (req, res, next) => {
     const examId = safeTrim(req.body?.examId);
     const sectionId = safeTrim(req.body?.sectionId);
     const recIds = Array.isArray(req.body?.recIds) ? req.body.recIds.map(safeTrim).filter(Boolean) : [];
-
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
     if (!examId) return res.status(400).json({ status: false, message: 'examId is required' });
     if (!sectionId) return res.status(400).json({ status: false, message: 'sectionId is required' });
     if (!recIds.length) return res.status(400).json({ status: false, message: 'recIds[] is required' });
-
     const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }).lean();
     if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
     const section = (exam.sections || []).find((s) => s.sectionId === sectionId);
     if (!section) return res.status(400).json({ status: false, message: `Section ${sectionId} not found in exam` });
-
     const questions = await MockExamQns.find({ _id: { $in: recIds }, tenantId, isdeleted: false });
     if (!questions.length) return res.status(404).json({ status: false, message: 'No questions found' });
-
     const results = { mapped: 0, duplicated: 0, errors: [] };
     for (const question of questions) {
       try {
@@ -821,7 +831,7 @@ const bulkMapQuestionsToExam = async (req, res, next) => {
           await question.save();
           results.mapped++;
         } else {
-          const questionNo = await generateQuestionNo(tenantId);
+          const questionNo = await generateQuestionNo(tenantId, question.subjectId);
           const raw = question.toObject();
           delete raw._id;
           delete raw.__v;
@@ -844,11 +854,159 @@ const bulkMapQuestionsToExam = async (req, res, next) => {
         results.errors.push({ recId: String(question._id), error: e.message });
       }
     }
-
     return res.status(200).json({
       status: true,
       message: `Bulk map complete — ${results.mapped} mapped, ${results.duplicated} duplicated${results.errors.length ? `, ${results.errors.length} errors` : ''}`,
       data: results
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+// ─── BULK UPLOAD ANSWERS AND SOLUTIONS ───────────────────────────────────────
+// POST /mockexamqns/bulk-upload-answers
+// Only for exam questions (examId must exist)
+// Updates correctAnswer, solutionHtml, enableSolution, questionOptions.isCorrect
+const bulkUploadAnswers = async (req, res, next) => {
+  try {
+    const tenantId = pickTid(req);
+    const userId = pickUid(req);
+    const examId = safeTrim(req.body?.examId);
+    const payload = Array.isArray(req.body?.questions) ? req.body.questions : [];
+
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+    if (!examId) return res.status(400).json({ status: false, message: 'examId is required' });
+    if (!payload.length) return res.status(400).json({ status: false, message: 'questions[] must be non-empty' });
+
+    // Validate exam exists
+    const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }, { examId: 1 }).lean();
+    if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
+
+    // Validate all questionIds belong to this exam
+    const incomingIds = payload.map((q) => safeTrim(q?.questionId)).filter(Boolean);
+
+    if (!incomingIds.length) {
+      return res.status(400).json({ status: false, message: 'No valid questionIds provided' });
+    }
+
+    // Fetch existing questions to validate they exist in this exam
+    const existingQns = await MockExamQns.find({ tenantId, examId, questionId: { $in: incomingIds }, isdeleted: false }, { questionId: 1, questionType: 1, questionOptions: 1 }).lean();
+
+    const existingMap = new Map(existingQns.map((q) => [q.questionId, q]));
+
+    // Check for questionIds not found in this exam
+    const notFound = incomingIds.filter((id) => !existingMap.has(id));
+    if (notFound.length) {
+      return res.status(400).json({
+        status: false,
+        message: `${notFound.length} question(s) not found in this exam`,
+        notFound
+      });
+    }
+
+    // Build bulk ops
+    const ops = [];
+    const errors = [];
+    const updated = [];
+
+    for (const item of payload) {
+      const questionId = safeTrim(item?.questionId);
+      if (!questionId) continue;
+
+      const existing = existingMap.get(questionId);
+      if (!existing) continue;
+
+      const set = { updatedBy: userId || null };
+
+      // ── correctAnswer ────────────────────────────────────────────────────────
+      if (item.correctAnswer !== undefined) {
+        set.correctAnswer = safeTrim(item.correctAnswer);
+      }
+
+      // ── solutionHtml ─────────────────────────────────────────────────────────
+      if (item.solutionHtml !== undefined) {
+        set.solutionHtml = item.solutionHtml ?? '';
+        set.enableSolution = true; // auto-enable solution when provided
+      }
+
+      // ── questionOptions.isCorrect ─────────────────────────────────────────────
+      // If options array provided — merge isCorrect into existing options by key
+      if (Array.isArray(item.questionOptions) && item.questionOptions.length) {
+        const existingOpts = Array.isArray(existing.questionOptions) ? existing.questionOptions : [];
+
+        // Build map of incoming options by key
+        const incomingOptMap = new Map(item.questionOptions.map((o) => [safeTrim(o?.key), o]));
+
+        // Validate — for mcq_single and true_false exactly one must be correct
+        const qt = safeTrim(existing.questionType).toLowerCase();
+        const updatedOpts = existingOpts.map((opt) => {
+          const optKey = safeTrim(opt?.key);
+          const incomingOpt = incomingOptMap.get(optKey);
+          if (incomingOpt !== undefined) {
+            return {
+              ...(opt.toObject ? opt.toObject() : opt),
+              isCorrect: incomingOpt.isCorrect === true,
+              partialMark: incomingOpt.partialMark !== undefined ? toNum(incomingOpt.partialMark) : toNum(opt.partialMark)
+            };
+          }
+          return opt.toObject ? opt.toObject() : opt;
+        });
+
+        // Validate correct count for mcq_single and true_false
+        if (['mcq_single', 'true_false'].includes(qt)) {
+          const correctCount = updatedOpts.filter((o) => o.isCorrect).length;
+          if (correctCount === 0) {
+            errors.push({
+              questionId,
+              message: `${qt} must have at least one correct option`
+            });
+            continue;
+          }
+          if (correctCount > 1) {
+            errors.push({
+              questionId,
+              message: `${qt} can only have one correct option`
+            });
+            continue;
+          }
+        }
+
+        set.questionOptions = updatedOpts;
+      }
+
+      // Skip if nothing to update
+      if (Object.keys(set).length <= 1) {
+        // only updatedBy
+        errors.push({ questionId, message: 'No fields to update' });
+        continue;
+      }
+
+      ops.push({
+        updateOne: {
+          filter: { tenantId, examId, questionId, isdeleted: false },
+          update: { $set: set }
+        }
+      });
+
+      updated.push(questionId);
+    }
+
+    // Execute bulk write
+    let bulkResult = null;
+    if (ops.length) {
+      bulkResult = await MockExamQns.bulkWrite(ops, { ordered: false });
+    }
+
+    return res.status(200).json({
+      status: true,
+      message: `${updated.length} question(s) updated${errors.length ? `, ${errors.length} skipped` : ''}`,
+      data: {
+        updatedCount: updated.length,
+        skippedCount: errors.length,
+        updatedIds: updated,
+        errors: errors.length ? errors : undefined
+      }
     });
   } catch (err) {
     return next(err);
@@ -873,5 +1031,6 @@ export default {
   listQuestionBank,
   mapQuestionToExam,
   unmapQuestionFromExam,
-  bulkMapQuestionsToExam
+  bulkMapQuestionsToExam,
+  bulkUploadAnswers
 };

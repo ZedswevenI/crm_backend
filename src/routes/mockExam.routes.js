@@ -49,8 +49,9 @@ routes.post('/questions/get-questions', mockExamQnsController.getQuestionsByCode
 routes.post('/questions/getallquestions', mockExamQnsController.getQuestionsByExam);
 routes.post('/questions/view', validatetoken, mockExamQnsController.viewQuestion);
 routes.post('/questions/sort-order', validatetoken, mockExamQnsController.updateSortOrder);
-routes.post('/questions/upload-image', validatetoken, validatetoken, uploadQuestionImage, mockExamQnsController.uploadImage);
+routes.post('/questions/upload-image', validatetoken, uploadQuestionImage, mockExamQnsController.uploadImage);
 routes.post('/questions/image/download', mockExamQnsController.getImage);
+routes.post('/questions/bulk-upload-answers', validatetoken, mockExamQnsController.bulkUploadAnswers);
 
 // QUestion Bank Routes
 routes.post('/questions/bank/create', validatetoken, mockExamQnsController.createQuestionInBank);
