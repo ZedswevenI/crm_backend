@@ -71,6 +71,9 @@ routes.post('/result/list-by-student', mockExamResultController.listResultsByStu
 routes.post('/result/section-analytics', mockExamResultController.getSectionAnalytics);
 routes.post('/result/analytics/timing', mockExamResultController.getQuestionTimingAnalytics);
 routes.post('/result/analytics/attempts', mockExamResultController.getQuestionAttemptAnalytics);
+routes.post('/result/batch-attendance', mockExamResultController.getBatchAttendanceReport);
+routes.post('/result/batch-performance', mockExamResultController.getBatchPerformanceReport);
+routes.post('/result/compare-topper', mockExamResultController.compareWithTopper);
 
 routes.post('/instruction/create', validatetoken, instructionController.createInstruction);
 routes.post('/instruction/update', validatetoken, instructionController.updateInstruction);
