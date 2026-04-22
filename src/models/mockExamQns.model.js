@@ -23,6 +23,7 @@ const MockExamQnsSchema = new mongoose.Schema(
     examId: { type: String, default: null, trim: true },
     sectionId: { type: String, default: null, trim: true },
     subjectId: { type: mongoose.Schema.Types.ObjectId, ref: 'subject', required: true },
+    sourceQuestionId: { type: String, default: null, trim: true, index: true },
     questionId: { type: String, required: true, trim: true },
     questionNo: { type: String, default: null, trim: true },
     topicId: { type: String, default: null, trim: true },
