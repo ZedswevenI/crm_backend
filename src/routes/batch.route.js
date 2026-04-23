@@ -33,6 +33,11 @@ routes.post('/school-attendance/summary', validatetoken, sclAtdnceCtrl.getSchool
 routes.post('/school-attendance/monthly-report', validatetoken, sclAtdnceCtrl.getMonthlyAttendanceReport);
 routes.post('/school-attendance/marked-check', validatetoken, sclAtdnceCtrl.checkMarkedBatches);
 
+routes.post('/school-attendance/holiday/declare', validatetoken, sclAtdnceCtrl.declareHoliday);
+routes.post('/school-attendance/holiday/declare-all-batches', validatetoken, sclAtdnceCtrl.declareHolidayForAllBatches);
+routes.post('/school-attendance/holiday/remove', validatetoken, sclAtdnceCtrl.removeHoliday);
+routes.post('/school-attendance/holiday/list', validatetoken, sclAtdnceCtrl.listHolidays);
+
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Batch routes' }));
 
 export default routes;
