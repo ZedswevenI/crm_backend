@@ -22,6 +22,13 @@ const schoolAttendanceSchema = new mongoose.Schema(
     academicYear: { type: String, default: null },
     classNo: { type: Number, default: null },
     date: { type: Number, required: true, index: true },
+    type: {
+      type: String,
+      enum: ['ATTENDANCE', 'HOLIDAY', 'WEEK_OFF', 'LEAVE'],
+      default: 'ATTENDANCE',
+      index: true
+    },
+    holidayName: { type: String, trim: true, default: null },
     markedBy: { type: String, default: null }, // staffId or userId
     markedByName: { type: String, default: null },
     markedByRole: { type: String, default: null }, // L1, L3, classTeacher

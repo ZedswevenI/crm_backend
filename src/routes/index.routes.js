@@ -16,6 +16,7 @@ import manageRoute from './manage.routes.js';
 import mockexamRoute from './mockExam.routes.js';
 import feedbackRoute from './feedback.routes.js';
 import reportRoute from './reports.routes.js';
+import dashboardRoute from './dashboard.routes.js';
 
 routes.post('/healthcheck', (req, res) => {
   try {
@@ -28,6 +29,7 @@ routes.post('/healthcheck', (req, res) => {
 routes.use('/ims', tenantRoute);
 routes.use('/institue', manageRoute);
 routes.use('/admi', admissionRoute);
+routes.use('/dashboard', dashboardRoute);
 routes.use('/accounts', accountsRoute);
 routes.use('/batch', batchRoute);
 routes.use('/timetable', timetableRoute);
