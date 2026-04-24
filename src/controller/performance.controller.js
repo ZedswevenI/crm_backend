@@ -1,20 +1,33 @@
 import mongoose from 'mongoose';
 import { v4 as uuid } from 'uuid';
-import StaffPerformance from '../models/staffperformance.model.js';
-import Staff from '../models/staff.model.js';
-import constants from '../helpers/constants.js';
-import StudentPerformance from '../models/studentperformance.model.js';
-import AssignmentResult from '../models/assignmentResult.model.js';
+import StudentPerformance from '../models/studentPerformance.model.js';
 import StudentProfile from '../models/studentProfile.model.js';
-import BatchAssignEnable from '../models/batchenabledAssignment.model.js';
+import AssignmentResult from '../models/assignmentResult.model.js';
+import MockExamResult from '../models/mockExamResult.model.js';
+import MockExam from '../models/mockExam.model.js';
+import SchoolExamResult from '../models/schoolexamresult.model.js';
+import SchoolExam from '../models/schoolexam.model.js';
+import Subject from '../models/subject.model.js';
+import Staff from '../models/staff.model.js';
+import StaffPerformance from '../models/staffperformance.model.js';
+import constants from '../helpers/constants.js';
 
 const pickTenantId = (req) => String(req?.body?.tenantId || req?.body?.entiId || '').trim();
-const safeTrim = (v) => (v === undefined || v === null ? '' : String(v).trim());
-const escapeRegex = (s) => String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const safeTrim = (v) => (v === undefined || v === null ? '' : String(v)).trim();
+
+const toNum = (v) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+
 const toInt = (v, def = 0) => {
   const n = Number(v);
   return Number.isFinite(n) ? Math.trunc(n) : def;
 };
+
+const round2 = (v) => (v != null ? Math.round(v * 100) / 100 : null);
+
 const toRating = (v) => {
   const n = Number(v);
   if (!Number.isFinite(n)) return null;
@@ -22,33 +35,758 @@ const toRating = (v) => {
   return r >= 1 && r <= 5 ? r : null;
 };
 
-const toNum = (v) => {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
+const escapeRx = (s) => String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const WEIGHTS = { assignment: 0.4, mock: 0.3, school: 0.3 };
+
+const computeCombined = (assignPct, mockPct, schoolPct) => {
+  const available = [assignPct != null ? { v: assignPct, w: WEIGHTS.assignment } : null, mockPct != null ? { v: mockPct, w: WEIGHTS.mock } : null, schoolPct != null ? { v: schoolPct, w: WEIGHTS.school } : null].filter(Boolean);
+  if (!available.length) return null;
+  const totalW = available.reduce((s, x) => s + x.w, 0);
+  return round2(available.reduce((s, x) => s + x.v * x.w, 0) / totalW);
 };
 
-const DEFAULT_WEIGHTS = { assignment: 0.4, mockExam: 0.3, schoolExam: 0.3 };
+const getProfile = async (tenantId, studentId) => {
+  return StudentProfile.findOne({ tenantId, studentId, isdeleted: false }, { admissionNo: 1, batchId: 1, batchCode: 1, programId: 1, centerId: 1, academicYear: 1 }).lean();
+};
 
-const computeCombinedScore = (assignment, examMarks, weights = DEFAULT_WEIGHTS) => {
-  const assignmentScore = assignment?.cgpa != null ? (assignment.cgpa / 10) * 100 : null;
-  const mockScore = examMarks?.mock?.score != null ? toNum(examMarks.mock.score) : null;
-  const schoolScore = examMarks?.school?.score != null ? toNum(examMarks.school.score) : null;
-  if (assignmentScore === null || mockScore === null || schoolScore === null) return null;
-  const combined = assignmentScore * weights.assignment + mockScore * weights.mockExam + schoolScore * weights.schoolExam;
-  return Math.round(combined * 100) / 100;
+const upsertPerf = async (filter, setDoc, setOnInsert) => {
+  const cleanSetOnInsert = Object.fromEntries(Object.entries({ performanceId: uuid(), ...setOnInsert }).filter(([key]) => !(key in setDoc)));
+  return StudentPerformance.findOneAndUpdate(
+    { ...filter, isdeleted: false },
+    {
+      $set: setDoc,
+      $setOnInsert: cleanSetOnInsert
+    },
+    { upsert: true, new: true }
+  ).lean();
+};
+
+const _recomputeSummary = async (tenantId, studentId, academicYear, profile) => {
+  const [assignments, mockExams, schoolExams] = await Promise.all([
+    StudentPerformance.find({ tenantId, studentId, academicYear, performanceType: 'ASSIGNMENT', isdeleted: false }, { cgpa: 1, percentage: 1 }).lean(),
+    StudentPerformance.find({ tenantId, studentId, academicYear, performanceType: 'MOCK_EXAM', isdeleted: false }, { percentage: 1, rank: 1 }).lean(),
+    StudentPerformance.find({ tenantId, studentId, academicYear, performanceType: 'SCHOOL_EXAM', isdeleted: false }, { percentage: 1 }).lean()
+  ]);
+  const validCgpa = assignments.filter((a) => a.cgpa != null);
+  const validAPct = assignments.filter((a) => a.percentage != null);
+  const assignmentAvgCgpa = validCgpa.length ? round2(validCgpa.reduce((s, a) => s + a.cgpa, 0) / validCgpa.length) : null;
+  const assignmentAvgPct = validAPct.length ? round2(validAPct.reduce((s, a) => s + a.percentage, 0) / validAPct.length) : null;
+  const validMPct = mockExams.filter((m) => m.percentage != null);
+  const validRanks = mockExams.filter((m) => m.rank != null);
+  const mockAvgPct = validMPct.length ? round2(validMPct.reduce((s, m) => s + m.percentage, 0) / validMPct.length) : null;
+  const mockBestPct = validMPct.length ? round2(Math.max(...validMPct.map((m) => m.percentage))) : null;
+  const mockBestRank = validRanks.length ? Math.min(...validRanks.map((m) => m.rank)) : null;
+  const validSPct = schoolExams.filter((s) => s.percentage != null);
+  const schoolAvgPct = validSPct.length ? round2(validSPct.reduce((s, e) => s + e.percentage, 0) / validSPct.length) : null;
+  const schoolBestPct = validSPct.length ? round2(Math.max(...validSPct.map((e) => e.percentage))) : null;
+  const combinedScore = computeCombined(assignmentAvgPct, mockAvgPct, schoolAvgPct);
+  const existing = await StudentPerformance.findOne({ tenantId, studentId, academicYear, performanceType: 'SUMMARY', isdeleted: false }, { 'summary.batchRank': 1, staffFeedback: 1 }).lean();
+  const summaryDoc = {
+    assignmentAvgCgpa,
+    assignmentAvgPct,
+    assignmentSubjectCount: assignments.length,
+    mockAvgPct,
+    mockBestPct,
+    mockBestRank,
+    mockExamCount: mockExams.length,
+    schoolAvgPct,
+    schoolBestPct,
+    schoolExamCount: schoolExams.length,
+    combinedScore,
+    batchRank: existing?.summary?.batchRank ?? null,
+    lastSyncedAt: Date.now()
+  };
+  return upsertPerf(
+    { tenantId, studentId, academicYear, performanceType: 'SUMMARY' },
+    {
+      summary: summaryDoc,
+      syncedAt: Date.now(),
+      admissionNo: profile?.admissionNo || null,
+      batchId: profile?.batchId || null,
+      batchCode: profile?.batchCode || null,
+      programId: profile?.programId || null,
+      centerId: profile?.centerId || null
+    },
+    { tenantId, studentId, academicYear, performanceType: 'SUMMARY' }
+  );
+};
+
+const syncAssignmentPerf = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const studentId = safeTrim(req.body?.studentId);
+    const academicYear = safeTrim(req.body?.academicYear);
+    if (!tenantId || !studentId || !academicYear) return res.status(400).json({ status: false, message: 'tenantId, studentId and academicYear are required' });
+    const profile = await getProfile(tenantId, studentId);
+    if (!profile) return res.status(404).json({ status: false, message: 'Student not found' });
+    const results = await AssignmentResult.find({ tenantId, admissionNo: profile.admissionNo, isdeleted: false, status: 'completed' }, { subjectId: 1, obtainedMarks: 1, totalMarks: 1, cgpa: 1, numberOfReattempts: 1 }).lean();
+    const subjectMap = new Map();
+    for (const r of results) {
+      const sid = r.subjectId?.toString() || '__unknown__';
+      if (!subjectMap.has(sid)) subjectMap.set(sid, []);
+      subjectMap.get(sid).push(r);
+    }
+    const validIds = [...subjectMap.keys()].filter((s) => s !== '__unknown__' && mongoose.Types.ObjectId.isValid(s));
+    const subDocs = await Subject.find({ _id: { $in: validIds } }, { subjectName: 1 }).lean();
+    const subNames = new Map(subDocs.map((s) => [s._id.toString(), s.subjectName]));
+    const upserted = [];
+    for (const [sid, rows] of subjectMap) {
+      let totalAttempts = 0,
+        totalSecured = 0,
+        totalMax = 0,
+        totalCgpa = 0,
+        cgpaCount = 0;
+      for (const r of rows) {
+        totalAttempts += toNum(r.numberOfReattempts) || 1;
+        totalSecured += toNum(r.obtainedMarks) || 0;
+        totalMax += toNum(r.totalMarks) || 0;
+        if (r.cgpa != null) {
+          totalCgpa += toNum(r.cgpa);
+          cgpaCount++;
+        }
+      }
+      const avgCgpa = cgpaCount > 0 ? round2(totalCgpa / cgpaCount) : null;
+      const pct = totalMax > 0 ? round2((totalSecured / totalMax) * 100) : null;
+      const realSid = sid !== '__unknown__' ? sid : null;
+      const doc = await upsertPerf(
+        { tenantId, studentId, academicYear, performanceType: 'ASSIGNMENT', subjectId: realSid },
+        {
+          admissionNo: profile.admissionNo,
+          batchId: profile.batchId,
+          batchCode: profile.batchCode,
+          programId: profile.programId,
+          centerId: profile.centerId,
+          subjectName: subNames.get(sid) || null,
+          cgpa: avgCgpa,
+          attempts: totalAttempts,
+          obtainedMarks: totalSecured || null,
+          totalMarks: totalMax || null,
+          percentage: pct,
+          syncedAt: Date.now()
+        },
+        { tenantId, studentId, academicYear, performanceType: 'ASSIGNMENT', subjectId: realSid }
+      );
+      upserted.push(doc);
+    }
+    await _recomputeSummary(tenantId, studentId, academicYear, profile);
+    return res.status(200).json({
+      status: true,
+      message: `Assignment performance synced — ${upserted.length} subject(s)`,
+      count: upserted.length
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const syncMockExamPerf = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const studentId = safeTrim(req.body?.studentId);
+    const academicYear = safeTrim(req.body?.academicYear);
+    if (!tenantId || !studentId || !academicYear) return res.status(400).json({ status: false, message: 'tenantId, studentId and academicYear are required' });
+    const profile = await getProfile(tenantId, studentId);
+    if (!profile) return res.status(404).json({ status: false, message: 'Student not found' });
+    const results = await MockExamResult.find({ tenantId, admissionNo: profile.admissionNo, isdeleted: false }).lean();
+    if (!results.length) {
+      return res.status(200).json({ status: true, message: 'No mock exam results found', count: 0 });
+    }
+    const examIds = [...new Set(results.map((r) => r.examId))];
+    const examDocs = await MockExam.find({ tenantId, examId: { $in: examIds } }, { examId: 1, examName: 1 }).lean();
+    const examNames = new Map(examDocs.map((e) => [e.examId, e.examName]));
+    const allSubIds = results.flatMap((r) => (r.sectionResults || []).map((s) => s.subjectId?.toString()).filter(Boolean));
+    const uniqSubs = [...new Set(allSubIds)].filter((id) => mongoose.Types.ObjectId.isValid(id));
+    const subDocs = await Subject.find({ _id: { $in: uniqSubs } }, { subjectName: 1 }).lean();
+    const subNames = new Map(subDocs.map((s) => [s._id.toString(), s.subjectName]));
+    const upserted = [];
+    for (const r of results) {
+      const pct = r.totalMarks > 0 ? round2((r.obtainedMarks / r.totalMarks) * 100) : null;
+      const doc = await upsertPerf(
+        { tenantId, studentId, examId: r.examId, performanceType: 'MOCK_EXAM' },
+        {
+          admissionNo: profile.admissionNo,
+          batchId: profile.batchId,
+          batchCode: profile.batchCode,
+          programId: profile.programId,
+          centerId: profile.centerId,
+          academicYear,
+          examName: examNames.get(r.examId) || null,
+          obtainedMarks: r.obtainedMarks || 0,
+          totalMarks: r.totalMarks || 0,
+          percentage: pct,
+          rank: r.rank || null,
+          sectionResults: (r.sectionResults || []).map((s) => ({
+            sectionId: s.sectionId || null,
+            subjectId: s.subjectId?.toString() || null,
+            subjectName: subNames.get(s.subjectId?.toString()) || null,
+            totalMarks: s.totalMarks || 0,
+            obtainedMarks: s.obtainedMarks || 0,
+            correctCount: s.correctCount || 0,
+            wrongCount: s.wrongCount || 0,
+            skippedCount: s.skippedCount || 0,
+            timeTaken: s.timeTaken || 0
+          })),
+          syncedAt: Date.now()
+        },
+        { tenantId, studentId, examId: r.examId, performanceType: 'MOCK_EXAM', academicYear }
+      );
+      upserted.push(doc);
+    }
+    await _recomputeSummary(tenantId, studentId, academicYear, profile);
+    return res.status(200).json({
+      status: true,
+      message: `Mock exam performance synced — ${upserted.length} exam(s)`,
+      count: upserted.length
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const syncSchoolExamPerf = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const studentId = safeTrim(req.body?.studentId);
+    const academicYear = safeTrim(req.body?.academicYear);
+    if (!tenantId || !studentId || !academicYear) return res.status(400).json({ status: false, message: 'tenantId, studentId and academicYear are required' });
+    const profile = await getProfile(tenantId, studentId);
+    if (!profile) return res.status(404).json({ status: false, message: 'Student not found' });
+    const results = await SchoolExamResult.find({ tenantId, studentId, isdeleted: false }).lean();
+    if (!results.length) {
+      return res.status(200).json({ status: true, message: 'No school exam results found', count: 0 });
+    }
+    const examIds = [...new Set(results.map((r) => r.examId))];
+    const examDocs = await SchoolExam.find({ examLogId: { $in: examIds }, tenantId }, { examLogId: 1, examName: 1, examDate: 1 }).lean();
+    const examMap = new Map(examDocs.map((e) => [e.examLogId, e]));
+    const upserted = [];
+    for (const r of results) {
+      const exam = examMap.get(r.examId) || {};
+      const pct = r.totalMaxMarks > 0 ? round2((r.totalObtainedMarks / r.totalMaxMarks) * 100) : null;
+      const doc = await upsertPerf(
+        { tenantId, studentId, examId: r.examId, performanceType: 'SCHOOL_EXAM' },
+        {
+          admissionNo: profile.admissionNo,
+          batchId: profile.batchId,
+          batchCode: profile.batchCode,
+          programId: profile.programId,
+          centerId: profile.centerId,
+          academicYear,
+          examName: exam.examName || null,
+          examDate: exam.examDate || null,
+          obtainedMarks: r.totalObtainedMarks || 0,
+          totalMarks: r.totalMaxMarks || 0,
+          percentage: pct,
+          subjects: (r.subjects || []).map((s) => ({
+            subjectName: s.subjectName || null,
+            maxMarks: s.maxMarks || 0,
+            obtainedMarks: s.obtainedMarks || 0,
+            percentage: s.maxMarks > 0 ? round2((s.obtainedMarks / s.maxMarks) * 100) : null,
+            grade: s.grade || null
+          })),
+          syncedAt: Date.now()
+        },
+        { tenantId, studentId, examId: r.examId, performanceType: 'SCHOOL_EXAM', academicYear }
+      );
+      upserted.push(doc);
+    }
+    await _recomputeSummary(tenantId, studentId, academicYear, profile);
+    return res.status(200).json({
+      status: true,
+      message: `School exam performance synced — ${upserted.length} exam(s)`,
+      count: upserted.length
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const syncAllPerformance = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const studentId = safeTrim(req.body?.studentId);
+    const academicYear = safeTrim(req.body?.academicYear);
+    if (!tenantId || !studentId || !academicYear) return res.status(400).json({ status: false, message: 'tenantId, studentId and academicYear are required' });
+    await Promise.allSettled([_runSyncAssignment(tenantId, studentId, academicYear), _runSyncMock(tenantId, studentId, academicYear), _runSyncSchool(tenantId, studentId, academicYear)]);
+    const profile = await getProfile(tenantId, studentId);
+    const summary = await _recomputeSummary(tenantId, studentId, academicYear, profile);
+    return res.status(200).json({ status: true, message: 'All performance synced', data: summary });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const syncBatchPerformance = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const batchId = safeTrim(req.body?.batchId);
+    const academicYear = safeTrim(req.body?.academicYear);
+    if (!tenantId || !batchId || !academicYear) return res.status(400).json({ status: false, message: 'tenantId, batchId and academicYear are required' });
+    const students = await StudentProfile.find({ tenantId, batchId, isdeleted: false, status: 'ACTIVE' }, { studentId: 1 }).lean();
+    if (!students.length) return res.status(200).json({ status: true, message: 'No active students in batch', synced: 0 });
+    let synced = 0,
+      errors = 0;
+    for (const s of students) {
+      try {
+        await Promise.allSettled([_runSyncAssignment(tenantId, s.studentId, academicYear), _runSyncMock(tenantId, s.studentId, academicYear), _runSyncSchool(tenantId, s.studentId, academicYear)]);
+        const profile = await getProfile(tenantId, s.studentId);
+        await _recomputeSummary(tenantId, s.studentId, academicYear, profile);
+        synced++;
+      } catch {
+        errors++;
+      }
+    }
+    const summaries = await StudentPerformance.find({ tenantId, batchId, academicYear, performanceType: 'SUMMARY', isdeleted: false, 'summary.combinedScore': { $ne: null } })
+      .sort({ 'summary.combinedScore': -1 })
+      .select('studentId')
+      .lean();
+    if (summaries.length) {
+      const bulkOps = summaries.map((r, idx) => ({
+        updateOne: {
+          filter: { tenantId, studentId: r.studentId, academicYear, performanceType: 'SUMMARY', isdeleted: false },
+          update: { $set: { 'summary.batchRank': idx + 1 } }
+        }
+      }));
+      await StudentPerformance.bulkWrite(bulkOps);
+    }
+    return res.status(200).json({
+      status: true,
+      message: `Batch sync complete. ${synced} synced, ${errors} errors.`,
+      synced,
+      errors,
+      ranked: summaries.length
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const _runSyncAssignment = async (tenantId, studentId, academicYear) => {
+  const profile = await getProfile(tenantId, studentId);
+  if (!profile) return;
+  const results = await AssignmentResult.find({ tenantId, admissionNo: profile.admissionNo, isdeleted: false, status: 'completed' }, { subjectId: 1, obtainedMarks: 1, totalMarks: 1, cgpa: 1, numberOfReattempts: 1 }).lean();
+  const subjectMap = new Map();
+  for (const r of results) {
+    const sid = r.subjectId?.toString() || '__unknown__';
+    if (!subjectMap.has(sid)) subjectMap.set(sid, []);
+    subjectMap.get(sid).push(r);
+  }
+  const validIds = [...subjectMap.keys()].filter((s) => s !== '__unknown__' && mongoose.Types.ObjectId.isValid(s));
+  const subDocs = await Subject.find({ _id: { $in: validIds } }, { subjectName: 1 }).lean();
+  const subNames = new Map(subDocs.map((s) => [s._id.toString(), s.subjectName]));
+  for (const [sid, rows] of subjectMap) {
+    let totalAttempts = 0,
+      totalSecured = 0,
+      totalMax = 0,
+      totalCgpa = 0,
+      cgpaCount = 0;
+    for (const r of rows) {
+      totalAttempts += toNum(r.numberOfReattempts) || 1;
+      totalSecured += toNum(r.obtainedMarks) || 0;
+      totalMax += toNum(r.totalMarks) || 0;
+      if (r.cgpa != null) {
+        totalCgpa += toNum(r.cgpa);
+        cgpaCount++;
+      }
+    }
+    const avgCgpa = cgpaCount > 0 ? round2(totalCgpa / cgpaCount) : null;
+    const pct = totalMax > 0 ? round2((totalSecured / totalMax) * 100) : null;
+    const realSid = sid !== '__unknown__' ? sid : null;
+    await upsertPerf(
+      { tenantId, studentId, academicYear, performanceType: 'ASSIGNMENT', subjectId: realSid },
+      {
+        admissionNo: profile.admissionNo,
+        batchId: profile.batchId,
+        batchCode: profile.batchCode,
+        programId: profile.programId,
+        centerId: profile.centerId,
+        subjectName: subNames.get(sid) || null,
+        cgpa: avgCgpa,
+        attempts: totalAttempts,
+        obtainedMarks: totalSecured || null,
+        totalMarks: totalMax || null,
+        percentage: pct,
+        syncedAt: Date.now()
+      },
+      { tenantId, studentId, academicYear, performanceType: 'ASSIGNMENT', subjectId: realSid }
+    );
+  }
+};
+
+const _runSyncMock = async (tenantId, studentId, academicYear) => {
+  const profile = await getProfile(tenantId, studentId);
+  if (!profile) return;
+  const results = await MockExamResult.find({ tenantId, admissionNo: profile.admissionNo, isdeleted: false }).lean();
+  if (!results.length) return;
+  const examIds = [...new Set(results.map((r) => r.examId))];
+  const examDocs = await MockExam.find({ tenantId, examId: { $in: examIds } }, { examId: 1, examName: 1 }).lean();
+  const examNames = new Map(examDocs.map((e) => [e.examId, e.examName]));
+  const allSubIds = results.flatMap((r) => (r.sectionResults || []).map((s) => s.subjectId?.toString()).filter(Boolean));
+  const uniqSubs = [...new Set(allSubIds)].filter((id) => mongoose.Types.ObjectId.isValid(id));
+  const subDocs = await Subject.find({ _id: { $in: uniqSubs } }, { subjectName: 1 }).lean();
+  const subNames = new Map(subDocs.map((s) => [s._id.toString(), s.subjectName]));
+  for (const r of results) {
+    const pct = r.totalMarks > 0 ? round2((r.obtainedMarks / r.totalMarks) * 100) : null;
+    await upsertPerf(
+      { tenantId, studentId, examId: r.examId, performanceType: 'MOCK_EXAM' },
+      {
+        admissionNo: profile.admissionNo,
+        batchId: profile.batchId,
+        batchCode: profile.batchCode,
+        programId: profile.programId,
+        centerId: profile.centerId,
+        academicYear,
+        examName: examNames.get(r.examId) || null,
+        obtainedMarks: r.obtainedMarks || 0,
+        totalMarks: r.totalMarks || 0,
+        percentage: pct,
+        rank: r.rank || null,
+        sectionResults: (r.sectionResults || []).map((s) => ({
+          sectionId: s.sectionId || null,
+          subjectId: s.subjectId?.toString() || null,
+          subjectName: subNames.get(s.subjectId?.toString()) || null,
+          totalMarks: s.totalMarks || 0,
+          obtainedMarks: s.obtainedMarks || 0,
+          correctCount: s.correctCount || 0,
+          wrongCount: s.wrongCount || 0,
+          skippedCount: s.skippedCount || 0,
+          timeTaken: s.timeTaken || 0
+        })),
+        syncedAt: Date.now()
+      },
+      { tenantId, studentId, examId: r.examId, performanceType: 'MOCK_EXAM', academicYear }
+    );
+  }
+};
+
+const _runSyncSchool = async (tenantId, studentId, academicYear) => {
+  const profile = await getProfile(tenantId, studentId);
+  if (!profile) return;
+  const results = await SchoolExamResult.find({ tenantId, studentId, isdeleted: false }).lean();
+  if (!results.length) return;
+  const examIds = [...new Set(results.map((r) => r.examId))];
+  const examDocs = await SchoolExam.find({ examLogId: { $in: examIds }, tenantId }, { examLogId: 1, examName: 1, examDate: 1 }).lean();
+  const examMap = new Map(examDocs.map((e) => [e.examLogId, e]));
+  for (const r of results) {
+    const exam = examMap.get(r.examId) || {};
+    const pct = r.totalMaxMarks > 0 ? round2((r.totalObtainedMarks / r.totalMaxMarks) * 100) : null;
+    await upsertPerf(
+      { tenantId, studentId, examId: r.examId, performanceType: 'SCHOOL_EXAM' },
+      {
+        admissionNo: profile.admissionNo,
+        batchId: profile.batchId,
+        batchCode: profile.batchCode,
+        programId: profile.programId,
+        centerId: profile.centerId,
+        academicYear,
+        examName: exam.examName || null,
+        examDate: exam.examDate || null,
+        obtainedMarks: r.totalObtainedMarks || 0,
+        totalMarks: r.totalMaxMarks || 0,
+        percentage: pct,
+        subjects: (r.subjects || []).map((s) => ({
+          subjectName: s.subjectName || null,
+          maxMarks: s.maxMarks || 0,
+          obtainedMarks: s.obtainedMarks || 0,
+          percentage: s.maxMarks > 0 ? round2((s.obtainedMarks / s.maxMarks) * 100) : null,
+          grade: s.grade || null
+        })),
+        syncedAt: Date.now()
+      },
+      { tenantId, studentId, examId: r.examId, performanceType: 'SCHOOL_EXAM', academicYear }
+    );
+  }
+};
+
+const getStudentPerformanceFull = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const studentId = safeTrim(req.body?.studentId);
+    const academicYear = safeTrim(req.body?.academicYear);
+    if (!tenantId || !studentId || !academicYear) return res.status(400).json({ status: false, message: 'tenantId, studentId and academicYear are required' });
+    const records = await StudentPerformance.find({ tenantId, studentId, academicYear, isdeleted: false }).lean();
+    const grouped = { summary: null, assignments: [], mockExams: [], schoolExams: [] };
+    for (const r of records) {
+      if (r.performanceType === 'SUMMARY') grouped.summary = r;
+      else if (r.performanceType === 'ASSIGNMENT') grouped.assignments.push(r);
+      else if (r.performanceType === 'MOCK_EXAM') grouped.mockExams.push(r);
+      else if (r.performanceType === 'SCHOOL_EXAM') grouped.schoolExams.push(r);
+    }
+    grouped.mockExams.sort((a, b) => (b.syncedAt || 0) - (a.syncedAt || 0));
+    grouped.schoolExams.sort((a, b) => (b.examDate || 0) - (a.examDate || 0));
+    return res.status(200).json({ status: true, data: grouped });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const getStudentMockList = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const studentId = safeTrim(req.body?.studentId);
+    const academicYear = safeTrim(req.body?.academicYear);
+    if (!tenantId || !studentId || !academicYear) return res.status(400).json({ status: false, message: 'tenantId, studentId and academicYear are required' });
+    const page = Math.max(toInt(req.body?.page, 1), 1);
+    const limit = Math.min(Math.max(toInt(req.body?.limit, 20), 1), 100);
+    const skip = (page - 1) * limit;
+    const [rows, count] = await Promise.all([
+      StudentPerformance.find({ tenantId, studentId, academicYear, performanceType: 'MOCK_EXAM', isdeleted: false }, { examId: 1, examName: 1, obtainedMarks: 1, totalMarks: 1, percentage: 1, rank: 1, sectionResults: 1, syncedAt: 1 }).sort({ syncedAt: -1 }).skip(skip).limit(limit).lean(),
+      StudentPerformance.countDocuments({ tenantId, studentId, academicYear, performanceType: 'MOCK_EXAM', isdeleted: false })
+    ]);
+    return res.status(200).json({ status: true, data: rows, page, limit, count, pages: Math.ceil(count / limit) || 0 });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const getStudentSchoolList = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const studentId = safeTrim(req.body?.studentId);
+    const academicYear = safeTrim(req.body?.academicYear);
+    if (!tenantId || !studentId || !academicYear) return res.status(400).json({ status: false, message: 'tenantId, studentId and academicYear are required' });
+    const page = Math.max(toInt(req.body?.page, 1), 1);
+    const limit = Math.min(Math.max(toInt(req.body?.limit, 20), 1), 100);
+    const skip = (page - 1) * limit;
+    const [rows, count] = await Promise.all([
+      StudentPerformance.find({ tenantId, studentId, academicYear, performanceType: 'SCHOOL_EXAM', isdeleted: false }).sort({ examDate: -1 }).skip(skip).limit(limit).lean(),
+      StudentPerformance.countDocuments({ tenantId, studentId, academicYear, performanceType: 'SCHOOL_EXAM', isdeleted: false })
+    ]);
+    return res.status(200).json({ status: true, data: rows, page, limit, count, pages: Math.ceil(count / limit) || 0 });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const getBatchPerformanceList = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const batchId = safeTrim(req.body?.batchId);
+    const academicYear = safeTrim(req.body?.academicYear);
+    if (!tenantId || !batchId || !academicYear) return res.status(400).json({ status: false, message: 'tenantId, batchId and academicYear are required' });
+    const page = Math.max(toInt(req.body?.page, 1), 1);
+    const limit = Math.min(Math.max(toInt(req.body?.limit, 20), 1), 200);
+    const skip = (page - 1) * limit;
+    const search = safeTrim(req.body?.search);
+    const studentQuery = { tenantId, batchId, isdeleted: false, status: 'ACTIVE' };
+    if (search) {
+      const rx = new RegExp(escapeRx(search), 'i');
+      studentQuery.$or = [{ 'student.name': rx }, { admissionNo: rx }];
+    }
+    const [students, total] = await Promise.all([StudentProfile.find(studentQuery, { studentId: 1, admissionNo: 1, 'student.name': 1 }).sort({ 'student.name': 1 }).skip(skip).limit(limit).lean(), StudentProfile.countDocuments(studentQuery)]);
+    const studentIds = students.map((s) => s.studentId);
+    const summaries = await StudentPerformance.find({ tenantId, studentId: { $in: studentIds }, academicYear, performanceType: 'SUMMARY', isdeleted: false }, { studentId: 1, summary: 1 }).lean();
+    const summaryMap = new Map(summaries.map((s) => [s.studentId, s.summary]));
+    const data = students.map((s) => ({
+      studentId: s.studentId,
+      admissionNo: s.admissionNo,
+      studentName: s.student?.name || null,
+      summary: summaryMap.get(s.studentId) || null
+    }));
+    const withScore = summaries.filter((s) => s.summary?.combinedScore != null);
+    const avgCombined = withScore.length ? round2(withScore.reduce((a, s) => a + s.summary.combinedScore, 0) / withScore.length) : null;
+    return res.status(200).json({
+      status: true,
+      data,
+      page,
+      limit,
+      count: total,
+      pages: Math.ceil(total / limit) || 0,
+      batchSummary: { batchId, academicYear, totalStudents: total, studentsWithPerf: summaries.length, avgCombinedScore: avgCombined }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const getBatchLeaderboard = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const batchId = safeTrim(req.body?.batchId);
+    const academicYear = safeTrim(req.body?.academicYear);
+    if (!tenantId || !batchId || !academicYear) return res.status(400).json({ status: false, message: 'tenantId, batchId and academicYear are required' });
+    const limit = Math.min(toInt(req.body?.limit, 50), 200);
+    const records = await StudentPerformance.find({ tenantId, batchId, academicYear, performanceType: 'SUMMARY', isdeleted: false, 'summary.combinedScore': { $ne: null } })
+      .sort({ 'summary.combinedScore': -1 })
+      .limit(limit)
+      .select('studentId admissionNo summary')
+      .lean();
+    const studentIds = records.map((r) => r.studentId);
+    const profiles = await StudentProfile.find({ tenantId, studentId: { $in: studentIds } }, { studentId: 1, 'student.name': 1 }).lean();
+    const nameMap = new Map(profiles.map((p) => [p.studentId, p.student?.name || null]));
+    const data = records.map((r, idx) => ({
+      rank: idx + 1,
+      studentId: r.studentId,
+      admissionNo: r.admissionNo,
+      studentName: nameMap.get(r.studentId) || null,
+      combinedScore: r.summary?.combinedScore ?? null,
+      assignmentAvgPct: r.summary?.assignmentAvgPct ?? null,
+      mockAvgPct: r.summary?.mockAvgPct ?? null,
+      schoolAvgPct: r.summary?.schoolAvgPct ?? null,
+      mockBestRank: r.summary?.mockBestRank ?? null,
+      assignmentAvgCgpa: r.summary?.assignmentAvgCgpa ?? null
+    }));
+    return res.status(200).json({ status: true, data, count: data.length });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const getBatchReport = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const batchId = safeTrim(req.body?.batchId);
+    const academicYear = safeTrim(req.body?.academicYear);
+    if (!tenantId || !batchId || !academicYear) return res.status(400).json({ status: false, message: 'tenantId, batchId and academicYear are required' });
+    const [assignmentReport, mockReport, schoolReport, summaryReport] = await Promise.all([
+      StudentPerformance.aggregate([
+        { $match: { tenantId, batchId, academicYear, performanceType: 'ASSIGNMENT', isdeleted: false } },
+        {
+          $group: {
+            _id: '$subjectId',
+            subjectName: { $first: '$subjectName' },
+            avgCgpa: { $avg: '$cgpa' },
+            avgPct: { $avg: '$percentage' },
+            studentCount: { $sum: 1 }
+          }
+        },
+        { $sort: { subjectName: 1 } }
+      ]),
+      StudentPerformance.aggregate([
+        { $match: { tenantId, batchId, academicYear, performanceType: 'MOCK_EXAM', isdeleted: false } },
+        {
+          $group: {
+            _id: '$examId',
+            examName: { $first: '$examName' },
+            avgPct: { $avg: '$percentage' },
+            avgRank: { $avg: '$rank' },
+            studentCount: { $sum: 1 },
+            topScore: { $max: '$percentage' },
+            bottomScore: { $min: '$percentage' }
+          }
+        },
+        { $sort: { syncedAt: -1 } }
+      ]),
+      StudentPerformance.aggregate([
+        { $match: { tenantId, batchId, academicYear, performanceType: 'SCHOOL_EXAM', isdeleted: false } },
+        {
+          $group: {
+            _id: '$examId',
+            examName: { $first: '$examName' },
+            examDate: { $first: '$examDate' },
+            avgPct: { $avg: '$percentage' },
+            studentCount: { $sum: 1 },
+            topScore: { $max: '$percentage' },
+            bottomScore: { $min: '$percentage' }
+          }
+        },
+        { $sort: { examDate: -1 } }
+      ]),
+      StudentPerformance.aggregate([
+        { $match: { tenantId, batchId, academicYear, performanceType: 'SUMMARY', isdeleted: false } },
+        {
+          $group: {
+            _id: null,
+            avgCombinedScore: { $avg: '$summary.combinedScore' },
+            avgAssignmentPct: { $avg: '$summary.assignmentAvgPct' },
+            avgMockPct: { $avg: '$summary.mockAvgPct' },
+            avgSchoolPct: { $avg: '$summary.schoolAvgPct' },
+            studentCount: { $sum: 1 }
+          }
+        }
+      ])
+    ]);
+    return res.status(200).json({
+      status: true,
+      data: {
+        batchId,
+        academicYear,
+        overview: summaryReport[0] || null,
+        subjectWise: assignmentReport.map((r) => ({ ...r, avgCgpa: round2(r.avgCgpa), avgPct: round2(r.avgPct) })),
+        mockExamWise: mockReport.map((r) => ({ ...r, avgPct: round2(r.avgPct), topScore: round2(r.topScore), bottomScore: round2(r.bottomScore) })),
+        schoolExamWise: schoolReport.map((r) => ({ ...r, avgPct: round2(r.avgPct), topScore: round2(r.topScore), bottomScore: round2(r.bottomScore) }))
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const overrideAssignmentPerf = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const studentId = safeTrim(req.body?.studentId);
+    const academicYear = safeTrim(req.body?.academicYear);
+    const subjectId = safeTrim(req.body?.subjectId) || null;
+    if (!tenantId || !studentId || !academicYear) return res.status(400).json({ status: false, message: 'tenantId, studentId and academicYear are required' });
+    const existing = await StudentPerformance.findOne({ tenantId, studentId, academicYear, performanceType: 'ASSIGNMENT', subjectId, isdeleted: false }).lean();
+    const marksSecured = req.body.marksSecured !== undefined ? toNum(req.body.marksSecured) : existing?.obtainedMarks;
+    const marksTotal = req.body.marksTotal !== undefined ? toNum(req.body.marksTotal) : existing?.totalMarks;
+    const pct = marksTotal > 0 ? round2((marksSecured / marksTotal) * 100) : null;
+    const updated = await upsertPerf(
+      { tenantId, studentId, academicYear, performanceType: 'ASSIGNMENT', subjectId },
+      {
+        cgpa: req.body.cgpa !== undefined ? toNum(req.body.cgpa) : existing?.cgpa,
+        attempts: req.body.attempts !== undefined ? toNum(req.body.attempts) : existing?.attempts,
+        obtainedMarks: marksSecured,
+        totalMarks: marksTotal,
+        percentage: pct,
+        overridden: true,
+        syncedAt: Date.now()
+      },
+      { tenantId, studentId, academicYear, performanceType: 'ASSIGNMENT', subjectId }
+    );
+    const profile = await getProfile(tenantId, studentId);
+    await _recomputeSummary(tenantId, studentId, academicYear, profile);
+    return res.status(200).json({ status: true, message: 'Assignment performance overridden', data: updated });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const addStudentFeedback = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const studentId = safeTrim(req.body?.studentId);
+    const academicYear = safeTrim(req.body?.academicYear);
+    const staffId = safeTrim(req.body?.staffId);
+    const remarks = safeTrim(req.body?.remarks);
+    if (!tenantId || !studentId || !academicYear || !staffId || !remarks) return res.status(400).json({ status: false, message: 'tenantId, studentId, academicYear, staffId and remarks are required' });
+    const record = await StudentPerformance.findOne({ tenantId, studentId, academicYear, performanceType: 'SUMMARY', isdeleted: false });
+    if (!record) return res.status(404).json({ status: false, message: 'Performance summary record not found. Run sync first.' });
+    const staff = await Staff.findOne({ tenantId, staffId, isdeleted: false }, { staffName: 1 }).lean();
+    record.staffFeedback.push({ feedbackId: uuid(), staffId, staffName: staff?.staffName || null, remarks, addedAt: Date.now() });
+    await record.save();
+    return res.status(201).json({ status: true, message: 'Feedback added', data: record.toObject() });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const deleteStudentFeedback = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const performanceId = safeTrim(req.body?.performanceId);
+    const feedbackId = safeTrim(req.body?.feedbackId);
+    if (!tenantId || !performanceId || !feedbackId) return res.status(400).json({ status: false, message: 'tenantId, performanceId and feedbackId are required' });
+    const updated = await StudentPerformance.findOneAndUpdate({ tenantId, performanceId, performanceType: 'SUMMARY', isdeleted: false }, { $pull: { staffFeedback: { feedbackId } } }, { new: true }).lean();
+    if (!updated) return res.status(404).json({ status: false, message: 'Record not found' });
+    return res.status(200).json({ status: true, message: 'Feedback removed', data: updated });
+  } catch (err) {
+    return next(err);
+  }
 };
 
 const addStaffFeedback = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
-    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-    const payload = req.body || {};
-    const staffId = safeTrim(payload.staffId);
-    const remarks = safeTrim(payload.remarks) || null;
-    const addedBy = safeTrim(payload.userId) || null;
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+    const staffId = safeTrim(req.body?.staffId);
+    const remarks = safeTrim(req.body?.remarks) || null;
+    const addedBy = safeTrim(req.body?.userId) || null;
     if (!staffId) return res.status(400).json({ status: false, message: 'staffId is required' });
-    const rating = toRating(payload.rating);
-    if (rating === null) return res.status(400).json({ status: false, message: 'rating must be a number between 1 and 5' });
+    const rating = toRating(req.body?.rating);
+    if (rating === null) return res.status(400).json({ status: false, message: 'rating must be between 1 and 5' });
     const staff = await Staff.findOne({ tenantId, staffId, isdeleted: false }, { staffCode: 1, staffName: 1, staffType: 1, employeeId: 1 }).lean();
     if (!staff) return res.status(404).json({ status: false, message: 'Staff not found' });
     const doc = await StaffPerformance.create({
@@ -63,11 +801,7 @@ const addStaffFeedback = async (req, res, next) => {
       addedBy,
       isdeleted: false
     });
-    return res.status(constants.HTTPS_SUCCESS).json({
-      status: true,
-      message: 'Staff feedback added',
-      data: doc
-    });
+    return res.status(201).json({ status: true, message: 'Staff feedback added', data: doc });
   } catch (err) {
     return next(err);
   }
@@ -76,20 +810,13 @@ const addStaffFeedback = async (req, res, next) => {
 const listStaffFeedback = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
-    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
     const staffId = safeTrim(req.body?.staffId);
-    if (!staffId) return res.status(400).json({ status: false, message: 'staffId is required' });
-    const page = Math.max(toInt(req.query.page || req.body?.page, 1), 1);
-    const limit = Math.min(Math.max(toInt(req.query.limit || req.body?.limit, 20), 1), 200);
+    if (!tenantId || !staffId) return res.status(400).json({ status: false, message: 'tenantId and staffId are required' });
+    const page = Math.max(toInt(req.body?.page, 1), 1);
+    const limit = Math.min(Math.max(toInt(req.body?.limit, 20), 1), 200);
     const skip = (page - 1) * limit;
-    const query = { tenantId, staffId, isdeleted: false };
-    const [rows, count] = await Promise.all([StaffPerformance.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(), StaffPerformance.countDocuments(query)]);
-    return res.status(constants.HTTPS_SUCCESS).json({
-      status: true,
-      message: 'Request success',
-      data: rows,
-      count
-    });
+    const [rows, count] = await Promise.all([StaffPerformance.find({ tenantId, staffId, isdeleted: false }).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(), StaffPerformance.countDocuments({ tenantId, staffId, isdeleted: false })]);
+    return res.status(200).json({ status: true, data: rows, count });
   } catch (err) {
     return next(err);
   }
@@ -98,9 +825,8 @@ const listStaffFeedback = async (req, res, next) => {
 const updateStaffFeedback = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
-    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
     const performanceId = safeTrim(req.body?.performanceId);
-    if (!performanceId) return res.status(400).json({ status: false, message: 'performanceId is required' });
+    if (!tenantId || !performanceId) return res.status(400).json({ status: false, message: 'tenantId and performanceId are required' });
     const patch = {};
     if (req.body?.rating !== undefined) {
       const rating = toRating(req.body.rating);
@@ -108,12 +834,10 @@ const updateStaffFeedback = async (req, res, next) => {
       patch.rating = rating;
     }
     if (req.body?.remarks !== undefined) patch.remarks = safeTrim(req.body.remarks) || null;
-    if (!Object.keys(patch).length) {
-      return res.status(400).json({ status: false, message: 'Nothing to update. Provide rating or remarks.' });
-    }
+    if (!Object.keys(patch).length) return res.status(400).json({ status: false, message: 'Nothing to update' });
     const doc = await StaffPerformance.findOneAndUpdate({ tenantId, performanceId, isdeleted: false }, { $set: patch }, { new: true }).lean();
-    if (!doc) return res.status(404).json({ status: false, message: 'Feedback record not found' });
-    return res.status(constants.HTTPS_SUCCESS).json({ status: true, message: 'Feedback updated', data: doc });
+    if (!doc) return res.status(404).json({ status: false, message: 'Record not found' });
+    return res.status(200).json({ status: true, message: 'Feedback updated', data: doc });
   } catch (err) {
     return next(err);
   }
@@ -122,12 +846,11 @@ const updateStaffFeedback = async (req, res, next) => {
 const deleteStaffFeedback = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
-    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
     const performanceId = safeTrim(req.body?.performanceId);
-    if (!performanceId) return res.status(400).json({ status: false, message: 'performanceId is required' });
+    if (!tenantId || !performanceId) return res.status(400).json({ status: false, message: 'tenantId and performanceId are required' });
     const doc = await StaffPerformance.findOneAndUpdate({ tenantId, performanceId, isdeleted: false }, { $set: { isdeleted: true } }, { new: true }).lean();
-    if (!doc) return res.status(404).json({ status: false, message: 'Feedback record not found' });
-    return res.status(constants.HTTPS_SUCCESS).json({ status: true, message: 'Feedback deleted' });
+    if (!doc) return res.status(404).json({ status: false, message: 'Record not found' });
+    return res.status(200).json({ status: true, message: 'Feedback deleted' });
   } catch (err) {
     return next(err);
   }
@@ -136,526 +859,52 @@ const deleteStaffFeedback = async (req, res, next) => {
 const listAllStaffPerf = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
-    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-    const payload = req.body || {};
-    const search = safeTrim(payload.search);
-    const staffType = safeTrim(payload.staffType);
-    const page = Math.max(toInt(payload.page, 1), 1);
-    const limit = Math.min(Math.max(toInt(payload.limit, 20), 1), 200);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+    const search = safeTrim(req.body?.search);
+    const staffType = safeTrim(req.body?.staffType);
+    const page = Math.max(toInt(req.body?.page, 1), 1);
+    const limit = Math.min(Math.max(toInt(req.body?.limit, 20), 1), 200);
     const skip = (page - 1) * limit;
     const matchBase = { tenantId, isdeleted: false };
     if (staffType) matchBase.staffType = staffType;
     if (search) {
-      const rx = new RegExp(escapeRegex(search), 'i');
-      matchBase.$or = [{ staffName: rx }, { staffCode: rx }, { staffId: rx }];
+      const rx = new RegExp(escapeRx(search), 'i');
+      matchBase.$or = [{ staffName: rx }, { staffCode: rx }];
     }
     const pipeline = [
       { $match: matchBase },
       { $sort: { createdAt: -1 } },
-      {
-        $group: {
-          _id: '$staffId',
-          staffId: { $first: '$staffId' },
-          staffCode: { $first: '$staffCode' },
-          staffName: { $first: '$staffName' },
-          staffType: { $first: '$staffType' },
-          avgRating: { $avg: '$rating' },
-          totalCount: { $sum: 1 },
-          latestEntry: { $first: '$$ROOT' }
-        }
-      },
+      { $group: { _id: '$staffId', staffId: { $first: '$staffId' }, staffCode: { $first: '$staffCode' }, staffName: { $first: '$staffName' }, staffType: { $first: '$staffType' }, avgRating: { $avg: '$rating' }, totalCount: { $sum: 1 }, latestEntry: { $first: '$$ROOT' } } },
       { $sort: { 'latestEntry.createdAt': -1 } },
       { $skip: skip },
       { $limit: limit }
     ];
     const countPipeline = [{ $match: matchBase }, { $group: { _id: '$staffId' } }, { $count: 'total' }];
     const [rows, countResult] = await Promise.all([StaffPerformance.aggregate(pipeline), StaffPerformance.aggregate(countPipeline)]);
-    const count = countResult[0]?.total || 0;
-    return res.status(constants.HTTPS_SUCCESS).json({
-      status: true,
-      message: 'Request success',
-      data: rows,
-      count
-    });
-  } catch (err) {
-    return next(err);
-  }
-};
-
-// const pullAssignmentData = async (tenantId, studentId, admissionNo) => {
-//   const results = await AssignmentResult.find({ tenantId, admissionNo, isdeleted: false, status: 'completed' }, { obtainedMarks: 1, totalMarks: 1, cgpa: 1, numberOfReattempts: 1 }).lean();
-//   let totalAttempts = 0;
-//   let totalSecured = 0;
-//   let totalMax = 0;
-//   let totalCgpa = 0;
-//   let recordCount = 0;
-//   for (const res of results || []) {
-//     totalAttempts += toNum(res.numberOfReattempts) || 1;
-//     totalSecured += toNum(res.obtainedMarks);
-//     totalMax += toNum(res.totalMarks);
-//     if (res.cgpa != null) {
-//       totalCgpa += toNum(res.cgpa);
-//       recordCount++;
-//     }
-//   }
-//   const avgCgpa = recordCount > 0 ? Math.round((totalCgpa / recordCount) * 100) / 100 : null;
-//   return {
-//     cgpa: avgCgpa,
-//     attempts: totalAttempts,
-//     marksSecured: recordCount > 0 ? totalSecured : null,
-//     marksTotal: recordCount > 0 ? totalMax : null,
-//     overridden: false,
-//     lastSyncedAt: Date.now()
-//   };
-// };
-
-const pullAssignmentData = async (tenantId, studentId, admissionNo, subjectId = null) => {
-  const matchQuery = { tenantId, admissionNo, isdeleted: false, status: 'completed' };
-
-  if (subjectId) {
-    matchQuery.subjectId = mongoose.Types.ObjectId.isValid(subjectId) ? new mongoose.Types.ObjectId(subjectId) : subjectId;
-  }
-
-  const results = await AssignmentResult.find(matchQuery, { obtainedMarks: 1, totalMarks: 1, cgpa: 1, numberOfReattempts: 1 }).lean();
-
-  let totalAttempts = 0;
-  let totalSecured = 0;
-  let totalMax = 0;
-  let totalCgpa = 0;
-  let recordCount = 0;
-
-  for (const res of results || []) {
-    totalAttempts += toNum(res.numberOfReattempts) || 1;
-    totalSecured += toNum(res.obtainedMarks);
-    totalMax += toNum(res.totalMarks);
-
-    if (res.cgpa != null) {
-      totalCgpa += toNum(res.cgpa);
-      recordCount++;
-    }
-  }
-
-  const avgCgpa = recordCount > 0 ? Math.round((totalCgpa / recordCount) * 100) / 100 : null;
-
-  return {
-    cgpa: avgCgpa,
-    attempts: totalAttempts,
-    marksSecured: recordCount > 0 ? totalSecured : null,
-    marksTotal: recordCount > 0 ? totalMax : null,
-    overridden: false,
-    lastSyncedAt: Date.now()
-  };
-};
-
-// const getStudentPerformance = async (req, res, next) => {
-//   try {
-//     const tenantId = pickTenantId(req);
-//     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-//     const studentId = safeTrim(req.body?.studentId);
-//     const academicYear = safeTrim(req.body?.academicYear);
-//     if (!studentId) return res.status(400).json({ status: false, message: 'studentId is required' });
-//     if (!academicYear) return res.status(400).json({ status: false, message: 'academicYear is required' });
-//     const profile = await StudentProfile.findOne({ tenantId, studentId, isdeleted: false }, { admissionNo: 1, batchId: 1, programId: 1, centerId: 1, cgpa: 1 }).lean();
-//     if (!profile) return res.status(404).json({ status: false, message: 'Student not found' });
-//     let record = await StudentPerformance.findOne({ tenantId, studentId, academicYear, isdeleted: false }).lean();
-//     if (!record) {
-//       const assignment = await pullAssignmentData(tenantId, studentId, profile.admissionNo);
-//       const combinedScore = computeCombinedScore(assignment, { mock: null, school: null });
-//       record = await StudentPerformance.create({
-//         tenantId,
-//         performanceId: uuid(),
-//         studentId,
-//         admissionNo: profile.admissionNo || null,
-//         batchId: profile.batchId || null,
-//         academicYear,
-//         programId: profile.programId || null,
-//         centerId: profile.centerId || null,
-//         assignment,
-//         examMarks: { mock: null, school: null },
-//         staffFeedback: [],
-//         combinedScore,
-//         isdeleted: false
-//       });
-//     }
-//     return res.status(constants.HTTPS_SUCCESS).json({
-//       status: true,
-//       message: 'Request success',
-//       data: record
-//     });
-//   } catch (err) {
-//     return next(err);
-//   }
-// };
-
-const getStudentPerformance = async (req, res, next) => {
-  try {
-    const tenantId = pickTenantId(req);
-    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-
-    const studentId = safeTrim(req.body?.studentId);
-    const academicYear = safeTrim(req.body?.academicYear);
-    const subjectId = safeTrim(req.body?.subjectId) || null; // New parameter
-
-    if (!studentId) return res.status(400).json({ status: false, message: 'studentId is required' });
-    if (!academicYear) return res.status(400).json({ status: false, message: 'academicYear is required' });
-
-    const profile = await StudentProfile.findOne({ tenantId, studentId, isdeleted: false }, { admissionNo: 1, batchId: 1, programId: 1, centerId: 1 }).lean();
-    if (!profile) return res.status(404).json({ status: false, message: 'Student not found' });
-
-    // Look for a record that matches the year AND the specific subject (or null for overall)
-    let record = await StudentPerformance.findOne({ tenantId, studentId, academicYear, subjectId, isdeleted: false }).lean();
-
-    if (!record) {
-      const assignment = await pullAssignmentData(tenantId, studentId, profile.admissionNo, subjectId);
-      const combinedScore = computeCombinedScore(assignment, { mock: null, school: null });
-
-      record = await StudentPerformance.create({
-        tenantId,
-        performanceId: uuid(),
-        studentId,
-        admissionNo: profile.admissionNo || null,
-        batchId: profile.batchId || null,
-        academicYear,
-        subjectId, // Save the subject scope
-        programId: profile.programId || null,
-        centerId: profile.centerId || null,
-        assignment,
-        examMarks: { mock: null, school: null },
-        staffFeedback: [],
-        combinedScore,
-        isdeleted: false
-      });
-    }
-
-    return res.status(constants.HTTPS_SUCCESS).json({
-      status: true,
-      message: 'Request success',
-      data: record
-    });
-  } catch (err) {
-    return next(err);
-  }
-};
-
-// const recalcStudentPerformance = async (req, res, next) => {
-//   try {
-//     const tenantId = pickTenantId(req);
-//     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-//     const studentId = safeTrim(req.body?.studentId);
-//     const academicYear = safeTrim(req.body?.academicYear);
-//     if (!studentId) return res.status(400).json({ status: false, message: 'studentId is required' });
-//     if (!academicYear) return res.status(400).json({ status: false, message: 'academicYear is required' });
-//     const profile = await StudentProfile.findOne({ tenantId, studentId, isdeleted: false }, { admissionNo: 1 }).lean();
-//     if (!profile) return res.status(404).json({ status: false, message: 'Student not found' });
-//     const existing = await StudentPerformance.findOne({ tenantId, studentId, academicYear, isdeleted: false }).lean();
-//     if (!existing) return res.status(404).json({ status: false, message: 'Performance record not found. Call getStudentPerformance first.' });
-//     if (existing.assignment?.overridden) {
-//       return res.status(200).json({
-//         status: true,
-//         message: 'Assignment data was manually overridden. Recalc skipped for assignment. Use overrideAssignmentPerf to update.',
-//         data: existing
-//       });
-//     }
-//     const assignment = await pullAssignmentData(tenantId, studentId, profile.admissionNo);
-//     const combinedScore = computeCombinedScore(assignment, existing.examMarks);
-//     const updated = await StudentPerformance.findOneAndUpdate({ tenantId, studentId, academicYear, isdeleted: false }, { $set: { assignment, combinedScore } }, { new: true }).lean();
-//     return res.status(constants.HTTPS_SUCCESS).json({
-//       status: true,
-//       message: 'Performance recalculated from source data',
-//       data: updated
-//     });
-//   } catch (err) {
-//     return next(err);
-//   }
-// };
-
-const recalcStudentPerformance = async (req, res, next) => {
-  try {
-    const tenantId = pickTenantId(req);
-    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-
-    const studentId = safeTrim(req.body?.studentId);
-    const academicYear = safeTrim(req.body?.academicYear);
-    const subjectId = safeTrim(req.body?.subjectId) || null; // New parameter
-
-    if (!studentId) return res.status(400).json({ status: false, message: 'studentId is required' });
-    if (!academicYear) return res.status(400).json({ status: false, message: 'academicYear is required' });
-
-    const profile = await StudentProfile.findOne({ tenantId, studentId, isdeleted: false }, { admissionNo: 1 }).lean();
-    if (!profile) return res.status(404).json({ status: false, message: 'Student not found' });
-
-    const existing = await StudentPerformance.findOne({ tenantId, studentId, academicYear, subjectId, isdeleted: false }).lean();
-    if (!existing) return res.status(404).json({ status: false, message: 'Performance record not found. Call getStudentPerformance first.' });
-
-    if (existing.assignment?.overridden) {
-      return res.status(200).json({
-        status: true,
-        message: 'Assignment data was manually overridden. Recalc skipped for assignment. Use overrideAssignmentPerf to update.',
-        data: existing
-      });
-    }
-
-    const assignment = await pullAssignmentData(tenantId, studentId, profile.admissionNo, subjectId);
-    const combinedScore = computeCombinedScore(assignment, existing.examMarks);
-
-    const updated = await StudentPerformance.findOneAndUpdate({ tenantId, studentId, academicYear, subjectId, isdeleted: false }, { $set: { assignment, combinedScore } }, { new: true }).lean();
-
-    return res.status(constants.HTTPS_SUCCESS).json({
-      status: true,
-      message: 'Performance recalculated from source data',
-      data: updated
-    });
-  } catch (err) {
-    return next(err);
-  }
-};
-
-const overrideAssignmentPerf = async (req, res, next) => {
-  try {
-    const tenantId = pickTenantId(req);
-    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-    const studentId = safeTrim(req.body?.studentId);
-    const academicYear = safeTrim(req.body?.academicYear);
-    if (!studentId) return res.status(400).json({ status: false, message: 'studentId is required' });
-    if (!academicYear) return res.status(400).json({ status: false, message: 'academicYear is required' });
-    const existing = await StudentPerformance.findOne({ tenantId, studentId, academicYear, isdeleted: false }).lean();
-    if (!existing) return res.status(404).json({ status: false, message: 'Performance record not found. Call getStudentPerformance first.' });
-    const payload = req.body || {};
-    const assignment = {
-      cgpa: payload.cgpa !== undefined ? toNum(payload.cgpa) : existing.assignment?.cgpa,
-      attempts: payload.attempts !== undefined ? toNum(payload.attempts) : existing.assignment?.attempts,
-      marksSecured: payload.marksSecured !== undefined ? toNum(payload.marksSecured) : existing.assignment?.marksSecured,
-      marksTotal: payload.marksTotal !== undefined ? toNum(payload.marksTotal) : existing.assignment?.marksTotal,
-      overridden: true,
-      lastSyncedAt: existing.assignment?.lastSyncedAt || null
-    };
-    const combinedScore = computeCombinedScore(assignment, existing.examMarks);
-    const updated = await StudentPerformance.findOneAndUpdate({ tenantId, studentId, academicYear, isdeleted: false }, { $set: { assignment, combinedScore } }, { new: true }).lean();
-    return res.status(constants.HTTPS_SUCCESS).json({
-      status: true,
-      message: 'Assignment performance overridden',
-      data: updated
-    });
-  } catch (err) {
-    return next(err);
-  }
-};
-
-const addStudentFeedback = async (req, res, next) => {
-  try {
-    const tenantId = pickTenantId(req);
-    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-    const payload = req.body || {};
-    const studentId = safeTrim(payload.studentId);
-    const academicYear = safeTrim(payload.academicYear);
-    const staffId = safeTrim(payload.staffId);
-    const remarks = safeTrim(payload.remarks) || null;
-    if (!studentId) return res.status(400).json({ status: false, message: 'studentId is required' });
-    if (!academicYear) return res.status(400).json({ status: false, message: 'academicYear is required' });
-    if (!staffId) return res.status(400).json({ status: false, message: 'staffId is required' });
-    if (!remarks) return res.status(400).json({ status: false, message: 'remarks is required' });
-    const existing = await StudentPerformance.findOne({ tenantId, studentId, academicYear, isdeleted: false }).lean();
-    if (!existing) return res.status(404).json({ status: false, message: 'Performance record not found. Call getStudentPerformance first.' });
-    const staff = await Staff.findOne({ tenantId, staffId, isdeleted: false }, { staffName: 1 }).lean();
-    const entry = {
-      feedbackId: uuid(),
-      staffId,
-      staffName: staff?.staffName || null,
-      remarks,
-      addedAt: Date.now()
-    };
-    const updated = await StudentPerformance.findOneAndUpdate({ tenantId, studentId, academicYear, isdeleted: false }, { $push: { staffFeedback: entry } }, { new: true }).lean();
-    return res.status(constants.HTTPS_SUCCESS).json({
-      status: true,
-      message: 'Student feedback added',
-      data: updated
-    });
-  } catch (err) {
-    return next(err);
-  }
-};
-
-const deleteStudentFeedback = async (req, res, next) => {
-  try {
-    const tenantId = pickTenantId(req);
-    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-    const performanceId = safeTrim(req.body?.performanceId);
-    const feedbackId = safeTrim(req.body?.feedbackId);
-    if (!performanceId) return res.status(400).json({ status: false, message: 'performanceId is required' });
-    if (!feedbackId) return res.status(400).json({ status: false, message: 'feedbackId is required' });
-    const updated = await StudentPerformance.findOneAndUpdate({ tenantId, performanceId, isdeleted: false }, { $pull: { staffFeedback: { feedbackId } } }, { new: true }).lean();
-    if (!updated) return res.status(404).json({ status: false, message: 'Performance record not found' });
-    return res.status(constants.HTTPS_SUCCESS).json({
-      status: true,
-      message: 'Feedback entry removed',
-      data: updated
-    });
-  } catch (err) {
-    return next(err);
-  }
-};
-
-// const getBatchPerformance = async (req, res, next) => {
-//   try {
-//     const tenantId = pickTenantId(req);
-//     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-//     const payload = req.body || {};
-//     const batchId = safeTrim(payload.batchId);
-//     const academicYear = safeTrim(payload.academicYear);
-//     if (!batchId) return res.status(400).json({ status: false, message: 'batchId is required' });
-//     if (!academicYear) return res.status(400).json({ status: false, message: 'academicYear is required' });
-//     const page = Math.max(toInt(payload.page, 1), 1);
-//     const limit = Math.min(Math.max(toInt(payload.limit, 20), 1), 200);
-//     const skip = (page - 1) * limit;
-//     const [students, count] = await Promise.all([
-//       StudentProfile.find({ tenantId, batchId, isdeleted: false, status: 'ACTIVE' }, { studentId: 1, admissionNo: 1, cgpa: 1, 'student.name': 1 }).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
-//       StudentProfile.countDocuments({ tenantId, batchId, isdeleted: false, status: 'ACTIVE' })
-//     ]);
-//     if (!students.length) {
-//       return res.status(constants.HTTPS_SUCCESS).json({ status: true, message: 'No students in batch', data: [], count: 0 });
-//     }
-//     const studentIds = students.map((s) => s.studentId);
-//     const perfRecords = await StudentPerformance.find({ tenantId, studentId: { $in: studentIds }, academicYear, isdeleted: false }).lean();
-//     const perfMap = new Map((perfRecords || []).map((p) => [p.studentId, p]));
-//     const data = students.map((s) => ({
-//       studentId: s.studentId,
-//       admissionNo: s.admissionNo,
-//       studentName: s.student?.name || null,
-//       performance: perfMap.get(s.studentId) || null
-//     }));
-//     const withRecords = perfRecords.filter((p) => p.assignment?.cgpa != null);
-//     const avgCgpa = withRecords.length ? withRecords.reduce((sum, p) => sum + (p.assignment?.cgpa || 0), 0) / withRecords.length : null;
-//     const avgCombined = perfRecords.filter((p) => p.combinedScore != null);
-//     const avgCombinedScore = avgCombined.length ? avgCombined.reduce((sum, p) => sum + (p.combinedScore || 0), 0) / avgCombined.length : null;
-//     return res.status(constants.HTTPS_SUCCESS).json({
-//       status: true,
-//       message: 'Request success',
-//       data,
-//       count,
-//       batchSummary: {
-//         batchId,
-//         academicYear,
-//         totalStudents: count,
-//         studentsWithPerf: perfRecords.length,
-//         avgCgpa: avgCgpa !== null ? Math.round(avgCgpa * 100) / 100 : null,
-//         avgCombinedScore: avgCombinedScore !== null ? Math.round(avgCombinedScore * 100) / 100 : null
-//       }
-//     });
-//   } catch (err) {
-//     return next(err);
-//   }
-// };
-
-const getBatchPerformance = async (req, res, next) => {
-  try {
-    const tenantId = pickTenantId(req);
-    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-
-    const payload = req.body || {};
-    const batchId = safeTrim(payload.batchId);
-    const academicYear = safeTrim(payload.academicYear);
-    const subjectId = safeTrim(payload.subjectId) || null; // New parameter
-
-    if (!batchId) return res.status(400).json({ status: false, message: 'batchId is required' });
-    if (!academicYear) return res.status(400).json({ status: false, message: 'academicYear is required' });
-
-    const page = Math.max(toInt(payload.page, 1), 1);
-    const limit = Math.min(Math.max(toInt(payload.limit, 20), 1), 200);
-    const skip = (page - 1) * limit;
-
-    const [students, count] = await Promise.all([
-      StudentProfile.find({ tenantId, batchId, isdeleted: false, status: 'ACTIVE' }, { studentId: 1, admissionNo: 1, 'student.name': 1 }).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
-      StudentProfile.countDocuments({ tenantId, batchId, isdeleted: false, status: 'ACTIVE' })
-    ]);
-
-    if (!students.length) {
-      return res.status(constants.HTTPS_SUCCESS).json({ status: true, message: 'No students in batch', data: [], count: 0 });
-    }
-
-    const studentIds = students.map((s) => s.studentId);
-
-    // Fetch performance records filtering by the specific subject scope
-    const perfRecords = await StudentPerformance.find({
-      tenantId,
-      studentId: { $in: studentIds },
-      academicYear,
-      subjectId,
-      isdeleted: false
-    }).lean();
-
-    const perfMap = new Map((perfRecords || []).map((p) => [p.studentId, p]));
-
-    const data = students.map((s) => ({
-      studentId: s.studentId,
-      admissionNo: s.admissionNo,
-      studentName: s.student?.name || null,
-      performance: perfMap.get(s.studentId) || null
-    }));
-
-    const withRecords = perfRecords.filter((p) => p.assignment?.cgpa != null);
-    const avgCgpa = withRecords.length ? withRecords.reduce((sum, p) => sum + (p.assignment?.cgpa || 0), 0) / withRecords.length : null;
-
-    const avgCombined = perfRecords.filter((p) => p.combinedScore != null);
-    const avgCombinedScore = avgCombined.length ? avgCombined.reduce((sum, p) => sum + (p.combinedScore || 0), 0) / avgCombined.length : null;
-
-    return res.status(constants.HTTPS_SUCCESS).json({
-      status: true,
-      message: 'Request success',
-      data,
-      count,
-      batchSummary: {
-        batchId,
-        academicYear,
-        subjectId, // Include in summary response
-        totalStudents: count,
-        studentsWithPerf: perfRecords.length,
-        avgCgpa: avgCgpa !== null ? Math.round(avgCgpa * 100) / 100 : null,
-        avgCombinedScore: avgCombinedScore !== null ? Math.round(avgCombinedScore * 100) / 100 : null
-      }
-    });
-  } catch (err) {
-    return next(err);
-  }
-};
-
-const updateExamMarks = async (req, res, next) => {
-  try {
-    const tenantId = pickTenantId(req);
-    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-    const { studentId, academicYear, mockMarks, schoolMarks } = req.body;
-    if (!studentId || !academicYear) {
-      return res.status(400).json({ status: false, message: 'studentId and academicYear are required' });
-    }
-    const existing = await StudentPerformance.findOne({ tenantId, studentId, academicYear, isdeleted: false }).lean();
-    if (!existing) {
-      return res.status(404).json({ status: false, message: 'Performance record not found. Call getStudentPerformance first.' });
-    }
-    const examMarks = {
-      mock: mockMarks !== undefined ? mockMarks : existing.examMarks?.mock,
-      school: schoolMarks !== undefined ? schoolMarks : existing.examMarks?.school
-    };
-    const combinedScore = computeCombinedScore(existing.assignment, examMarks);
-    const updated = await StudentPerformance.findOneAndUpdate({ tenantId, studentId, academicYear, isdeleted: false }, { $set: { examMarks, combinedScore } }, { new: true }).lean();
-    return res.status(constants.HTTPS_SUCCESS).json({
-      status: true,
-      message: 'Exam marks updated successfully',
-      data: updated
-    });
+    return res.status(200).json({ status: true, data: rows, count: countResult[0]?.total || 0 });
   } catch (err) {
     return next(err);
   }
 };
 
 export default {
+  syncAssignmentPerf,
+  syncMockExamPerf,
+  syncSchoolExamPerf,
+  syncAllPerformance,
+  syncBatchPerformance,
+  getStudentPerformanceFull,
+  getStudentMockList,
+  getStudentSchoolList,
+  getBatchPerformanceList,
+  getBatchLeaderboard,
+  getBatchReport,
+  overrideAssignmentPerf,
+  addStudentFeedback,
+  deleteStudentFeedback,
   addStaffFeedback,
   listStaffFeedback,
   updateStaffFeedback,
   deleteStaffFeedback,
-  listAllStaffPerf,
-  getStudentPerformance,
-  recalcStudentPerformance,
-  overrideAssignmentPerf,
-  addStudentFeedback,
-  deleteStudentFeedback,
-  getBatchPerformance
+  listAllStaffPerf
 };

@@ -26,22 +26,15 @@ export const assignToBatch = async (req, res, next) => {
     const batchIds = Array.isArray(req.body?.batchIds) ? req.body.batchIds.map(safeTrim).filter(Boolean) : [];
     const centerId = safeTrim(req.body?.centerId) || null;
     const classNo = req.body?.classNo ? toNum(req.body.classNo) : null;
-
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
     if (!examId) return res.status(400).json({ status: false, message: 'examId is required' });
     if (!batchIds.length) return res.status(400).json({ status: false, message: 'batchIds[] must be a non-empty array' });
-
     const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }, { examId: 1, status: 1 }).lean();
     if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
-    if (exam.status === 'draft') return res.status(400).json({ status: false, message: 'Cannot assign a draft exam. Publish the exam first' });
-
     const now = Date.now();
     const ops = [];
-
     for (const batchId of batchIds) {
-      // fetch students for this batch
       const studsRaw = await StudentProfile.find({ tenantId, isdeleted: false, status: 'ACTIVE', batchId }, { _id: 0, admissionNo: 1, studentId: 1 }).lean();
-
       const students = (studsRaw || [])
         .map((s) => ({
           admissionNo: safeTrim(s.admissionNo),
@@ -56,7 +49,6 @@ export const assignToBatch = async (req, res, next) => {
           isLate: false
         }))
         .filter((x) => !!x.admissionNo);
-
       ops.push({
         updateOne: {
           filter: { tenantId, examId, batchId },
@@ -81,7 +73,6 @@ export const assignToBatch = async (req, res, next) => {
         }
       });
     }
-
     await MockExamBatchAssign.bulkWrite(ops, { ordered: false });
     return res.status(200).json({ status: true, message: `Exam assigned to ${batchIds.length} batch(es) successfully`, batchIds });
   } catch (err) {

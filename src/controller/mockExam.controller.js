@@ -6,6 +6,8 @@ import MockExamResult from '../models/mockExamResult.model.js';
 import MockExamQns from '../models/mockExamQns.model.js';
 import ExamInstruction from '../models/mockExamInstruction.model.js';
 import MockExamBatchAssign from '../models/mockExambatchmapping.model.js';
+import { syncOnMockPublish } from '../helpers/performanceSync.helper.js';
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const safeTrim = (v) => (v == null ? '' : String(v)).trim();
 const toNum = (v) => {
@@ -658,6 +660,7 @@ const publishResult = async (req, res, next) => {
       },
       { new: true, projection: { password: 0 } }
     ).lean();
+    syncOnMockPublish({ tenantId, examId }).catch(() => {});
     return res.status(200).json({
       status: true,
       message: `Result ${action}ed — ${resultCount} student result(s) visible`,
