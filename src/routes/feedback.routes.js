@@ -21,9 +21,19 @@ routes.post('/update', validatetoken, feedbackCtrl.updateFeedbackForm);
 routes.post('/status', validatetoken, feedbackCtrl.changeFeedbackFormStatus);
 routes.post('/delete', validatetoken, feedbackCtrl.deleteFeedbackForm);
 routes.post('/results', validatetoken, feedbackCtrl.viewFeedbackResults);
-routes.post('/student/forms', feedbackCtrl.getActiveFormsForStudent);
+// routes.post('/student/forms', feedbackCtrl.getActiveFormsForStudent);
+// routes.post('/student/submit', feedbackCtrl.submitFeedback);
+// routes.post('/student/check', feedbackCtrl.checkSubmitted);
+
+routes.post('/report', validatetoken, feedbackCtrl.getConsolidatedReport);
+
+// ── Student-facing ────────────────────────────────────────────────────────────
+routes.post('/student/active', feedbackCtrl.getActiveFormsForStudent);
 routes.post('/student/submit', feedbackCtrl.submitFeedback);
-routes.post('/student/check', feedbackCtrl.checkSubmitted);
+routes.post('/student/submitted', feedbackCtrl.checkSubmitted);
+
+routes.post('/report-staff-list', validatetoken, feedbackCtrl.getReportStaffList);
+routes.post('/consolidated-report', validatetoken, feedbackCtrl.getConsolidatedStaffReport);
 
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Feedback routes' }));
 

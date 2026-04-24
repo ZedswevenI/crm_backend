@@ -72,7 +72,7 @@ function normalizeColumns(arr) {
     }));
 }
 function needsOptions(qt) {
-  return ['mcq_single', 'mcq_multi', 'true_false'].includes(qt);
+  return ['mcq_single', 'mcq_multi'].includes(qt);
 }
 function needsOneCorrect(qt) {
   return ['mcq_single', 'true_false'].includes(qt);
