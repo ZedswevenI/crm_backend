@@ -121,6 +121,7 @@ const feedbackFormSchema = new mongoose.Schema(
     templateId: { type: mongoose.Schema.Types.ObjectId, ref: 'feedbacktemplate', required: true, index: true },
     templateTitle: { type: String, trim: true, default: null },
     category: { type: String, enum: ['STAFF', 'BATCH', 'FACILITY', 'COURSE'], index: true },
+    phase: { type: Number, default: null },
     staffAssignments: { type: [staffAssignmentSchema], default: [] },
     staffIds: { type: [String], default: [] },
     staffNames: { type: [String], default: [] },

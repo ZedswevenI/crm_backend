@@ -342,6 +342,7 @@ const reopenTicket = async (req, res, next) => {
       studentNo,
       isdeleted: false
     }).lean();
+    console.log('ticket ', ticket, tenantId, ticketId, studentNo);
     if (!ticket) {
       return res.status(404).json({ status: false, message: 'Ticket not found or you are not authorized to access it' });
     }
@@ -349,6 +350,18 @@ const reopenTicket = async (req, res, next) => {
       return res.status(400).json({ status: false, message: `Ticket is currently ${ticket.status}. Only RESOLVED or CLOSED tickets can be reopened.` });
     }
     const updatedFeedback = reason ? (ticket.feedback ? `${ticket.feedback} | [Reopened]: ${reason}` : `[Reopened]: ${reason}`) : ticket.feedback;
+    // const updatedTicket = await SupportTicket.findOneAndUpdate(
+    //   { tenantId, ticketId, studentNo },
+    //   {
+    //     $set: {
+    //       status: 'OPEN',
+    //       completedAt: null,
+    //       feedback: updatedFeedback,
+    //       updatedBy: userId || studentNo
+    //     }
+    //   },
+    //   { new: true }
+    // ).lean();
     const updatedTicket = await SupportTicket.findOneAndUpdate(
       { tenantId, ticketId, studentNo },
       {
@@ -357,6 +370,15 @@ const reopenTicket = async (req, res, next) => {
           completedAt: null,
           feedback: updatedFeedback,
           updatedBy: userId || studentNo
+        },
+        $inc: { reopenCount: 1 },
+        $push: {
+          reopenHistory: {
+            reopenedAt: Date.now(),
+            reason: reason || null,
+            reopenedBy: userId || studentNo,
+            prevStatus: ticket.status
+          }
         }
       },
       { new: true }

@@ -3,7 +3,7 @@ import MockExamResult from '../models/mockExamResult.model.js';
 import MockExamQns from '../models/mockExamQns.model.js';
 import MockExam from '../models/mockExam.model.js';
 import MockExamBatchAssign from '../models/mockExambatchmapping.model.js';
-import StudentProfile from '../models/studentProfile.model.js'
+import StudentProfile from '../models/studentProfile.model.js';
 
 const safeTrim = (v) => (v == null ? '' : String(v)).trim();
 const toNum = (v) => {
@@ -20,10 +20,13 @@ const populateStudentNames = async (tenantId, rows) => {
   const studentIds = rows.map((r) => r.studentId).filter(Boolean);
   const admissionNos = rows.map((r) => r.admissionNo).filter(Boolean);
 
-  const profiles = await StudentProfile.find({
-    tenantId,
-    $or: [{ studentId: { $in: studentIds } }, { admissionNo: { $in: admissionNos } }]
-  }, { studentId: 1, admissionNo: 1, 'student.name': 1 }).lean();
+  const profiles = await StudentProfile.find(
+    {
+      tenantId,
+      $or: [{ studentId: { $in: studentIds } }, { admissionNo: { $in: admissionNos } }]
+    },
+    { studentId: 1, admissionNo: 1, 'student.name': 1 }
+  ).lean();
 
   const profileMap = new Map();
   for (const p of profiles) {
@@ -305,7 +308,6 @@ const buildSectionResults = (answers, sections, sectionTimings = {}) => {
 
 const submitResult = async (req, res, next) => {
   try {
-    console.log(req.body);
     const tenantId = pickTid(req);
     const admissionNo = safeTrim(req.body?.admissionNo);
     const examId = safeTrim(req.body?.examId);
@@ -342,7 +344,6 @@ const submitResult = async (req, res, next) => {
         marksAwarded = 0;
       if (q && !isSkipped) {
         const ev = evalAnswer(q, answerRaw);
-        console.log('ev answer loop for testing ', ev);
         isCorrect = ev.isCorrect;
         correctAnswerRaw = ev.correctAnswerRaw ?? null;
         marksAwarded = ev.marksAwarded;
@@ -473,7 +474,11 @@ const getLeaderboard = async (req, res, next) => {
     if (safeTrim(req.body?.batchId)) query.batchId = safeTrim(req.body.batchId);
     if (safeTrim(req.body?.centerId)) query.centerId = safeTrim(req.body.centerId);
     const [rows, count] = await Promise.all([
-      MockExamResult.find(query, { admissionNo: 1, studentId: 1, batchId: 1, centerId: 1, obtainedMarks: 1, totalMarks: 1, percentile: 1, rank: 1, timeTaken: 1, isLate: 1, sectionResults: 1, completedAt: 1, correctCount: 1, wrongCount: 1, skippedCount: 1 }).sort({ rank: 1 }).skip(skip).limit(limit).lean(),
+      MockExamResult.find(query, { admissionNo: 1, studentId: 1, batchId: 1, centerId: 1, obtainedMarks: 1, totalMarks: 1, percentile: 1, rank: 1, timeTaken: 1, isLate: 1, sectionResults: 1, completedAt: 1, correctCount: 1, wrongCount: 1, skippedCount: 1 })
+        .sort({ rank: 1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
       MockExamResult.countDocuments(query)
     ]);
 
@@ -627,10 +632,13 @@ const getMyResultWithAnswers = async (req, res, next) => {
     const result = await MockExamResult.findOne({ tenantId, examId, admissionNo, isdeleted: false }).populate('sectionResults.subjectId', 'subjectName').lean();
     if (!result) return res.status(404).json({ status: false, message: 'Result not found for this student' });
 
-    const studentProfile = await StudentProfile.findOne({
-      tenantId,
-      $or: [{ studentId: result.studentId }, { admissionNo: result.admissionNo }]
-    }, { 'student.name': 1 }).lean();
+    const studentProfile = await StudentProfile.findOne(
+      {
+        tenantId,
+        $or: [{ studentId: result.studentId }, { admissionNo: result.admissionNo }]
+      },
+      { 'student.name': 1 }
+    ).lean();
     result.studentName = studentProfile?.student?.name || 'Unknown';
     if (!result.isResultVisible) return res.status(403).json({ status: false, message: 'Result is not visible yet' });
     const questions = await MockExamQns.find(
@@ -1179,22 +1187,19 @@ const getExamQuestionWiseReport = async (req, res, next) => {
     if (safeTrim(req.body?.batchId)) matchQ.batchId = safeTrim(req.body.batchId);
     if (safeTrim(req.body?.centerId)) matchQ.centerId = safeTrim(req.body.centerId);
 
-    const [results, questions] = await Promise.all([
-      MockExamResult.find(matchQ, { answers: 1 }).lean(),
-      MockExamQns.find({ tenantId, examId, isdeleted: false }, { questionId: 1, sectionId: 1, sortOrder: 1 }).sort({ sectionId: 1, sortOrder: 1 }).lean()
-    ]);
+    const [results, questions] = await Promise.all([MockExamResult.find(matchQ, { answers: 1 }).lean(), MockExamQns.find({ tenantId, examId, isdeleted: false }, { questionId: 1, sectionId: 1, sortOrder: 1 }).sort({ sectionId: 1, sortOrder: 1 }).lean()]);
 
     const totalParticipants = results.length;
     const statsMap = new Map();
 
     // Initialize map with all questions
-    questions.forEach(q => {
+    questions.forEach((q) => {
       statsMap.set(safeTrim(q.questionId), { correct: 0, incorrect: 0, skipped: 0, totalTime: 0, seenCount: 0 });
     });
 
     // Aggregate stats
-    results.forEach(r => {
-      (r.answers || []).forEach(a => {
+    results.forEach((r) => {
+      (r.answers || []).forEach((a) => {
         const qId = safeTrim(a.questionId);
         const s = statsMap.get(qId);
         if (s) {
@@ -1234,22 +1239,27 @@ const getExamParticipantsReport = async (req, res, next) => {
     const examId = safeTrim(req.body?.examId);
     if (!tenantId || !examId) return res.status(400).json({ status: false, message: 'tenantId and examId are required' });
 
-    const results = await MockExamResult.find({ tenantId, examId, isdeleted: false }, {
-      admissionNo: 1,
-      studentId: 1,
-      rank: 1,
-      startedAt: 1,
-      completedAt: 1,
-      correctCount: 1,
-      wrongCount: 1,
-      totalMarks: 1,
-      obtainedMarks: 1,
-      timeTaken: 1
-    }).sort({ rank: 1 }).lean();
+    const results = await MockExamResult.find(
+      { tenantId, examId, isdeleted: false },
+      {
+        admissionNo: 1,
+        studentId: 1,
+        rank: 1,
+        startedAt: 1,
+        completedAt: 1,
+        correctCount: 1,
+        wrongCount: 1,
+        totalMarks: 1,
+        obtainedMarks: 1,
+        timeTaken: 1
+      }
+    )
+      .sort({ rank: 1 })
+      .lean();
 
     const data = await populateStudentNames(tenantId, results);
 
-    const finalData = data.map(r => ({
+    const finalData = data.map((r) => ({
       ...r,
       rank: r.rank || '-',
       percentage: r.totalMarks > 0 ? round2((r.obtainedMarks / r.totalMarks) * 100) : 0,
