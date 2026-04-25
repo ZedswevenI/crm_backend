@@ -16,11 +16,9 @@ const SectionSchema = new mongoose.Schema(
 const GraceSchema = new mongoose.Schema(
   {
     graceId: { type: String, required: true, trim: true },
-    graceType: { type: String, required: true, enum: ['exam', 'question'] },
-    questionId: { type: String, default: null, trim: true },
+    questionId: { type: String, required: true, trim: true },
     sectionId: { type: String, default: null, trim: true },
-    actionType: { type: String, required: true, enum: ['flat_add', 'remove_negative'] },
-    flatMarks: { type: Number, default: 0 },
+    graceMarks: { type: Number, required: true },
     appliedAt: { type: Number, default: null },
     appliedBy: { type: String, default: null },
     note: { type: String, default: null },
@@ -34,6 +32,15 @@ const PublishLogSchema = new mongoose.Schema(
     action: { type: String, required: true, enum: ['publish', 'republish'] },
     publishedAt: { type: Number, required: true },
     publishedBy: { type: String, default: null },
+    note: { type: String, default: null }
+  },
+  { _id: false }
+);
+
+const ReevaluateLogSchema = new mongoose.Schema(
+  {
+    reevaluatedAt: { type: Number, required: true },
+    reevaluatedBy: { type: String, default: null },
     note: { type: String, default: null }
   },
   { _id: false }
@@ -77,6 +84,7 @@ const MockExamSchema = new mongoose.Schema(
     resultPublishAt: { type: Number, default: null },
     resultPublishedAt: { type: Number, default: null },
     resultPublishedBy: { type: String, default: null },
+    reevaluateLogs: { type: [ReevaluateLogSchema], default: [] },
     status: {
       type: String,
       default: 'draft',

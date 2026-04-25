@@ -10,6 +10,7 @@ import Topic from '../models/topic.model.js';
 import SubTopic from '../models/subtopic.model.js';
 import BatchAssignEnable from '../models/batchenabledAssignment.model.js';
 import AssignmentResult from '../models/assignmentResult.model.js';
+import { syncOnAssignmentSubmit } from '../helpers/performanceSync.helper.js';
 
 const pickTenantId = (req) => String(req.body?.entiId || req.body?.tenantId || '').trim();
 const safeTrim = (v) => (v === null || v === undefined ? '' : String(v)).trim();
@@ -724,6 +725,13 @@ const submitAssignmentResult = async (req, res, next) => {
         );
       }
     }
+    syncOnAssignmentSubmit({
+      tenantId,
+      admissionNo,
+      studentId: safeTrim(req.body?.studentId) || null,
+      batchId,
+      subjectId
+    }).catch(() => {});
     return res.status(constants.HTTPS_SUCCESS).json({
       status: true,
       message: 'Test result submitted',

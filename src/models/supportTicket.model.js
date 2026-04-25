@@ -31,6 +31,18 @@ const supportTicketSchema = new mongoose.Schema(
     requestedAt: { type: Number, default: () => Date.now() },
     assignedAt: { type: Number, default: null },
     completedAt: { type: Number, default: null },
+    reopenCount: { type: Number, default: 0 },
+    reopenHistory: {
+      type: [
+        {
+          reopenedAt: { type: Number, default: null },
+          reason: { type: String, trim: true, default: null },
+          reopenedBy: { type: String, trim: true, default: null },
+          prevStatus: { type: String, trim: true, default: null }
+        }
+      ],
+      default: []
+    },
     isdeleted: { type: Boolean, default: false, index: true },
     createdBy: { type: String, default: null, trim: true },
     updatedBy: { type: String, default: null, trim: true }

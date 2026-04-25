@@ -17,16 +17,20 @@ const upload = multer({ storage: multer.memoryStorage() });
 import { uploadQuestionImage } from '../middlewares/multer.js';
 
 routes.post('/create', validatetoken, mockExamController.createExam);
+routes.post('/duplicate', validatetoken, mockExamController.duplicateExam);
 routes.post('/update', validatetoken, mockExamController.updateExam);
 routes.post('/list', validatetoken, mockExamController.listExams);
 routes.post('/get', validatetoken, mockExamController.getExam);
 routes.post('/delete', validatetoken, mockExamController.deleteExam);
 routes.post('/publish', validatetoken, mockExamController.publishExam);
 routes.post('/publish-result', validatetoken, mockExamController.publishResult);
-routes.post('/apply-grace', validatetoken, mockExamController.applyGrace);
-routes.post('/remove-grace', validatetoken, mockExamController.removeGrace);
+// routes.post('/apply-grace', validatetoken, mockExamController.applyGrace);
+// routes.post('/remove-grace', validatetoken, mockExamController.removeGrace);
 routes.post('/auto-publish-check', validatetoken, mockExamController.checkAndAutoPublish);
 routes.post('/student-list', mockExamController.listExamsForStudent);
+routes.post('/grace/add', validatetoken, mockExamController.addGrace);
+routes.post('/grace/remove', validatetoken, mockExamController.removeGrace);
+routes.post('/grace/reevaluate', validatetoken, mockExamController.reevaluate);
 
 routes.post('/batch/assign', validatetoken, mockExamBatchAssignController.assignToBatch);
 routes.post('/batch/disable', validatetoken, mockExamBatchAssignController.disableFromBatch);
@@ -45,8 +49,9 @@ routes.post('/questions/get-questions', mockExamQnsController.getQuestionsByCode
 routes.post('/questions/getallquestions', mockExamQnsController.getQuestionsByExam);
 routes.post('/questions/view', validatetoken, mockExamQnsController.viewQuestion);
 routes.post('/questions/sort-order', validatetoken, mockExamQnsController.updateSortOrder);
-routes.post('/questions/upload-image', validatetoken, validatetoken, uploadQuestionImage, mockExamQnsController.uploadImage);
+routes.post('/questions/upload-image', validatetoken, uploadQuestionImage, mockExamQnsController.uploadImage);
 routes.post('/questions/image/download', mockExamQnsController.getImage);
+routes.post('/questions/bulk-upload-answers', validatetoken, mockExamQnsController.bulkUploadAnswers);
 
 // QUestion Bank Routes
 routes.post('/questions/bank/create', validatetoken, mockExamQnsController.createQuestionInBank);
@@ -66,6 +71,11 @@ routes.post('/result/list-by-student', mockExamResultController.listResultsByStu
 routes.post('/result/section-analytics', mockExamResultController.getSectionAnalytics);
 routes.post('/result/analytics/timing', mockExamResultController.getQuestionTimingAnalytics);
 routes.post('/result/analytics/attempts', mockExamResultController.getQuestionAttemptAnalytics);
+routes.post('/result/batch-attendance', mockExamResultController.getBatchAttendanceReport);
+routes.post('/result/batch-performance', mockExamResultController.getBatchPerformanceReport);
+routes.post('/result/compare-topper', mockExamResultController.compareWithTopper);
+routes.post('/result/analytics/question-wise', validatetoken, mockExamResultController.getExamQuestionWiseReport);
+routes.post('/result/analytics/participants', validatetoken, mockExamResultController.getExamParticipantsReport);
 
 routes.post('/instruction/create', validatetoken, instructionController.createInstruction);
 routes.post('/instruction/update', validatetoken, instructionController.updateInstruction);
