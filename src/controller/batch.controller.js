@@ -708,7 +708,7 @@ const listEligibleStudentsForBatch = async (req, res, next) => {
       const rx = new RegExp(escapeRegex(search), 'i');
       query.$or = [{ admissionNo: rx }, { registrationNumber: rx }, { 'student.name': rx }, { 'student.phone': rx }, { 'student.parentPhone': rx }];
     }
-    const [rows, count] = await Promise.all([StudentProfile.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(), StudentProfile.countDocuments(query)]);
+    const [rows, count] = await Promise.all([StudentProfile.find(query).sort({ createdAt: -1 }).lean(), StudentProfile.countDocuments(query)]);
     return res.status(constants.HTTPS_SUCCESS).json({
       status: true,
       message: 'Request success',
