@@ -1892,7 +1892,8 @@ const createStaff = async (req, res, next) => {
       joiningDate,
       relievingDate,
       facultyType: isFaculty ? facultyType : null,
-      subject: isFaculty && facultyType === 'TEACHING' ? subject : null,
+      // subject: isFaculty && facultyType === 'TEACHING' ? subject : null,
+      subject: isFaculty && facultyType === 'TEACHING' ? (Array.isArray(subject) ? subject : [subject].filter(Boolean)) : [],
       payroll,
       department,
       weekoff,
@@ -2022,7 +2023,7 @@ const updateStaff = async (req, res, next) => {
     if (payload.joiningDate !== undefined) patch.joiningDate = toNum(payload.joiningDate);
     if (payload.relievingDate !== undefined) patch.relievingDate = payload.relievingDate ? toNum(payload.relievingDate) : null;
     if (payload.facultyType !== undefined) patch.facultyType = safeTrim(payload.facultyType) || null;
-    if (payload.subject !== undefined) patch.subject = safeTrim(payload.subject) || null;
+    // if (payload.subject !== undefined) patch.subject = safeTrim(payload.subject) || null;
     if (payload.payroll !== undefined) patch.payroll = safeTrim(payload.payroll);
     if (payload.department !== undefined) patch.department = safeTrim(payload.department);
     if (payload.weekoff !== undefined) {
@@ -2039,16 +2040,29 @@ const updateStaff = async (req, res, next) => {
     if (!existing) return res.status(404).json({ status: false, message: 'Staff not found' });
     const nextRole = patch.role !== undefined ? patch.role : existing.role;
     const nextFacultyType = patch.facultyType !== undefined ? patch.facultyType : existing.facultyType;
+    if (payload.subject !== undefined) {
+      patch.subject = nextFacultyType === 'TEACHING' ? (Array.isArray(payload.subject) ? payload.subject.filter(Boolean) : [payload.subject].filter(Boolean)) : [];
+    }
     const nextSubject = patch.subject !== undefined ? patch.subject : existing.subject;
     if (patch.department !== undefined) {
       if (!isValidObjectId(patch.department)) return res.status(400).json({ status: false, message: 'Invalid department id' });
       const deptDoc = await Department.findOne({ _id: patch.department, tenantId, isdeleted: false }).lean();
       if (!deptDoc) return res.status(400).json({ status: false, message: 'Invalid department (not found)' });
     }
-    if (patch.subject !== undefined && patch.subject) {
-      if (!isValidObjectId(patch.subject)) return res.status(400).json({ status: false, message: 'Invalid subject id' });
-      const subDoc = await Subject.findOne({ _id: patch.subject, tenantId, isdeleted: false }).lean();
-      if (!subDoc) return res.status(400).json({ status: false, message: 'Invalid subject (not found)' });
+    // if (patch.subject !== undefined && patch.subject) {
+    //   if (!isValidObjectId(patch.subject)) return res.status(400).json({ status: false, message: 'Invalid subject id' });
+    //   const subDoc = await Subject.findOne({ _id: patch.subject, tenantId, isdeleted: false }).lean();
+    //   if (!subDoc) return res.status(400).json({ status: false, message: 'Invalid subject (not found)' });
+    // }
+    if (patch.subject !== undefined && patch.subject.length) {
+      const invalidIds = patch.subject.filter((id) => !isValidObjectId(id));
+      if (invalidIds.length) {
+        return res.status(400).json({ status: false, message: `Invalid subject id(s): ${invalidIds.join(', ')}` });
+      }
+      const subDocs = await Subject.find({ _id: { $in: patch.subject }, tenantId, isdeleted: false }, { _id: 1 }).lean();
+      if (subDocs.length !== patch.subject.length) {
+        return res.status(400).json({ status: false, message: 'One or more subjects not found' });
+      }
     }
     const isFaculty = nextRole === 'Faculty';
     if (isFaculty) {
@@ -2057,11 +2071,11 @@ const updateStaff = async (req, res, next) => {
         return res.status(400).json({ status: false, message: 'subject is required for TEACHING faculty' });
       }
       if (nextFacultyType === 'NON_TEACHING') {
-        patch.subject = null;
+        patch.subject = [];
       }
     } else {
       patch.facultyType = null;
-      patch.subject = null;
+      patch.subject = [];
     }
     if (patch.staffName !== undefined && !patch.staffName) return res.status(400).json({ status: false, message: 'staffName cannot be empty' });
     if (patch.staffCode !== undefined && !patch.staffCode) return res.status(400).json({ status: false, message: 'staffCode cannot be empty' });
@@ -2156,6 +2170,7 @@ const updateStaff = async (req, res, next) => {
       data: toStaffResponse(doc)
     });
   } catch (err) {
+    console.log('err ', err);
     if (err?.code === 11000) {
       const key = Object.keys(err?.keyPattern || {})[0] || 'duplicate';
       const map = {
