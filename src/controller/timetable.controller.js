@@ -248,11 +248,12 @@ const validateStaffSubject = async (tenantId, batchCode, facultyId, subjectId, p
     Staff.findOne({ tenantId, staffId: facultyId, isdeleted: false }, { staffName: 1, subject: 1, facultyType: 1 }).lean(),
     Subject.findOne({ _id: subjectId, isdeleted: false }, { subjectName: 1, subjectCode: 1 }).lean()
   ]);
-  const subjectLabel = subjectDoc ? `"${subjectDoc.subjectName}${subjectDoc.subjectCode ? ' (' + subjectDoc.subjectCode + ')' : ''}"` : `ID: ${subjectId}`;
   if (!staff) return { ok: false, msg: `Staff ${facultyId} not found` };
   if (safeTrim(staff.facultyType).toUpperCase() !== 'TEACHING') {
     return { ok: false, msg: `${staff.staffName} is not a TEACHING staff` };
   }
+  const subjectLabel = subjectDoc ? `"${subjectDoc.subjectName}${subjectDoc.subjectCode ? ' (' + subjectDoc.subjectCode + ')' : ''}"` : `ID: ${subjectId}`;
+
   const staffMap = Array.isArray(batch?.staffMap) ? batch.staffMap : [];
   const hasBatchMap = staffMap.length > 0;
   if (hasBatchMap) {
@@ -270,14 +271,24 @@ const validateStaffSubject = async (tenantId, batchCode, facultyId, subjectId, p
       };
     }
   }
-  const staffSubjects = Array.isArray(staff.subject) ? staff.subject : [];
-  if (!staffSubjects.some((sid) => String(sid) === subjectId)) {
-    return {
-      ok: false,
-      msg: `${staff.staffName} does not have subject ${subjectLabel} in their profile.`
-    };
+  // const staffSubjects = Array.isArray(staff.subject) ? staff.subject : [];
+  // if (!staffSubjects.some((sid) => String(sid) === subjectId)) {
+  // if (
+  //   !staffSubjects.some((sid) => {
+  //     const id = sid?._id ? String(sid._id) : String(sid);
+  //     return id === subjectId;
+  //   })
+  // ) {
+  //   return {
+  //     ok: false,
+  //     msg: `${staff.staffName} does not have subject ${subjectLabel} in their profile.`
+  //   };
+  // }
+  const rawSubject = staff.subject;
+  const normalizedSubjects = Array.isArray(rawSubject) ? rawSubject.map((x) => String(x?._id || x)) : rawSubject ? [String(rawSubject?._id || rawSubject)] : [];
+  if (!normalizedSubjects.some((id) => id === subjectId)) {
+    return { ok: false, msg: `${staff.staffName} does not have subject ${subjectLabel} in their profile.` };
   }
-
   return { ok: true };
 };
 
@@ -605,44 +616,37 @@ const cancelPeriod = async (req, res, next) => {
 //       if (dayIdx < 0) return res.status(400).json({ status: false, message: `Day ${day} not found` });
 //       const pIdx = tt.week[dayIdx].periods.findIndex((p) => toInt(p?.periodNo) === periodNo);
 //       if (pIdx < 0) return res.status(400).json({ status: false, message: 'Period not found' });
+//       const draftPeriod = tt.week[dayIdx].periods[pIdx];
+//       const draftSubjectId = safeTrim(draftPeriod?.subjectId || '');
+//       const draftPeriodType = safeTrim(draftPeriod?.periodType || '');
+//       if (draftSubjectId && !['PT', 'YOGA'].includes(draftPeriodType.toUpperCase())) {
+//         const [newStaff, subjectDoc] = await Promise.all([Staff.findOne({ tenantId, staffId: newFacultyId, isdeleted: false }, { staffName: 1, subject: 1, facultyType: 1 }).lean(), Subject.findOne({ _id: draftSubjectId, isdeleted: false }, { subjectName: 1, subjectCode: 1 }).lean()]);
+//         if (!newStaff) {
+//           return res.status(400).json({ status: false, message: `Replacement staff ${newFacultyId} not found` });
+//         }
+//         if (safeTrim(newStaff.facultyType).toUpperCase() !== 'TEACHING') {
+//           return res.status(400).json({ status: false, message: `${newStaff.staffName} is not a TEACHING staff` });
+//         }
+//         const staffSubjects = Array.isArray(newStaff.subject) ? newStaff.subject : [];
+//         // if (!staffSubjects.some((sid) => String(sid) === draftSubjectId)) {
+//         if (
+//           !staffSubjects.some((sid) => {
+//             const id = sid?._id ? String(sid._id) : String(sid);
+//             return id === draftSubjectId;
+//           })
+//         ) {
+//           const subjectLabel = subjectDoc ? `"${subjectDoc.subjectName}${subjectDoc.subjectCode ? ' (' + subjectDoc.subjectCode + ')' : ''}"` : `ID: ${draftSubjectId}`;
+//           return res.status(400).json({
+//             status: false,
+//             message: `${newStaff.staffName} does not have subject ${subjectLabel} in their profile. Cannot assign as replacement.`
+//           });
+//         }
+//       }
 //       tt.week[dayIdx].periods[pIdx].facultyId = newFacultyId;
 //       tt.week[dayIdx].periods[pIdx].facultyName = newFacultyName || null;
 //       tt.week[dayIdx].periods[pIdx].replacementFacultyId = newFacultyId;
 //       tt.markModified('week');
 //       tt.updatedBy = userId || null;
-//       if (!isPublished(tt)) {
-//         const dayIdx = (tt.week || []).findIndex((d) => d.day === day);
-//         if (dayIdx < 0) return res.status(400).json({ status: false, message: `Day ${day} not found` });
-//         const pIdx = tt.week[dayIdx].periods.findIndex((p) => toInt(p?.periodNo) === periodNo);
-//         if (pIdx < 0) return res.status(400).json({ status: false, message: 'Period not found' });
-//         const draftPeriod = tt.week[dayIdx].periods[pIdx];
-//         const draftSubjectId = safeTrim(draftPeriod?.subjectId || '');
-//         const draftPeriodType = safeTrim(draftPeriod?.periodType || '');
-//         if (draftSubjectId && !['PT', 'YOGA'].includes(draftPeriodType.toUpperCase())) {
-//           const [newStaff, subjectDoc] = await Promise.all([Staff.findOne({ tenantId, staffId: newFacultyId, isdeleted: false }, { staffName: 1, subject: 1, facultyType: 1 }).lean(), Subject.findOne({ _id: draftSubjectId, isdeleted: false }, { subjectName: 1, subjectCode: 1 }).lean()]);
-//           if (!newStaff) {
-//             return res.status(400).json({ status: false, message: `Replacement staff ${newFacultyId} not found` });
-//           }
-//           if (safeTrim(newStaff.facultyType).toUpperCase() !== 'TEACHING') {
-//             return res.status(400).json({ status: false, message: `${newStaff.staffName} is not a TEACHING staff` });
-//           }
-//           const staffSubjects = Array.isArray(newStaff.subject) ? newStaff.subject : [];
-//           if (!staffSubjects.some((sid) => String(sid) === draftSubjectId)) {
-//             const subjectLabel = subjectDoc ? `"${subjectDoc.subjectName}${subjectDoc.subjectCode ? ' (' + subjectDoc.subjectCode + ')' : ''}"` : `ID: ${draftSubjectId}`;
-//             return res.status(400).json({
-//               status: false,
-//               message: `${newStaff.staffName} does not have subject ${subjectLabel} in their profile. Cannot assign as replacement.`
-//             });
-//           }
-//         }
-//         tt.week[dayIdx].periods[pIdx].facultyId = newFacultyId;
-//         tt.week[dayIdx].periods[pIdx].facultyName = newFacultyName || null;
-//         tt.week[dayIdx].periods[pIdx].replacementFacultyId = newFacultyId;
-//         tt.markModified('week');
-//         tt.updatedBy = userId || null;
-//         await tt.save();
-//         return res.json({ status: true, message: 'Staff updated (draft)' });
-//       }
 //       await tt.save();
 //       return res.json({ status: true, message: 'Staff updated (draft)' });
 //     }
@@ -662,7 +666,13 @@ const cancelPeriod = async (req, res, next) => {
 //         return res.status(400).json({ status: false, message: `${newStaff.staffName} is not a TEACHING staff` });
 //       }
 //       const staffSubjects = Array.isArray(newStaff.subject) ? newStaff.subject : [];
-//       if (!staffSubjects.some((sid) => String(sid) === subjectIdForPeriod)) {
+//       // if (!staffSubjects.some((sid) => String(sid) === subjectIdForPeriod)) {
+//       if (
+//         !staffSubjects.some((sid) => {
+//           const id = sid?._id ? String(sid._id) : String(sid);
+//           return id === subjectIdForPeriod;
+//         })
+//       ) {
 //         const subjectLabel = subjectDoc ? `"${subjectDoc.subjectName}${subjectDoc.subjectCode ? ' (' + subjectDoc.subjectCode + ')' : ''}"` : `ID: ${subjectIdForPeriod}`;
 //         return res.status(400).json({
 //           status: false,
@@ -698,36 +708,27 @@ const rearrangeStaff = async (req, res, next) => {
     const newFacultyId = safeTrim(req.body?.newFacultyId);
     const newFacultyName = safeTrim(req.body?.newFacultyName);
     const userId = safeTrim(req.body?.userId);
-
     if (!tenantId || !timetableId || !periodNo || !newFacultyId || !day) return res.status(400).json({ status: false, message: 'Missing required fields' });
-
     const tt = await TimeTable.findOne({ _id: timetableId, tenantId, isdeleted: false });
     if (!tt) return res.status(404).json({ status: false, message: 'Timetable not found' });
-
-    // ── DRAFT PATH ────────────────────────────────────────────────────────────
     if (!isPublished(tt)) {
       const dayIdx = (tt.week || []).findIndex((d) => d.day === day);
       if (dayIdx < 0) return res.status(400).json({ status: false, message: `Day ${day} not found` });
-
       const pIdx = tt.week[dayIdx].periods.findIndex((p) => toInt(p?.periodNo) === periodNo);
       if (pIdx < 0) return res.status(400).json({ status: false, message: 'Period not found' });
-
-      // ── Staff-subject check for draft ─────────────────────────────────────
       const draftPeriod = tt.week[dayIdx].periods[pIdx];
       const draftSubjectId = safeTrim(draftPeriod?.subjectId || '');
       const draftPeriodType = safeTrim(draftPeriod?.periodType || '');
-
       if (draftSubjectId && !['PT', 'YOGA'].includes(draftPeriodType.toUpperCase())) {
         const [newStaff, subjectDoc] = await Promise.all([Staff.findOne({ tenantId, staffId: newFacultyId, isdeleted: false }, { staffName: 1, subject: 1, facultyType: 1 }).lean(), Subject.findOne({ _id: draftSubjectId, isdeleted: false }, { subjectName: 1, subjectCode: 1 }).lean()]);
-
         if (!newStaff) {
           return res.status(400).json({ status: false, message: `Replacement staff ${newFacultyId} not found` });
         }
         if (safeTrim(newStaff.facultyType).toUpperCase() !== 'TEACHING') {
           return res.status(400).json({ status: false, message: `${newStaff.staffName} is not a TEACHING staff` });
         }
-        const staffSubjects = Array.isArray(newStaff.subject) ? newStaff.subject : [];
-        if (!staffSubjects.some((sid) => String(sid) === draftSubjectId)) {
+        const normalizedSubjects = Array.isArray(newStaff.subject) ? newStaff.subject.map((x) => String(x?._id || x)) : newStaff.subject ? [String(newStaff.subject?._id || newStaff.subject)] : [];
+        if (!normalizedSubjects.some((id) => id === draftSubjectId)) {
           const subjectLabel = subjectDoc ? `"${subjectDoc.subjectName}${subjectDoc.subjectCode ? ' (' + subjectDoc.subjectCode + ')' : ''}"` : `ID: ${draftSubjectId}`;
           return res.status(400).json({
             status: false,
@@ -735,8 +736,6 @@ const rearrangeStaff = async (req, res, next) => {
           });
         }
       }
-
-      // ── All checks passed — update ────────────────────────────────────────
       tt.week[dayIdx].periods[pIdx].facultyId = newFacultyId;
       tt.week[dayIdx].periods[pIdx].facultyName = newFacultyName || null;
       tt.week[dayIdx].periods[pIdx].replacementFacultyId = newFacultyId;
@@ -745,30 +744,23 @@ const rearrangeStaff = async (req, res, next) => {
       await tt.save();
       return res.json({ status: true, message: 'Staff updated (draft)' });
     }
-
-    // ── PUBLISHED PATH ────────────────────────────────────────────────────────
     if (!date) return res.status(400).json({ status: false, message: 'date required for published timetable' });
-
     const baseObj = findEffectivePeriodBase(tt, day, periodNo, date);
     if (!baseObj) return res.status(400).json({ status: false, message: 'Period not found' });
-
     const check = await checkStaffConflicts(tenantId, newFacultyId, date, day, toInt(baseObj?.time?.startMin), toInt(baseObj?.time?.endMin), timetableId, false, baseObj?.periodType, baseObj?.mode);
     if (check.conflict) return res.status(400).json({ status: false, message: check.message });
-
     const subjectIdForPeriod = safeTrim(baseObj?.subjectId || '');
     const ptForPeriod = safeTrim(baseObj?.periodType || '');
-
     if (subjectIdForPeriod && !['PT', 'YOGA'].includes(ptForPeriod.toUpperCase())) {
       const [newStaff, subjectDoc] = await Promise.all([Staff.findOne({ tenantId, staffId: newFacultyId, isdeleted: false }, { staffName: 1, subject: 1, facultyType: 1 }).lean(), Subject.findOne({ _id: subjectIdForPeriod, isdeleted: false }, { subjectName: 1, subjectCode: 1 }).lean()]);
-
       if (!newStaff) {
         return res.status(400).json({ status: false, message: `Replacement staff ${newFacultyId} not found` });
       }
       if (safeTrim(newStaff.facultyType).toUpperCase() !== 'TEACHING') {
         return res.status(400).json({ status: false, message: `${newStaff.staffName} is not a TEACHING staff` });
       }
-      const staffSubjects = Array.isArray(newStaff.subject) ? newStaff.subject : [];
-      if (!staffSubjects.some((sid) => String(sid) === subjectIdForPeriod)) {
+      const normalizedSubjects = Array.isArray(newStaff.subject) ? newStaff.subject.map((x) => String(x?._id || x)) : newStaff.subject ? [String(newStaff.subject?._id || newStaff.subject)] : [];
+      if (!normalizedSubjects.some((id) => id === subjectIdForPeriod)) {
         const subjectLabel = subjectDoc ? `"${subjectDoc.subjectName}${subjectDoc.subjectCode ? ' (' + subjectDoc.subjectCode + ')' : ''}"` : `ID: ${subjectIdForPeriod}`;
         return res.status(400).json({
           status: false,
@@ -776,13 +768,19 @@ const rearrangeStaff = async (req, res, next) => {
         });
       }
     }
-
     upsertPeriodOverride(tt, {
       date,
       day,
       periodNo,
       action: 'REPLACE_PERIOD',
-      period: { ...baseObj, periodNo, facultyId: newFacultyId, facultyName: newFacultyName || null, replacementFacultyId: newFacultyId, isCancelled: false },
+      period: {
+        ...baseObj,
+        periodNo,
+        facultyId: newFacultyId,
+        facultyName: newFacultyName || null,
+        replacementFacultyId: newFacultyId,
+        isCancelled: false
+      },
       reason: 'Faculty rearranged',
       updatedBy: userId || null
     });
@@ -1543,6 +1541,11 @@ const validateSchedule = async (req, res, next) => {
     const getStaff = async (staffId) => {
       if (staffCache.has(staffId)) return staffCache.get(staffId);
       const s = await Staff.findOne({ tenantId, staffId, isdeleted: false }, { staffName: 1, staffCode: 1, subject: 1, weekoff: 1, facultyType: 1 }).lean();
+      // staffCache.set(staffId, s || null);
+      // return s || null;
+      if (s) {
+        s.subject = Array.isArray(s.subject) ? s.subject.map((x) => String(x?._id || x)) : s.subject ? [String(s.subject?._id || s.subject)] : [];
+      }
       staffCache.set(staffId, s || null);
       return s || null;
     };
@@ -1581,8 +1584,6 @@ const validateSchedule = async (req, res, next) => {
         });
         continue;
       }
-
-      // ── Check 2: Fetch batch — must exist ─────────────────────────────────────
       const batch = await getBatch(batchCode);
       if (!batch) {
         conflicts.push({ batchCode, message: `Batch ${batchCode} not found` });
@@ -1590,19 +1591,14 @@ const validateSchedule = async (req, res, next) => {
       }
       const staffMap = Array.isArray(batch.staffMap) ? batch.staffMap : [];
       const hasBatchMap = staffMap.length > 0;
-
       for (const d of item.week || []) {
         const day = normDay(d?.day);
-
-        // ── Check 3: Valid day ────────────────────────────────────────────────
         if (!isValidDay(day)) {
           conflicts.push({ batchCode, day: d?.day, message: `Invalid day: ${d?.day}` });
           continue;
         }
-
         const exactDate = getOffsetDate(correctedMonday, day);
-        const seenPeriods = []; // for intra-day time overlap within same batch
-
+        const seenPeriods = [];
         for (const p of d?.periods || []) {
           const periodNo = toInt(p?.periodNo, 0);
           const facultyId = safeTrim(p?.facultyId);
@@ -1715,8 +1711,13 @@ const validateSchedule = async (req, res, next) => {
                 continue;
               }
             }
+            // const staffSubjects = Array.isArray(staff.subject) ? staff.subject : [];
+            // const staffTeachesSubject = staffSubjects.some((sid) => String(sid) === subjectId);
             const staffSubjects = Array.isArray(staff.subject) ? staff.subject : [];
-            const staffTeachesSubject = staffSubjects.some((sid) => String(sid) === subjectId);
+            const staffTeachesSubject = staffSubjects.some((sid) => {
+              const id = sid?._id ? String(sid._id) : String(sid);
+              return id === subjectId;
+            });
             if (!staffTeachesSubject) {
               const subjectDoc = await getSubject(subjectId);
               const subjectLabel = subjectDoc ? `"${subjectDoc.subjectName}${subjectDoc.subjectCode ? ' (' + subjectDoc.subjectCode + ')' : ''}"` : `ID: ${subjectId}`;
