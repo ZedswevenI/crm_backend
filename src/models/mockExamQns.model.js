@@ -23,6 +23,7 @@ const MockExamQnsSchema = new mongoose.Schema(
     examId: { type: String, default: null, trim: true },
     sectionId: { type: String, default: null, trim: true },
     subjectId: { type: mongoose.Schema.Types.ObjectId, ref: 'subject', required: true },
+    sourceQuestionId: { type: String, default: null, trim: true, index: true },
     questionId: { type: String, required: true, trim: true },
     questionNo: { type: String, default: null, trim: true },
     topicId: { type: String, default: null, trim: true },
@@ -92,11 +93,11 @@ MockExamQnsSchema.pre('validate', function (next) {
     const qt = String(this.questionType || '').toLowerCase();
     const opts = Array.isArray(this.questionOptions) ? this.questionOptions : [];
 
-    const needsOptions = ['mcq_single', 'mcq_multi', 'true_false'].includes(qt);
+    const needsOptions = ['mcq_single', 'mcq_multi'].includes(qt);
     if (needsOptions && !opts.length) {
       return next(new Error('questionOptions is required for mcq_single / mcq_multi / true_false'));
     }
-    if ((qt === 'mcq_single' || qt === 'true_false') && opts.filter((o) => o.isCorrect).length < 1) {
+    if ((qt === 'mcq_single') && opts.filter((o) => o.isCorrect).length < 1) {
       return next(new Error('At least one correct option is required'));
     }
     if (qt === 'numeric' && this.numericMin !== null && this.numericMax !== null) {

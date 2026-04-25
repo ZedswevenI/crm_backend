@@ -71,14 +71,6 @@ routes.post('/staff/performance/list/all', validatetoken, performanceCtrl.listAl
 routes.post('/staff/performance/update', validatetoken, performanceCtrl.updateStaffFeedback);
 routes.post('/staff/performance/delete', validatetoken, performanceCtrl.deleteStaffFeedback);
 
-//Student Performance
-routes.post('/student/performance/getstudent', performanceCtrl.getStudentPerformance);
-routes.post('/student/performance/recal', performanceCtrl.recalcStudentPerformance);
-routes.post('/student/performance/overide/assignment', validatetoken, performanceCtrl.overrideAssignmentPerf);
-routes.post('/student/performance/add', validatetoken, performanceCtrl.addStudentFeedback);
-routes.post('/student/performance/delete', validatetoken, performanceCtrl.deleteStudentFeedback);
-routes.post('/student/performance/getbatch', validatetoken, performanceCtrl.getBatchPerformance);
-
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Timetable routes' }));
 
 export default routes;

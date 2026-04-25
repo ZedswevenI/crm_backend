@@ -1,5 +1,6 @@
 import SchoolExamLog from '../models/schoolexam.model.js';
 import StudentProfile from '../models/studentProfile.model.js';
+import { syncOnSchoolExamUpload } from '../helpers/performanceSync.helper.js';
 
 const safeTrim = (v) => (v == null ? '' : String(v)).trim();
 const toNum = (v) => {
@@ -87,13 +88,13 @@ const uploadExamMarks = async (req, res, next) => {
       }
       const subjects = Array.isArray(row.subjects)
         ? row.subjects.map((s) => {
-          subjectNamesSet.add(safeTrim(s.subjectName));
-          return {
-            subjectName: safeTrim(s.subjectName),
-            marks: s.isAbsent ? null : s.marks != null ? toNum(s.marks) : null,
-            isAbsent: !!s.isAbsent
-          };
-        })
+            subjectNamesSet.add(safeTrim(s.subjectName));
+            return {
+              subjectName: safeTrim(s.subjectName),
+              marks: s.isAbsent ? null : s.marks != null ? toNum(s.marks) : null,
+              isAbsent: !!s.isAbsent
+            };
+          })
         : [];
       const autoTotal = subjects.reduce((sum, s) => sum + (s.marks ?? 0), 0);
       const totalMarks = excelTotal !== null ? excelTotal : autoTotal;
@@ -126,9 +127,7 @@ const uploadExamMarks = async (req, res, next) => {
 
     const existingSubjectNames = existingDoc?.subjectNames || [];
 
-    const mergedSubjectNames = Array.from(
-      new Set([...existingSubjectNames, ...Array.from(subjectNamesSet)])
-    ).filter(Boolean);
+    const mergedSubjectNames = Array.from(new Set([...existingSubjectNames, ...Array.from(subjectNamesSet)])).filter(Boolean);
     let mergedResults = [];
     if (existingDoc?.results?.length) {
       mergedResults = existingDoc.results.map((existing) => {
@@ -172,7 +171,11 @@ const uploadExamMarks = async (req, res, next) => {
       },
       { new: true, upsert: true }
     );
-
+    syncOnSchoolExamUpload({
+      tenantId,
+      examLogId: doc.examLogId,
+      academicYear
+    }).catch(() => {});
     return res.status(200).json({
       status: true,
       message: 'Exam marks imported successfully',
