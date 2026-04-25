@@ -1,6 +1,6 @@
 import mongoose from 'mongoose';
 import { v4 as uuid } from 'uuid';
-import StudentPerformance from '../models/studentPerformance.model.js';
+import StudentPerformance from '../models/studentperformance.model.js';
 import StudentProfile from '../models/studentProfile.model.js';
 import AssignmentResult from '../models/assignmentResult.model.js';
 import MockExamResult from '../models/mockExamResult.model.js';
