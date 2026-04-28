@@ -54,7 +54,7 @@ const sameSet = (a, b) => {
 const buildCorrectAnswer = (q) => {
   const qt = safeTrim(q?.questionType).toLowerCase();
   const opts = Array.isArray(q?.questionOptions) ? q.questionOptions : [];
-  if (qt === 'mcq_single' || qt === 'true_false') {
+  if (qt === 'mcq_single') {
     const one = opts.find((o) => o?.isCorrect === true);
     return safeTrim(one?.key || one?.textHtml || '').toUpperCase();
   }
@@ -114,7 +114,7 @@ const evalAnswer = (q, answerRaw) => {
   if (answerRaw === null || answerRaw === undefined) {
     return { isCorrect: null, correctAnswerRaw: correct || q?.correctAnswer || null, marksAwarded: 0 };
   }
-  if (qt === 'mcq_single' || qt === 'true_false') {
+  if (qt === 'mcq_single') {
     const a = safeTrim(answerRaw).toUpperCase();
     if (!a) return { isCorrect: null, correctAnswerRaw: correct, marksAwarded: 0 };
     const ok = a === safeTrim(correct).toUpperCase();
@@ -125,24 +125,133 @@ const evalAnswer = (q, answerRaw) => {
     }
     return { isCorrect: ok, correctAnswerRaw: correct, marksAwarded: marks };
   }
-  if (qt === 'mcq_multi') {
-    const a = normArr(answerRaw);
-    const ok = sameSet(a, correct);
-    if (ok) return { isCorrect: true, correctAnswerRaw: correct, marksAwarded: pos };
-    if (q?.hasPartialMarking) {
-      const opts = q.questionOptions || [];
-      let partial = 0;
-      for (const key of a) {
-        const opt = opts.find((o) => safeTrim(o?.key) === key || safeTrim(o?.textHtml) === key);
-        if (opt?.isCorrect && toNum(opt.partialMark) > 0) partial += toNum(opt.partialMark);
-        else if (!opt?.isCorrect) {
-          partial = 0;
-          break;
-        }
-      }
-      if (partial > 0) return { isCorrect: null, correctAnswerRaw: correct, marksAwarded: partial };
+  if (qt === 'true_false') {
+
+    const normalize = (val) => {
+
+      if (val === true) return 'true';
+
+      if (val === false) return 'false';
+
+      const v = String(val ?? '').trim().toLowerCase();
+
+      if (['true', 't', '1', 'yes', 'y'].includes(v)) return 'true';
+
+      if (['false', 'f', '0', 'no', 'n'].includes(v)) return 'false';
+
+      return null;
+
+    };
+
+    const answer = normalize(answerRaw);
+    // 🔥 IMPORTANT FIX: Always use q.correctAnswer directly
+    const correctAnswer = normalize(q?.correctAnswer);
+
+    if (answer === null || correctAnswer === null) {
+      return {
+        isCorrect: null,
+        correctAnswerRaw: q?.correctAnswer || null,
+        marksAwarded: 0,
+      };
     }
-    return { isCorrect: false, correctAnswerRaw: correct, marksAwarded: neg ? -Math.abs(neg) : 0 };
+    const ok = answer === correctAnswer;
+    return {
+      isCorrect: ok,
+      correctAnswerRaw: q?.correctAnswer || null,
+      marksAwarded: ok ? pos : neg ? -Math.abs(neg) : 0,
+    };
+  }
+  if (qt === 'mcq_multi') {
+    const normArr = (val) => {
+      if (!val) return [];
+
+      if (typeof val === 'string') {
+        return val
+          .split(';')
+          .map((v) => safeTrim(v).toUpperCase())
+          .filter(Boolean);
+      }
+
+      if (Array.isArray(val)) {
+        return val
+          .map((v) => safeTrim(v).toUpperCase())
+          .filter(Boolean);
+      }
+      return [];
+    };
+
+    const a = normArr(answerRaw);   // user answer
+    const c = normArr(correct);   
+
+    // 🛑 If no answer
+    if (!a.length) {
+      return {
+        isCorrect: null,
+        correctAnswerRaw: correct,
+        marksAwarded: 0,
+      };
+    }
+
+    const sameSet = (arr1, arr2) => {
+      if (arr1.length !== arr2.length) return false;
+      const set1 = new Set(arr1);
+      const set2 = new Set(arr2);
+      if (set1.size !== set2.size) return false;
+      for (const v of set1) {
+        if (!set2.has(v)) return false;
+      }
+      return true;
+    };
+    const ok = sameSet(a, c);
+    // ✅ FULL CORRECT
+    if (ok) {
+      console.log("Full correct match ✅");
+      return {
+        isCorrect: true,
+        correctAnswerRaw: correct,
+        marksAwarded: pos,
+      };
+    }
+    const optMap = new Map(
+      (q.questionOptions || []).map((o) => [
+        safeTrim(o?.key || o?.textHtml).toUpperCase(),
+        o,
+      ])
+    );
+
+    let marks = 0;
+    let hasCorrect = false;
+    for (const key of a) {
+      const opt = optMap.get(key);
+      if (!opt) {
+        continue;
+      }
+      if (opt.isCorrect) {
+        hasCorrect = true;
+
+        const mark = toNum(opt.partialMark || pos / c.length);
+        marks += mark;
+      } else {
+        const penalty = Math.abs(neg || 0);
+        marks -= penalty;
+      }
+    }
+
+    // ❗ Prevent negative overflow
+    marks = Math.max(0, marks); 
+    if (hasCorrect) {
+      console.log("Partial correct ⚠️");
+      return {
+        isCorrect: null,
+        correctAnswerRaw: correct,
+        marksAwarded: marks,
+      };
+    }
+    return {
+      isCorrect: false,
+      correctAnswerRaw: correct,
+      marksAwarded: neg ? -Math.abs(neg) : 0,
+    };
   }
   if (qt === 'passage_qns') {
     const correctOpts = (q.questionOptions || []).filter((o) => o?.isCorrect === true);
@@ -1108,13 +1217,13 @@ const compareWithTopper = async (req, res, next) => {
         },
         topper: topperSec
           ? {
-              obtainedMarks: topperMark,
-              totalQuestions: toNum(topperSec.totalQuestions),
-              correct: toNum(topperSec.correctCount),
-              wrong: toNum(topperSec.wrongCount),
-              skipped: toNum(topperSec.skippedCount),
-              accuracy: toNum(topperSec.correctCount) + toNum(topperSec.wrongCount) > 0 ? round2((toNum(topperSec.correctCount) / (toNum(topperSec.correctCount) + toNum(topperSec.wrongCount))) * 100) : 0
-            }
+            obtainedMarks: topperMark,
+            totalQuestions: toNum(topperSec.totalQuestions),
+            correct: toNum(topperSec.correctCount),
+            wrong: toNum(topperSec.wrongCount),
+            skipped: toNum(topperSec.skippedCount),
+            accuracy: toNum(topperSec.correctCount) + toNum(topperSec.wrongCount) > 0 ? round2((toNum(topperSec.correctCount) / (toNum(topperSec.correctCount) + toNum(topperSec.wrongCount))) * 100) : 0
+          }
           : null,
         gap,
         isAhead: gap <= 0
