@@ -460,30 +460,25 @@ const getAllClassSubjectTopics = async (req, res, next) => {
     const regNo = safeTrim(req.body?.regNo);
     const classNo = toNum(req.body?.classNo);
     const subjectRaw = safeTrim(req.body?.subjectId);
-
     if (!tenantId || !regNo || !classNo || !subjectRaw) {
       return res.status(400).json({
         status: false,
         message: 'entiId, regNo, classNo and subjectId are required'
       });
     }
-
     // ── Resolve subject ───────────────────────────────────────────────────────
     const subQ = { tenantId, isdeleted: false, $or: [] };
     if (mongoose.Types.ObjectId.isValid(subjectRaw)) subQ.$or.push({ _id: new mongoose.Types.ObjectId(subjectRaw) });
     subQ.$or.push({ subjectId: subjectRaw });
     subQ.$or.push({ subjectName: subjectRaw });
-
     const subjectDoc = await Subject.findOne(subQ, {
       _id: 1,
       subjectId: 1,
       subjectName: 1
     }).lean();
     if (!subjectDoc) return res.status(404).json({ status: false, message: 'Subject not found' });
-
     const subjectIdStr = safeTrim(subjectDoc.subjectId || String(subjectDoc._id));
     const subjectObjectId = mongoose.Types.ObjectId.isValid(String(subjectDoc._id)) ? new mongoose.Types.ObjectId(String(subjectDoc._id)) : null;
-
     // ── Resolve student ───────────────────────────────────────────────────────
     const student = await StudentProfile.findOne({
       tenantId,
@@ -492,18 +487,17 @@ const getAllClassSubjectTopics = async (req, res, next) => {
       $or: [{ admissionNo: regNo }, { registrationNumber: regNo }, { portalStudentId: regNo }]
     }).lean();
     if (!student) return res.status(404).json({ status: false, message: 'Student not found' });
-
-    const programId = safeTrim(student.programId);
+    // const programId = safeTrim(student.programId);
+    // if (!programId) return res.status(400).json({ status: false, message: 'Student program not found' });
+    const ayEntry = (Array.isArray(student.ayHistory) ? student.ayHistory : []).find((h) => Number(h?.classNo) === Number(classNo));
+    const programId = safeTrim(ayEntry?.programId || student.programId);
     if (!programId) return res.status(400).json({ status: false, message: 'Student program not found' });
-
     // ── Resolve program ───────────────────────────────────────────────────────
     const program = await Program.findOne({ tenantId, programId, isdeleted: false }).lean();
     if (!program) return res.status(404).json({ status: false, message: 'Program not found' });
-
     const batchId = safeTrim(req.body?.batchId) || safeTrim(student?.batchId);
     const admissionNo = safeTrim(student.admissionNo || regNo);
     const studentId = safeTrim(student.studentId || String(student._id));
-
     // ── Filter examMappings by subjectId ──────────────────────────────────────
     const examMappings = (Array.isArray(program.examMappings) ? program.examMappings : [])
       .filter((m) => {
@@ -517,7 +511,6 @@ const getAllClassSubjectTopics = async (req, res, next) => {
       }))
       .filter((m) => m.categoryId && m.subCategoryId)
       .sort((a, b) => Number(a.sortOrder) - Number(b.sortOrder));
-
     // ── Early return if no mappings ───────────────────────────────────────────
     if (!examMappings.length) {
       return res.json({
@@ -540,28 +533,20 @@ const getAllClassSubjectTopics = async (req, res, next) => {
         }
       });
     }
-
     // ── Fetch exam category / sub-category labels ─────────────────────────────
     const categoryIds = Array.from(new Set(examMappings.map((x) => x.categoryId)));
     const subCategoryIds = Array.from(new Set(examMappings.map((x) => x.subCategoryId)));
-
     const [categories, subCategories] = await Promise.all([ExamCategory.find({ tenantId, categoryId: { $in: categoryIds }, isdeleted: false }).lean(), ExamSubCategory.find({ tenantId, subCategoryId: { $in: subCategoryIds }, isdeleted: false }).lean()]);
-
     const catNameById = new Map((categories || []).map((c) => [safeTrim(c.categoryId), c.categoryName || c.name || safeTrim(c.categoryId)]));
     const subCatNameById = new Map((subCategories || []).map((s) => [safeTrim(s.subCategoryId), s.subCategoryName || s.name || safeTrim(s.subCategoryId)]));
-
     // ── Fetch topics, phases, subtopics in parallel ───────────────────────────
     const [topics, phases, subtopics] = await Promise.all([
       Topic.find({ tenantId, classNo, subjectId: subjectIdStr, isdeleted: false }).sort({ sortOrder: 1 }).lean(),
-
       Phase.find({ tenantId, classNo, subjectId: subjectIdStr, isdeleted: false }).lean(),
-
       SubTopic.find({ tenantId, classNo, subjectId: subjectIdStr, isdeleted: false }).sort({ sortOrder: 1 }).lean()
     ]);
-
     const topicIds = topics.map((t) => safeTrim(t.topicId || t._id)).filter(Boolean);
     const subTopicIds = subtopics.map((st) => safeTrim(st.subTopicId || st._id)).filter(Boolean);
-
     // ── Phase lookup by topicId ───────────────────────────────────────────────
     const phaseByTopicId = new Map();
     for (const ph of phases) {
@@ -574,7 +559,6 @@ const getAllClassSubjectTopics = async (req, res, next) => {
         });
       }
     }
-
     // ── Fetch assignments ─────────────────────────────────────────────────────
     const assignments = await Assignment.find({
       tenantId,
@@ -589,7 +573,6 @@ const getAllClassSubjectTopics = async (req, res, next) => {
     })
       .sort({ createdAt: 1 })
       .lean();
-
     // key: categoryId||subCategoryId||subTopicId → assignments[]
     const assignsByKey = new Map();
     for (const a of assignments) {
@@ -605,7 +588,6 @@ const getAllClassSubjectTopics = async (req, res, next) => {
       });
       assignsByKey.set(key, arr);
     }
-
     // ── Enabled test map ──────────────────────────────────────────────────────
     const enabledTestMap = new Map();
 
@@ -1081,79 +1063,6 @@ const getStudentAttendance = async (req, res, next) => {
     return next(err);
   }
 };
-
-// const getStudentProfileView = async (req, res, next) => {
-//   try {
-//     const tenantId = pickTenantId(req);
-//     const identifier = safeTrim(req.body?.studentNo || req.body?.studentId);
-//     if (!tenantId || !identifier) {
-//       return res.status(400).json({ status: false, message: 'tenantId and studentNo are required' });
-//     }
-//     const student = await StudentProfile.findOne({
-//       tenantId,
-//       status: 'ACTIVE',
-//       isdeleted: false,
-//       $or: [{ studentId: identifier }, { admissionNo: identifier }, { registrationNumber: identifier }]
-//     }).lean();
-//     if (!student) {
-//       return res.status(404).json({ status: false, message: 'Student profile not found' });
-//     }
-//     return res.status(200).json({
-//       status: true,
-//       message: 'Student profile retrieved successfully',
-//       data: student
-//     });
-//   } catch (err) {
-//     return next(err);
-//   }
-// };
-
-// new one
-
-// const getStudentProfileView = async (req, res, next) => {
-//   try {
-//     const tenantId = pickTenantId(req);
-//     const identifier = safeTrim(req.body?.studentNo || req.body?.studentId);
-//     if (!tenantId || !identifier) {
-//       return res.status(400).json({ status: false, message: 'tenantId and studentNo are required' });
-//     }
-//     const student = await StudentProfile.findOne({
-//       tenantId,
-//       status: 'ACTIVE',
-//       isdeleted: false,
-//       $or: [{ studentId: identifier }, { admissionNo: identifier }, { registrationNumber: identifier }]
-//     }).lean();
-
-//     if (!student) {
-//       return res.status(404).json({ status: false, message: 'Student profile not found' });
-//     }
-//     const batchCode = student.batchCode || null;
-//     let feedbackEnabled = false;
-//     let feedbackFormCount = 0;
-//     if (batchCode) {
-//       const now = Date.now();
-//       await Promise.all([FeedbackForm.updateMany({ tenantId, isdeleted: false, status: 'DRAFT', startDate: { $lte: now } }, { $set: { status: 'ACTIVE' } }), FeedbackForm.updateMany({ tenantId, isdeleted: false, status: 'ACTIVE', endDate: { $lt: now } }, { $set: { status: 'CLOSED' } })]);
-//       feedbackFormCount = await FeedbackForm.countDocuments({
-//         tenantId,
-//         isdeleted: false,
-//         status: 'ACTIVE',
-//         assignedBatches: batchCode
-//       });
-//       feedbackEnabled = feedbackFormCount > 0;
-//     }
-//     return res.status(200).json({
-//       status: true,
-//       message: 'Student profile retrieved successfully',
-//       data: {
-//         ...student,
-//         feedbackEnabled,
-//         feedbackFormCount
-//       }
-//     });
-//   } catch (err) {
-//     return next(err);
-//   }
-// };
 
 const getStudentProfileView = async (req, res, next) => {
   try {
