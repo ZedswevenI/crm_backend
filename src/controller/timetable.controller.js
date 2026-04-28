@@ -192,7 +192,8 @@ const buildDaySchedule = (tt, dateEpochMs) => {
 };
 
 const checkStaffConflicts = async (tenantId, facultyId, date, day, startMin, endMin, excludeTimetableId = null, includeDrafts = false, periodType = null, mode = null) => {
-  const incomingIsMass = safeTrim(mode).toUpperCase() === 'ONLINE' || safeTrim(periodType).toUpperCase() === 'PT' || safeTrim(periodType).toUpperCase() === 'YOGA';
+  // const incomingIsMass = safeTrim(mode).toUpperCase() === 'ONLINE' || safeTrim(periodType).toUpperCase() === 'PT' || safeTrim(periodType).toUpperCase() === 'YOGA';
+  const incomingIsMass = safeTrim(mode).toUpperCase() === 'ONLINE' || ['PT', 'YOGA', 'EXAM'].includes(safeTrim(periodType).toUpperCase());
   if (incomingIsMass) return { conflict: false, facultyName: null };
   const staff = await Staff.findOne({ staffId: facultyId, tenantId, isdeleted: false }).lean();
   if (staff?.weekoff?.includes(day))
@@ -223,7 +224,8 @@ const checkStaffConflicts = async (tenantId, facultyId, date, day, startMin, end
       //     };
       // }
       if (currentFaculty === String(facultyId)) {
-        const existingIsMass = safeTrim(p.mode).toUpperCase() === 'ONLINE' || safeTrim(p.periodType).toUpperCase() === 'PT' || safeTrim(p.periodType).toUpperCase() === 'YOGA';
+        // const existingIsMass = safeTrim(p.mode).toUpperCase() === 'ONLINE' || safeTrim(p.periodType).toUpperCase() === 'PT' || safeTrim(p.periodType).toUpperCase() === 'YOGA';
+        const existingIsMass = safeTrim(p.mode).toUpperCase() === 'ONLINE' || ['PT', 'YOGA', 'EXAM'].includes(safeTrim(p.periodType).toUpperCase());
         if (existingIsMass) continue;
         const pStart = toInt(p.time?.startMin);
         const pEnd = toInt(p.time?.endMin);
@@ -241,7 +243,7 @@ const checkStaffConflicts = async (tenantId, facultyId, date, day, startMin, end
 
 const validateStaffSubject = async (tenantId, batchCode, facultyId, subjectId, periodType) => {
   const pt = safeTrim(periodType).toUpperCase();
-  if (['PT', 'YOGA'].includes(pt)) return { ok: true };
+  if (['PT', 'YOGA', 'EXAM'].includes(pt)) return { ok: true };
   if (!subjectId || !facultyId) return { ok: true };
   const [batch, staff, subjectDoc] = await Promise.all([
     Batch.findOne({ tenantId, batchCode, isdeleted: false }, { staffMap: 1 }).lean(),
@@ -1607,13 +1609,11 @@ const validateSchedule = async (req, res, next) => {
           const mode = safeTrim(p?.mode).toUpperCase() || 'OFFLINE';
           const startMin = toInt(p?.time?.startMin, -1);
           const endMin = toInt(p?.time?.endMin, -1);
-
           // ── Check 4: periodNo >= 1 ──────────────────────────────────────────
           if (periodNo < 1) {
             conflicts.push({ batchCode, day, periodNo: p?.periodNo, message: `periodNo must be >= 1` });
             continue;
           }
-
           // ── Check 5: Valid time range ───────────────────────────────────────
           if (startMin < 0 || startMin > 1439) {
             conflicts.push({ batchCode, day, periodNo, message: `Period ${periodNo}: invalid startMin (${startMin})` });
@@ -1646,9 +1646,7 @@ const validateSchedule = async (req, res, next) => {
             continue;
           }
           seenPeriods.push({ periodNo, startMin, endMin });
-
-          const isMassClass = mode === 'ONLINE' || periodType === 'PT' || periodType === 'YOGA';
-
+          const isMassClass = mode === 'ONLINE' || ['PT', 'YOGA', 'EXAM'].includes(periodType);
           // ── Check 8: Staff exists ───────────────────────────────────────────
           const staff = await getStaff(facultyId);
           if (!staff) {
