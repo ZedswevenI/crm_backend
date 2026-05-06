@@ -18,6 +18,7 @@ import feedbackRoute from './feedback.routes.js';
 import reportRoute from './reports.routes.js';
 import dashboardRoute from './dashboard.routes.js';
 import performanceRoute from './performance.routes.js';
+import communicationRoutes from './communication.routes.js';
 
 routes.post('/healthcheck', (req, res) => {
   try {
@@ -42,5 +43,6 @@ routes.use('/exam', mockexamRoute);
 routes.use('/feedback', feedbackRoute);
 routes.use('/reports', reportRoute);
 routes.use('/performance', performanceRoute);
+routes.use('/communication', communicationRoutes);
 
 export default routes;

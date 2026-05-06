@@ -76,6 +76,7 @@ routes.post('/result/batch-performance', mockExamResultController.getBatchPerfor
 routes.post('/result/compare-topper', mockExamResultController.compareWithTopper);
 routes.post('/result/analytics/question-wise', validatetoken, mockExamResultController.getExamQuestionWiseReport);
 routes.post('/result/analytics/participants', validatetoken, mockExamResultController.getExamParticipantsReport);
+routes.post('/result/bulk-upload-historical', validatetoken, mockExamController.bulkUploadHistorical);
 
 routes.post('/instruction/create', validatetoken, instructionController.createInstruction);
 routes.post('/instruction/update', validatetoken, instructionController.updateInstruction);
