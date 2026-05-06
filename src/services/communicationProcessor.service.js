@@ -3,6 +3,7 @@ import CommunicationRecipientLog from '../models/communicationrecipientlog.model
 import { sendMailgunEmail } from './mailgun.service.js';
 
 export const processCommunicationCampaign = async ({ tenantId, campaignId }) => {
+  console.log('method called for email');
   const campaign = await CommunicationCampaign.findOne({
     tenantId,
     campaignId,

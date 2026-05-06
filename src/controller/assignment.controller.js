@@ -11,6 +11,7 @@ import SubTopic from '../models/subtopic.model.js';
 import BatchAssignEnable from '../models/batchenabledAssignment.model.js';
 import AssignmentResult from '../models/assignmentResult.model.js';
 import { syncOnAssignmentSubmit } from '../helpers/performanceSync.helper.js';
+import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
 
 const pickTenantId = (req) => String(req.body?.entiId || req.body?.tenantId || '').trim();
 const safeTrim = (v) => (v === null || v === undefined ? '' : String(v)).trim();
@@ -468,6 +469,34 @@ const enableTeststoBatch = async (req, res, next) => {
       });
     }
     await BatchAssignEnable.bulkWrite(ops, { ordered: false });
+    // for (const st of students) {
+    //   triggerCommunicationEventSafe({
+    //     tenantId,
+    //     eventCode: 'ASSIGNMENT_ENABLED',
+    //     admissionNo: st.admissionNo,
+    //     studentId: st.studentId,
+    //     sourceModule: 'ASSIGNMENT',
+    //     sourceRefId: tests
+    //       .map((x) => safeTrim(x?.testId))
+    //       .filter(Boolean)
+    //       .join(','),
+    //     userId,
+    //     extraData: {
+    //       batchId,
+    //       subjectId,
+    //       classNo,
+    //       assignmentCount: tests.length,
+    //       testIds: tests
+    //         .map((x) => safeTrim(x?.testId))
+    //         .filter(Boolean)
+    //         .join(', '),
+    //       testNos: tests
+    //         .map((x) => safeTrim(x?.testNo))
+    //         .filter(Boolean)
+    //         .join(', ')
+    //     }
+    //   });
+    // }
     return res.status(constants.HTTPS_SUCCESS).json({
       status: true,
       message: 'Tests enabled successfully'
@@ -732,6 +761,28 @@ const submitAssignmentResult = async (req, res, next) => {
       batchId,
       subjectId
     }).catch(() => {});
+    // triggerCommunicationEventSafe({
+    //   tenantId,
+    //   eventCode: 'ASSIGNMENT_RESULT_PUBLISHED',
+    //   admissionNo,
+    //   studentId: safeTrim(req.body?.studentId) || null,
+    //   sourceModule: 'ASSIGNMENT',
+    //   sourceRefId: testId,
+    //   userId: safeTrim(req.body?.userId) || safeTrim(req.body?.createdBy) || null,
+    //   extraData: {
+    //     testId,
+    //     testNo: safeTrim(assignment.testNo),
+    //     testCode: safeTrim(assignment.testCode),
+    //     classNo,
+    //     batchId,
+    //     subjectId,
+    //     totalQuestions: toNum(req.body?.totalQuestions) || evaluated.length,
+    //     obtainedMarks,
+    //     totalPossibleMarks,
+    //     cgpa: calcCgpa10(obtainedMarks, totalPossibleMarks),
+    //     completedAt
+    //   }
+    // });
     return res.status(constants.HTTPS_SUCCESS).json({
       status: true,
       message: 'Test result submitted',

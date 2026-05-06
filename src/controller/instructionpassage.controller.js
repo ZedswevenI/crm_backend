@@ -7,7 +7,6 @@ import s3Client from '../middlewares/s3config.js';
 import ExamInstruction from '../models/mockExamInstruction.model.js';
 import ExamPassage from '../models/passage.model.js';
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
 const safeTrim = (v) => (v == null ? '' : String(v)).trim();
 const pickTid = (req) => safeTrim(req.body?.entiId || req.body?.tenantId);
 const pickUid = (req) => safeTrim(req.body?.userId || req.user?.userId);

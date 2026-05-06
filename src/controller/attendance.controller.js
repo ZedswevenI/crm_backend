@@ -174,7 +174,6 @@ const getAbsenteesReport = async (req, res, next) => {
     if (studentId) {
       pipeline.push({ $match: { 'students.studentId': safeTrim(studentId) } });
     }
-
     pipeline.push({
       $lookup: {
         from: 'studentprofiles',
@@ -183,11 +182,9 @@ const getAbsenteesReport = async (req, res, next) => {
         as: 'studentProfileDoc'
       }
     });
-
     pipeline.push({
       $unwind: { path: '$studentProfileDoc', preserveNullAndEmptyArrays: true }
     });
-
     pipeline.push({
       $project: {
         _id: 0,
@@ -205,56 +202,12 @@ const getAbsenteesReport = async (req, res, next) => {
         parentPhone: '$studentProfileDoc.student.parentPhone'
       }
     });
-
     const absentees = await Attendance.aggregate(pipeline);
     return res.status(200).json({ status: true, data: absentees, count: absentees.length });
   } catch (err) {
     return next(err);
   }
 };
-
-// const getPendingAttendance = async (req, res, next) => {
-//   try {
-//     const tenantId = pickTenantId(req);
-//     const date = toInt(req.body?.date, 0);
-//     const batchCode = safeTrim(req.body?.batchCode);
-//     if (!tenantId || !date) {
-//       return res.status(400).json({ status: false, message: 'tenantId and date are required' });
-//     }
-//     const mondayMs = getPreviousMonday(date);
-//     const ttQuery = { tenantId, isdeleted: false, wkStartOn: mondayMs };
-//     if (batchCode) ttQuery.batchCode = batchCode;
-//     const timetables = await TimeTable.find(ttQuery).lean();
-//     const attQuery = { tenantId, date, isdeleted: false, status: 'Active' };
-//     if (batchCode) attQuery.batchCode = batchCode;
-//     const completedAtt = await Attendance.find(attQuery, { batchCode: 1, periodNo: 1, date: 1 }).lean();
-//     const completedSet = new Set(completedAtt.map((a) => `${a.batchCode}_${a.periodNo}_${a.date}`));
-//     const pending = [];
-//     for (const tt of timetables) {
-//       const activePeriods = getEffectivePeriods(tt, date);
-//       for (const period of activePeriods) {
-//         const key = `${tt.batchCode}_${period.periodNo}_${date}`;
-//         if (!completedSet.has(key)) {
-//           pending.push({
-//             batchCode: tt.batchCode,
-//             timetableId: tt._id,
-//             periodNo: period.periodNo,
-//             periodType: period.periodType,
-//             mode: period.mode,
-//             facultyId: period.facultyId,
-//             facultyName: period.facultyName,
-//             subjectId: period.subjectId,
-//             subjectName: period.subjectName,
-//             time: period.time || null
-//           });
-//         }
-//       }
-//     }
-//     return res.status(200).json({ status: true, data: pending, count: pending.length });
-//   } catch (err) {
-//     return next(err);
-//   }
-// };
 
 const getPendingAttendance = async (req, res, next) => {
   try {
@@ -343,7 +296,6 @@ const getStaffSchedule = async (req, res, next) => {
       });
     }
     myClasses.sort((a, b) => (a.time?.startMin || 0) - (b.time?.startMin || 0));
-
     if (!myClasses.length) {
       return res.status(200).json({ status: true, data: [], count: 0 });
     }
@@ -439,7 +391,6 @@ const getStudentsForAttendance = async (req, res, next) => {
         message: 'tenantId, batchCode, date, and periodNo are required'
       });
     }
-    console.log('batchCode ', batchCode);
     const students = await StudentProfile.find({ tenantId, batchCode, status: 'ACTIVE', isdeleted: false }, { studentId: 1, admissionNo: 1, 'student.name': 1 }).sort({ 'student.name': 1 }).lean();
     if (!students.length) {
       return res.status(200).json({
@@ -580,133 +531,14 @@ const listAttendanceByDate = async (req, res, next) => {
   }
 };
 
-// const getScheduleWithAttendance = async (req, res, next) => {
-//   try {
-//     const tenantId = pickTenantId(req);
-//     const date = toInt(req.body?.date, 0);
-//     const batchCode = safeTrim(req.body?.batchCode);
-//     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-//     if (!date) return res.status(400).json({ status: false, message: 'date is required' });
-//     const mondayMs = getPreviousMonday(date);
-//     const ttQuery = {
-//       tenantId,
-//       isdeleted: false,
-//       status: 'Active',
-//       wkStartOn: { $lte: mondayMs }
-//     };
-//     if (batchCode) ttQuery.batchCode = batchCode;
-//     const allTimetables = await TimeTable.find(ttQuery).lean();
-//     const ttByBatch = new Map();
-//     for (const tt of allTimetables) {
-//       const existing = ttByBatch.get(tt.batchCode);
-//       if (!existing || toInt(tt.wkStartOn) > toInt(existing.wkStartOn)) {
-//         ttByBatch.set(tt.batchCode, tt);
-//       }
-//     }
-//     if (!ttByBatch.size) {
-//       return res.status(200).json({ status: true, message: 'No active timetables found', data: [], count: 0 });
-//     }
-//     const allPeriods = [];
-//     for (const tt of ttByBatch.values()) {
-//       const periods = getEffectivePeriods(tt, date);
-//       for (const p of periods) {
-//         allPeriods.push({
-//           batchCode: tt.batchCode,
-//           timetableId: tt._id,
-//           ...p
-//         });
-//       }
-//     }
-//     if (!allPeriods.length) {
-//       return res.status(200).json({ status: true, message: 'No periods scheduled for this date', data: [], count: 0 });
-//     }
-//     const batchCodes = [...new Set(allPeriods.map((p) => p.batchCode))];
-//     const periodNos = [...new Set(allPeriods.map((p) => p.periodNo))];
-//     const attRecords = await Attendance.find({
-//       tenantId,
-//       batchCode: { $in: batchCodes },
-//       periodNo: { $in: periodNos },
-//       date,
-//       isdeleted: false
-//     }).lean();
-//     const attMap = new Map(attRecords.map((a) => [`${a.batchCode}_${a.periodNo}`, a]));
-//     const data = allPeriods.map((period) => {
-//       const attDoc = attMap.get(`${period.batchCode}_${period.periodNo}`) || null;
-//       const students = Array.isArray(attDoc?.students) ? attDoc.students : [];
-//       const attendance = attDoc
-//         ? {
-//             isMarked: true,
-//             attendanceId: attDoc._id,
-//             markedAt: attDoc.updatedAt || attDoc.createdAt || null,
-//             markedBy: attDoc.updatedBy || attDoc.createdBy || null,
-//             topicTaught: attDoc.topicTaught || null,
-//             feedback: attDoc.feedback || null,
-//             totalCount: students.length,
-//             presentCount: students.filter((s) => s.status === 'PRESENT').length,
-//             absentCount: students.filter((s) => s.status === 'ABSENT').length,
-//             lateCount: students.filter((s) => s.status === 'LATE').length
-//           }
-//         : {
-//             isMarked: false,
-//             attendanceId: null,
-//             markedAt: null,
-//             markedBy: null,
-//             topicTaught: null,
-//             feedback: null,
-//             totalCount: null,
-//             presentCount: null,
-//             absentCount: null,
-//             lateCount: null
-//           };
-//       return {
-//         batchCode: period.batchCode,
-//         timetableId: period.timetableId,
-//         periodNo: period.periodNo,
-//         periodType: period.periodType || null,
-//         mode: period.mode || null,
-//         time: period.time || null,
-//         facultyId: period.replacementFacultyId || period.facultyId || null,
-//         facultyName: period.facultyName || null,
-//         subjectId: period.subjectId || null,
-//         subjectName: period.subjectName || null,
-//         subjectCode: period.subjectCode || null,
-//         venue: period.venue || null,
-//         topic: period.topic || null,
-//         zoomUrl: period.zoomUrl || null,
-//         phaseId: period.phaseId || null,
-//         phaseName: period.phaseName || null,
-//         attendance
-//       };
-//     });
-//     data.sort((a, b) => a.batchCode.localeCompare(b.batchCode) || (a.periodNo || 0) - (b.periodNo || 0));
-//     return res.status(200).json({
-//       status: true,
-//       message: 'Schedule with attendance loaded',
-//       date,
-//       count: data.length,
-//       data
-//     });
-//   } catch (err) {
-//     return next(err);
-//   }
-// };
-
 const getScheduleWithAttendance = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     const date = toInt(req.body?.date, 0);
-    const batchCode = safeTrim(req.body?.batchCode); // optional filter
-
+    const batchCode = safeTrim(req.body?.batchCode);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
     if (!date) return res.status(400).json({ status: false, message: 'date is required' });
-
-    // mondayMs = the Monday of the week containing the requested date
     const mondayMs = getPreviousMonday(date);
-
-    // ── 1. Find Active timetables whose wkStartOn == mondayMs exactly ─────────
-    // Only serve periods from timetables that explicitly cover this week.
-    // Using $lte would carry forward old timetable templates into future weeks
-    // that were never published, returning phantom periods for unscheduled dates.
     const ttQuery = {
       tenantId,
       isdeleted: false,
@@ -777,7 +609,6 @@ const getScheduleWithAttendance = async (req, res, next) => {
             absentCount: null,
             lateCount: null
           };
-
       return {
         batchCode: period.batchCode,
         timetableId: period.timetableId,

@@ -17,6 +17,11 @@ routes.post('/logs/list', validatetoken, communicationCtrl.listLogs);
 routes.post('/logs/view', validatetoken, communicationCtrl.viewLog);
 routes.post('/logs/retry', validatetoken, communicationCtrl.retryFailedLog);
 
+routes.post('/event-config/save', validatetoken, communicationCtrl.saveEventConfig);
+routes.post('/event-config/list', validatetoken, communicationCtrl.listEventConfigs);
+routes.post('/event-config/toggle', validatetoken, communicationCtrl.toggleEventConfig);
+routes.post('/event-config/delete', validatetoken, communicationCtrl.deleteEventConfig);
+
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Communication routes' }));
 
 export default routes;

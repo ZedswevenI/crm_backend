@@ -5,9 +5,11 @@ const mailgun = new Mailgun(formData);
 
 const getClient = () => {
   if (!process.env.MAILGUN_API_KEY) throw new Error('MAILGUN_API_KEY missing');
+
   return mailgun.client({
     username: 'api',
-    key: process.env.MAILGUN_API_KEY
+    key: String(process.env.MAILGUN_API_KEY || '').trim(),
+    url: String(process.env.MAILGUN_API_URL || 'https://api.mailgun.net').trim()
   });
 };
 
@@ -17,8 +19,8 @@ export const sendMailgunEmail = async ({ to, subject, html, text }) => {
 
   const mg = getClient();
 
-  const resp = await mg.messages.create(process.env.MAILGUN_DOMAIN, {
-    from: process.env.MAILGUN_FROM_EMAIL,
+  return await mg.messages.create(String(process.env.MAILGUN_DOMAIN).trim(), {
+    from: String(process.env.MAILGUN_FROM_EMAIL).trim(),
     to,
     subject,
     html,
@@ -27,6 +29,4 @@ export const sendMailgunEmail = async ({ to, subject, html, text }) => {
     'o:tracking-clicks': true,
     'o:tracking-opens': true
   });
-
-  return resp;
 };

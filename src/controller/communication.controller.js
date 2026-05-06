@@ -5,6 +5,7 @@ import CommunicationRecipientLog from '../models/communicationrecipientlog.model
 import { resolveStudentRecipients } from '../services/recipientResolver.service.js';
 import { buildTemplateDataFromStudent, renderTemplate } from '../services/templateRenderer.service.js';
 import { processCommunicationCampaign } from '../services/communicationProcessor.service.js';
+import CommunicationEventConfig from '../models/communicationeventconfig.model.js';
 
 const pickTenantId = (req) => String(req.body?.entiId || req.body?.tenantId || '').trim();
 const safeTrim = (v) => (v === null || v === undefined ? '' : String(v).trim());
@@ -378,6 +379,112 @@ const retryFailedLog = async (req, res, next) => {
   }
 };
 
+const saveEventConfig = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = pickUserId(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    const eventCode = safeTrim(req.body?.eventCode).toUpperCase();
+    const eventName = safeTrim(req.body?.eventName);
+    const sourceModule = safeTrim(req.body?.sourceModule).toUpperCase() || 'GENERAL';
+    const templateId = safeTrim(req.body?.templateId);
+    if (!eventCode) return res.status(400).json({ status: false, message: 'eventCode is required' });
+    if (!eventName) return res.status(400).json({ status: false, message: 'eventName is required' });
+    if (!templateId) return res.status(400).json({ status: false, message: 'templateId is required' });
+    const template = await CommunicationTemplate.findOne({
+      tenantId,
+      templateId,
+      channel: 'email',
+      status: 'ACTIVE',
+      isdeleted: false
+    }).lean();
+    if (!template) return res.status(404).json({ status: false, message: 'Active email template not found' });
+    const doc = await CommunicationEventConfig.findOneAndUpdate(
+      { tenantId, eventCode, channel: 'email', isdeleted: false },
+      {
+        $set: {
+          tenantId,
+          eventCode,
+          eventName,
+          sourceModule,
+          templateId,
+          channel: 'email',
+          enabled: req.body?.enabled === false ? false : true,
+          updatedBy: userId || null
+        },
+        $setOnInsert: {
+          createdBy: userId || null,
+          isdeleted: false
+        }
+      },
+      { new: true, upsert: true }
+    ).lean();
+    return res.status(200).json({
+      status: true,
+      message: 'Event configuration saved',
+      data: doc
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const listEventConfigs = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    const query = { tenantId, isdeleted: false };
+    const eventCode = safeTrim(req.query?.eventCode).toUpperCase();
+    const sourceModule = safeTrim(req.query?.sourceModule).toUpperCase();
+    if (eventCode) query.eventCode = eventCode;
+    if (sourceModule) query.sourceModule = sourceModule;
+    const rows = await CommunicationEventConfig.find(query).sort({ sourceModule: 1, eventCode: 1 }).lean();
+    return res.status(200).json({
+      status: true,
+      message: 'Event configurations fetched',
+      data: rows
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const toggleEventConfig = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = pickUserId(req);
+    const configId = safeTrim(req.body?.configId);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    if (!configId) return res.status(400).json({ status: false, message: 'configId is required' });
+    const doc = await CommunicationEventConfig.findOne({ tenantId, configId, isdeleted: false });
+    if (!doc) return res.status(404).json({ status: false, message: 'Event configuration not found' });
+    doc.enabled = req.body?.enabled === true;
+    doc.updatedBy = userId || null;
+    await doc.save();
+    return res.status(200).json({
+      status: true,
+      message: doc.enabled ? 'Event enabled' : 'Event disabled',
+      data: doc
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const deleteEventConfig = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = pickUserId(req);
+    const configId = safeTrim(req.body?.configId);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    if (!configId) return res.status(400).json({ status: false, message: 'configId is required' });
+    await CommunicationEventConfig.updateOne({ tenantId, configId, isdeleted: false }, { $set: { isdeleted: true, updatedBy: userId || null } });
+    return res.status(200).json({ status: true, message: 'Event configuration deleted' });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   createTemplate,
   updateTemplate,
@@ -389,5 +496,9 @@ export default {
   listCampaigns,
   listLogs,
   viewLog,
-  retryFailedLog
+  retryFailedLog,
+  saveEventConfig,
+  listEventConfigs,
+  toggleEventConfig,
+  deleteEventConfig
 };
