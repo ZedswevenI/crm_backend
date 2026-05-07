@@ -1223,6 +1223,7 @@ const bulkUploadHistorical = async (req, res, next) => {
             }
           ],
           reevaluateLogs: [],
+          isImported: true,
           isdeleted: false,
           createdBy: userId || null,
           updatedBy: userId || null
@@ -1264,6 +1265,68 @@ const bulkUploadHistorical = async (req, res, next) => {
       }
       validStudents.push({ ...s, _profile: profile });
     }
+    // const resultDocs = validStudents.map((s) => {
+    //   const admNo = safeTrim(s.admissionNo);
+    //   const profile = s._profile;
+    //   const secResults = (Array.isArray(s.sectionResults) ? s.sectionResults : []).map((sr) => {
+    //     const sid = safeTrim(sr.sectionId);
+    //     const secMeta = secMap.get(sid) || {};
+    //     return {
+    //       sectionId: sid,
+    //       subjectId: secMeta.subjectId || null,
+    //       totalQuestions: toNum(sr.totalQuestions) || 0,
+    //       answeredCount: toNum(sr.answeredCount) || 0,
+    //       correctCount: toNum(sr.correctCount) || 0,
+    //       wrongCount: toNum(sr.wrongCount) || 0,
+    //       skippedCount: toNum(sr.skippedCount) || 0,
+    //       obtainedMarks: toNum(sr.obtainedMarks) || 0,
+    //       timeTaken: toNum(sr.timeTaken) || 0
+    //     };
+    //   });
+    //   const obtainedMarks = toNum(s.obtainedMarks) || 0;
+    //   return {
+    //     tenantId,
+    //     examId: newExamId,
+    //     admissionNo: admNo,
+    //     studentId: safeTrim(profile.studentId) || null,
+    //     batchId: safeTrim(s.batchId) || null,
+    //     centerId: safeTrim(s.centerId) || safeTrim(profile.centerId) || null,
+    //     classNo: s.classNo ? toNum(s.classNo) : profile.classNo || null,
+    //     obtainedMarks,
+    //     totalMarks,
+    //     sectionResults: secResults,
+    //     answers: [],
+    //     totalQuestions: secResults.reduce((sum, sr) => sum + sr.totalQuestions, 0) || 0,
+    //     correctCount: secResults.reduce((sum, sr) => sum + sr.correctCount, 0) || 0,
+    //     wrongCount: secResults.reduce((sum, sr) => sum + sr.wrongCount, 0) || 0,
+    //     skippedCount: secResults.reduce((sum, sr) => sum + sr.skippedCount, 0) || 0,
+    //     answeredCount: secResults.reduce((sum, sr) => sum + sr.answeredCount, 0) || 0,
+    //     startedAt: s.startedAt ? toNum(s.startedAt) : null,
+    //     completedAt: s.completedAt ? toNum(s.completedAt) : now,
+    //     timeTaken: s.timeTaken ? toNum(s.timeTaken) : 0,
+    //     isLate: s.isLate === true,
+    //     rank: null,
+    //     percentile: null,
+    //     status: 'result_published',
+    //     isResultVisible: true,
+    //     graceLogs: [],
+    //     publishHistory: [
+    //       {
+    //         action: 'publish',
+    //         publishedAt: now,
+    //         publishedBy: userId || null,
+    //         obtainedMarksBefore: null,
+    //         obtainedMarksAfter: obtainedMarks,
+    //         rankBefore: null,
+    //         rankAfter: null,
+    //         note: 'Historical bulk upload'
+    //       }
+    //     ],
+    //     isdeleted: false,
+    //     createdBy: userId || null,
+    //     updatedBy: userId || null
+    //   };
+    // });
     const resultDocs = validStudents.map((s) => {
       const admNo = safeTrim(s.admissionNo);
       const profile = s._profile;
@@ -1282,7 +1345,14 @@ const bulkUploadHistorical = async (req, res, next) => {
           timeTaken: toNum(sr.timeTaken) || 0
         };
       });
+
       const obtainedMarks = toNum(s.obtainedMarks) || 0;
+      const totalQuestions = secResults.reduce((sum, sr) => sum + sr.totalQuestions, 0) || 0;
+      const correctCount = secResults.reduce((sum, sr) => sum + sr.correctCount, 0) || 0;
+      const wrongCount = secResults.reduce((sum, sr) => sum + sr.wrongCount, 0) || 0;
+      const skippedCount = secResults.reduce((sum, sr) => sum + sr.skippedCount, 0) || 0;
+      const answeredCount = secResults.reduce((sum, sr) => sum + sr.answeredCount, 0) || 0;
+
       return {
         tenantId,
         examId: newExamId,
@@ -1295,11 +1365,11 @@ const bulkUploadHistorical = async (req, res, next) => {
         totalMarks,
         sectionResults: secResults,
         answers: [],
-        totalQuestions: secResults.reduce((sum, sr) => sum + sr.totalQuestions, 0) || 0,
-        correctCount: secResults.reduce((sum, sr) => sum + sr.correctCount, 0) || 0,
-        wrongCount: secResults.reduce((sum, sr) => sum + sr.wrongCount, 0) || 0,
-        skippedCount: secResults.reduce((sum, sr) => sum + sr.skippedCount, 0) || 0,
-        answeredCount: secResults.reduce((sum, sr) => sum + sr.answeredCount, 0) || 0,
+        totalQuestions,
+        correctCount,
+        wrongCount,
+        skippedCount,
+        answeredCount,
         startedAt: s.startedAt ? toNum(s.startedAt) : null,
         completedAt: s.completedAt ? toNum(s.completedAt) : now,
         timeTaken: s.timeTaken ? toNum(s.timeTaken) : 0,
@@ -1308,6 +1378,7 @@ const bulkUploadHistorical = async (req, res, next) => {
         percentile: null,
         status: 'result_published',
         isResultVisible: true,
+        isImported: true,
         graceLogs: [],
         publishHistory: [
           {

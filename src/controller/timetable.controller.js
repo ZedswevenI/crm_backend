@@ -68,11 +68,10 @@ const normalizePeriod = (p) => {
   if (periodNo <= 0) return { ok: false, msg: 'periodNo must be >= 1' };
   if (p?.day !== undefined && !isValidDay(day)) return { ok: false, msg: 'Invalid day' };
   const periodType = safeTrim(p?.periodType) || 'LECTURE';
-  // if (!['LECTURE', 'EXAM', 'LAB', 'TUTORIAL', 'TEST', 'REVISION'].includes(periodType)) return { ok: false, msg: 'periodType must be LECTURE|EXAM|LAB|TUTORIAL|TEST|REVISION' };
   if (!['LECTURE', 'EXAM', 'LAB', 'TUTORIAL', 'TEST', 'REVISION', 'PT', 'YOGA'].includes(periodType)) return { ok: false, msg: 'periodType must be LECTURE|EXAM|LAB|TUTORIAL|TEST|REVISION|PT|YOGA' };
   let mode = safeTrim(p?.mode) || 'OFFLINE';
   if (!['OFFLINE', 'ONLINE'].includes(mode)) return { ok: false, msg: 'mode must be OFFLINE or ONLINE' };
-  if (['PT', 'YOGA'].includes(periodType)) mode = 'OFFLINE';
+  if (['PT', 'YOGA', 'EXAM'].includes(periodType)) mode = 'OFFLINE';
   return {
     ok: true,
     period: {
@@ -174,7 +173,6 @@ const buildDaySchedule = (tt, dateEpochMs) => {
       const toNo = toInt(ov?.toPeriodNo, 0);
       if (!fromNo || !toNo) continue;
       const src = snapshot.find((p) => toInt(p?.periodNo) === fromNo);
-      // FIX G8: skip if source period is cancelled
       if (!src || src.isCancelled) continue;
       const destIdx = periods.findIndex((p) => toInt(p?.periodNo) === toNo);
       if (destIdx !== -1) periods[destIdx] = { ...src, periodNo: toNo };
@@ -186,13 +184,11 @@ const buildDaySchedule = (tt, dateEpochMs) => {
       }
     }
   }
-
   periods.sort((a, b) => toInt(a?.periodNo) - toInt(b?.periodNo));
   return { date: dateEpochMs, day: dayName, isHoliday: false, holidayReason: null, periods };
 };
 
 const checkStaffConflicts = async (tenantId, facultyId, date, day, startMin, endMin, excludeTimetableId = null, includeDrafts = false, periodType = null, mode = null) => {
-  // const incomingIsMass = safeTrim(mode).toUpperCase() === 'ONLINE' || safeTrim(periodType).toUpperCase() === 'PT' || safeTrim(periodType).toUpperCase() === 'YOGA';
   const incomingIsMass = safeTrim(mode).toUpperCase() === 'ONLINE' || ['PT', 'YOGA', 'EXAM'].includes(safeTrim(periodType).toUpperCase());
   if (incomingIsMass) return { conflict: false, facultyName: null };
   const staff = await Staff.findOne({ staffId: facultyId, tenantId, isdeleted: false }).lean();
@@ -213,18 +209,7 @@ const checkStaffConflicts = async (tenantId, facultyId, date, day, startMin, end
     for (const p of daySched.periods || []) {
       if (p.isCancelled) continue;
       const currentFaculty = p.replacementFacultyId || p.facultyId;
-      // if (currentFaculty === String(facultyId)) {
-      //   const pStart = toInt(p.time?.startMin);
-      //   const pEnd = toInt(p.time?.endMin);
-      //   if (startMin < pEnd && endMin > pStart)
-      //     return {
-      //       conflict: true,
-      //       message: `Faculty already booked in batch ${tt.batchCode} from ${p.time?.startLabel || pStart} to ${p.time?.endLabel || pEnd}.`,
-      //       facultyName: staff?.staffName || staff?.name || null
-      //     };
-      // }
       if (currentFaculty === String(facultyId)) {
-        // const existingIsMass = safeTrim(p.mode).toUpperCase() === 'ONLINE' || safeTrim(p.periodType).toUpperCase() === 'PT' || safeTrim(p.periodType).toUpperCase() === 'YOGA';
         const existingIsMass = safeTrim(p.mode).toUpperCase() === 'ONLINE' || ['PT', 'YOGA', 'EXAM'].includes(safeTrim(p.periodType).toUpperCase());
         if (existingIsMass) continue;
         const pStart = toInt(p.time?.startMin);
@@ -273,19 +258,6 @@ const validateStaffSubject = async (tenantId, batchCode, facultyId, subjectId, p
       };
     }
   }
-  // const staffSubjects = Array.isArray(staff.subject) ? staff.subject : [];
-  // if (!staffSubjects.some((sid) => String(sid) === subjectId)) {
-  // if (
-  //   !staffSubjects.some((sid) => {
-  //     const id = sid?._id ? String(sid._id) : String(sid);
-  //     return id === subjectId;
-  //   })
-  // ) {
-  //   return {
-  //     ok: false,
-  //     msg: `${staff.staffName} does not have subject ${subjectLabel} in their profile.`
-  //   };
-  // }
   const rawSubject = staff.subject;
   const normalizedSubjects = Array.isArray(rawSubject) ? rawSubject.map((x) => String(x?._id || x)) : rawSubject ? [String(rawSubject?._id || rawSubject)] : [];
   if (!normalizedSubjects.some((id) => id === subjectId)) {
@@ -460,20 +432,6 @@ const cancelWholeDay = async (req, res, next) => {
     if (dateWkStart !== toInt(tt.wkStartOn)) return res.status(400).json({ status: false, message: `Date does not belong to this timetable's week (wkStartOn: ${tt.wkStartOn})` });
     const d = new Date(date);
     const day = DAYS[d.getUTCDay() === 0 ? 6 : d.getUTCDay() - 1];
-    // if (!isPublished(tt)) {
-    //   const dayIdx = (tt.week || []).findIndex((wd) => wd.day === day);
-    //   if (dayIdx >= 0) {
-    //     tt.week[dayIdx].periods = tt.week[dayIdx].periods.map((p) => ({
-    //       ...(p.toObject?.() ?? p),
-    //       isCancelled: true,
-    //       cancelReason: reason
-    //     }));
-    //     tt.markModified('week');
-    //   }
-    //   tt.updatedBy = userId || null;
-    //   await tt.save();
-    //   return res.json({ status: true, message: 'Day cancelled (draft)' });
-    // }
     if (!isPublished(tt)) {
       const dayIdx = (tt.week || []).findIndex((wd) => wd.day === day);
       if (dayIdx >= 0) {
@@ -600,106 +558,6 @@ const cancelPeriod = async (req, res, next) => {
   }
 };
 
-// const rearrangeStaff = async (req, res, next) => {
-//   try {
-//     const tenantId = pickTenantId(req);
-//     const timetableId = safeTrim(req.body?.timetableId);
-//     const date = toInt(req.body?.date, 0);
-//     const day = normDay(req.body?.day);
-//     const periodNo = toInt(req.body?.periodNo, 0);
-//     const newFacultyId = safeTrim(req.body?.newFacultyId);
-//     const newFacultyName = safeTrim(req.body?.newFacultyName);
-//     const userId = safeTrim(req.body?.userId);
-//     if (!tenantId || !timetableId || !periodNo || !newFacultyId || !day) return res.status(400).json({ status: false, message: 'Missing required fields' });
-//     const tt = await TimeTable.findOne({ _id: timetableId, tenantId, isdeleted: false });
-//     if (!tt) return res.status(404).json({ status: false, message: 'Timetable not found' });
-//     if (!isPublished(tt)) {
-//       const dayIdx = (tt.week || []).findIndex((d) => d.day === day);
-//       if (dayIdx < 0) return res.status(400).json({ status: false, message: `Day ${day} not found` });
-//       const pIdx = tt.week[dayIdx].periods.findIndex((p) => toInt(p?.periodNo) === periodNo);
-//       if (pIdx < 0) return res.status(400).json({ status: false, message: 'Period not found' });
-//       const draftPeriod = tt.week[dayIdx].periods[pIdx];
-//       const draftSubjectId = safeTrim(draftPeriod?.subjectId || '');
-//       const draftPeriodType = safeTrim(draftPeriod?.periodType || '');
-//       if (draftSubjectId && !['PT', 'YOGA'].includes(draftPeriodType.toUpperCase())) {
-//         const [newStaff, subjectDoc] = await Promise.all([Staff.findOne({ tenantId, staffId: newFacultyId, isdeleted: false }, { staffName: 1, subject: 1, facultyType: 1 }).lean(), Subject.findOne({ _id: draftSubjectId, isdeleted: false }, { subjectName: 1, subjectCode: 1 }).lean()]);
-//         if (!newStaff) {
-//           return res.status(400).json({ status: false, message: `Replacement staff ${newFacultyId} not found` });
-//         }
-//         if (safeTrim(newStaff.facultyType).toUpperCase() !== 'TEACHING') {
-//           return res.status(400).json({ status: false, message: `${newStaff.staffName} is not a TEACHING staff` });
-//         }
-//         const staffSubjects = Array.isArray(newStaff.subject) ? newStaff.subject : [];
-//         // if (!staffSubjects.some((sid) => String(sid) === draftSubjectId)) {
-//         if (
-//           !staffSubjects.some((sid) => {
-//             const id = sid?._id ? String(sid._id) : String(sid);
-//             return id === draftSubjectId;
-//           })
-//         ) {
-//           const subjectLabel = subjectDoc ? `"${subjectDoc.subjectName}${subjectDoc.subjectCode ? ' (' + subjectDoc.subjectCode + ')' : ''}"` : `ID: ${draftSubjectId}`;
-//           return res.status(400).json({
-//             status: false,
-//             message: `${newStaff.staffName} does not have subject ${subjectLabel} in their profile. Cannot assign as replacement.`
-//           });
-//         }
-//       }
-//       tt.week[dayIdx].periods[pIdx].facultyId = newFacultyId;
-//       tt.week[dayIdx].periods[pIdx].facultyName = newFacultyName || null;
-//       tt.week[dayIdx].periods[pIdx].replacementFacultyId = newFacultyId;
-//       tt.markModified('week');
-//       tt.updatedBy = userId || null;
-//       await tt.save();
-//       return res.json({ status: true, message: 'Staff updated (draft)' });
-//     }
-//     if (!date) return res.status(400).json({ status: false, message: 'date required for published timetable' });
-//     const baseObj = findEffectivePeriodBase(tt, day, periodNo, date);
-//     if (!baseObj) return res.status(400).json({ status: false, message: 'Period not found' });
-//     const check = await checkStaffConflicts(tenantId, newFacultyId, date, day, toInt(baseObj?.time?.startMin), toInt(baseObj?.time?.endMin), timetableId, false, baseObj?.periodType, baseObj?.mode);
-//     if (check.conflict) return res.status(400).json({ status: false, message: check.message });
-//     const subjectIdForPeriod = safeTrim(baseObj?.subjectId || '');
-//     const ptForPeriod = safeTrim(baseObj?.periodType || '');
-//     if (subjectIdForPeriod && !['PT', 'YOGA'].includes(ptForPeriod.toUpperCase())) {
-//       const [newStaff, subjectDoc] = await Promise.all([Staff.findOne({ tenantId, staffId: newFacultyId, isdeleted: false }, { staffName: 1, subject: 1, facultyType: 1 }).lean(), Subject.findOne({ _id: subjectIdForPeriod, isdeleted: false }, { subjectName: 1, subjectCode: 1 }).lean()]);
-//       if (!newStaff) {
-//         return res.status(400).json({ status: false, message: `Replacement staff ${newFacultyId} not found` });
-//       }
-//       if (safeTrim(newStaff.facultyType).toUpperCase() !== 'TEACHING') {
-//         return res.status(400).json({ status: false, message: `${newStaff.staffName} is not a TEACHING staff` });
-//       }
-//       const staffSubjects = Array.isArray(newStaff.subject) ? newStaff.subject : [];
-//       // if (!staffSubjects.some((sid) => String(sid) === subjectIdForPeriod)) {
-//       if (
-//         !staffSubjects.some((sid) => {
-//           const id = sid?._id ? String(sid._id) : String(sid);
-//           return id === subjectIdForPeriod;
-//         })
-//       ) {
-//         const subjectLabel = subjectDoc ? `"${subjectDoc.subjectName}${subjectDoc.subjectCode ? ' (' + subjectDoc.subjectCode + ')' : ''}"` : `ID: ${subjectIdForPeriod}`;
-//         return res.status(400).json({
-//           status: false,
-//           message: `${newStaff.staffName} does not have subject ${subjectLabel} in their profile. Cannot assign as replacement.`
-//         });
-//       }
-//     }
-//     upsertPeriodOverride(tt, {
-//       date,
-//       day,
-//       periodNo,
-//       action: 'REPLACE_PERIOD',
-//       period: { ...baseObj, periodNo, facultyId: newFacultyId, facultyName: newFacultyName || null, replacementFacultyId: newFacultyId, isCancelled: false },
-//       reason: 'Faculty rearranged',
-//       updatedBy: userId || null
-//     });
-//     tt.markModified('periodOverrides');
-//     tt.updatedBy = userId || null;
-//     await tt.save();
-//     return res.json({ status: true, message: 'Faculty updated' });
-//   } catch (err) {
-//     return next(err);
-//   }
-// };
-
 const rearrangeStaff = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
@@ -721,7 +579,7 @@ const rearrangeStaff = async (req, res, next) => {
       const draftPeriod = tt.week[dayIdx].periods[pIdx];
       const draftSubjectId = safeTrim(draftPeriod?.subjectId || '');
       const draftPeriodType = safeTrim(draftPeriod?.periodType || '');
-      if (draftSubjectId && !['PT', 'YOGA'].includes(draftPeriodType.toUpperCase())) {
+      if (draftSubjectId && !['PT', 'YOGA', 'EXAM'].includes(draftPeriodType.toUpperCase())) {
         const [newStaff, subjectDoc] = await Promise.all([Staff.findOne({ tenantId, staffId: newFacultyId, isdeleted: false }, { staffName: 1, subject: 1, facultyType: 1 }).lean(), Subject.findOne({ _id: draftSubjectId, isdeleted: false }, { subjectName: 1, subjectCode: 1 }).lean()]);
         if (!newStaff) {
           return res.status(400).json({ status: false, message: `Replacement staff ${newFacultyId} not found` });
@@ -753,7 +611,7 @@ const rearrangeStaff = async (req, res, next) => {
     if (check.conflict) return res.status(400).json({ status: false, message: check.message });
     const subjectIdForPeriod = safeTrim(baseObj?.subjectId || '');
     const ptForPeriod = safeTrim(baseObj?.periodType || '');
-    if (subjectIdForPeriod && !['PT', 'YOGA'].includes(ptForPeriod.toUpperCase())) {
+    if (subjectIdForPeriod && !['PT', 'YOGA', 'EXAM'].includes(ptForPeriod.toUpperCase())) {
       const [newStaff, subjectDoc] = await Promise.all([Staff.findOne({ tenantId, staffId: newFacultyId, isdeleted: false }, { staffName: 1, subject: 1, facultyType: 1 }).lean(), Subject.findOne({ _id: subjectIdForPeriod, isdeleted: false }, { subjectName: 1, subjectCode: 1 }).lean()]);
       if (!newStaff) {
         return res.status(400).json({ status: false, message: `Replacement staff ${newFacultyId} not found` });
@@ -822,10 +680,24 @@ const changePeriod = async (req, res, next) => {
         const toNo = toObj.periodNo;
         const fromTime = fromObj.time;
         const toTime = toObj.time;
-        // periods[fromIdx] = { ...toObj, periodNo: fromNo, time: fromTime };
-        // periods[toIdx] = { ...fromObj, periodNo: toNo, time: toTime };
         periods[fromIdx] = { ...toObj, periodNo: fromNo, time: fromTime, replacementFacultyId: null };
         periods[toIdx] = { ...fromObj, periodNo: toNo, time: toTime, replacementFacultyId: null };
+        // Validate swapped staff against new subjects
+        const batchCode = tt.batchCode;
+        const swappedPairs = [
+          { period: periods[fromIdx], periodNo: fromNo },
+          { period: periods[toIdx], periodNo: toNo }
+        ];
+        for (const { period, periodNo } of swappedPairs) {
+          if (!period?.subjectId || ['PT', 'YOGA', 'EXAM'].includes(safeTrim(period?.periodType).toUpperCase())) continue;
+          const ssCheck = await validateStaffSubject(tenantId, batchCode, period.facultyId, period.subjectId, period.periodType);
+          if (!ssCheck.ok) {
+            return res.status(400).json({
+              status: false,
+              message: `Period ${periodNo} after swap: ${ssCheck.msg}`
+            });
+          }
+        }
       } else {
         periods.splice(fromIdx, 1);
         periods.push({ ...fromObj, periodNo: toPeriodNo });
@@ -837,9 +709,6 @@ const changePeriod = async (req, res, next) => {
       return res.json({ status: true, message: 'Period moved (draft)' });
     }
     if (!date) return res.status(400).json({ status: false, message: 'date required for published timetable' });
-    // const fromBase = findEffectivePeriodBase(tt, day, fromPeriodNo, date);
-    // if (!fromBase) return res.status(400).json({ status: false, message: 'Source period not found' });
-    // const toBase = findEffectivePeriodBase(tt, day, toPeriodNo, date);
     const daySchedule = buildDaySchedule(tt, date);
     const fromBase = (daySchedule.periods || []).find((p) => toInt(p?.periodNo) === fromPeriodNo && !p.isCancelled) || null;
     if (!fromBase) return res.status(400).json({ status: false, message: 'Source period not found or cancelled' });
@@ -1080,13 +949,10 @@ const listTimeTables = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-
     const page = Math.max(parseInt(req.query.page || req.body.page || '1', 10), 1);
     const limit = Math.min(Math.max(parseInt(req.query.limit || req.body.limit || '20', 10), 1), 200);
     const skip = (page - 1) * limit;
-
-    const { list, search, batchCode, centerCode, phase, wkFrom, wkTo, status } = { ...req.query, ...req.body }; // FIX G14: accept filters from both query and body
-
+    const { list, search, batchCode, centerCode, phase, wkFrom, wkTo, status } = { ...req.query, ...req.body };
     const query = { tenantId, isdeleted: false };
     if (batchCode) query.batchCode = safeTrim(batchCode);
     if (centerCode) query.centerCode = safeTrim(centerCode);
@@ -1098,12 +964,10 @@ const listTimeTables = async (req, res, next) => {
       const rx = new RegExp(escapeRegex(search), 'i');
       query.$or = [{ batchCode: rx }, { centerCode: rx }, { phase: rx }];
     }
-
     if (list === 'full') {
       const rows = await TimeTable.find(query).sort({ wkStartOn: -1 }).lean();
       return res.json({ status: true, data: rows, count: rows.length });
     }
-
     const [rows, count] = await Promise.all([TimeTable.find(query).sort({ wkStartOn: -1 }).skip(skip).limit(limit).lean(), TimeTable.countDocuments(query)]);
     return res.json({ status: true, data: rows, count });
   } catch (err) {
@@ -1262,7 +1126,6 @@ const viewBatchScheduleByDate = async (req, res, next) => {
         const d = new Date(curr);
         schedule.push({ date: curr, day: DAYS[d.getUTCDay() === 0 ? 6 : d.getUTCDay() - 1], isHoliday: false, holidayReason: null, periods: [], timetableId: null });
       } else {
-        // schedule.push(buildDaySchedule(tt, curr));
         const daySchedule = buildDaySchedule(tt, curr);
         schedule.push({ ...daySchedule, timetableId: String(tt._id) });
       }
@@ -1280,7 +1143,6 @@ const logLateEntry = async (req, res, next) => {
     const userId = safeTrim(req.body?.userId);
     const { type, personId, personName, timetableId, batchCode, date, periodNo, scheduledStartMin, delayMinutes, reason, entryType } = req.body;
     if (!tenantId || !type || !personId || !timetableId || !date || !periodNo || scheduledStartMin === undefined || delayMinutes === undefined) return res.status(400).json({ status: false, message: 'Missing required fields for late entry' });
-
     const upperType = String(type).toUpperCase();
     if (!['STAFF', 'STUDENT'].includes(upperType)) return res.status(400).json({ status: false, message: 'type must be STAFF or STUDENT' });
     const doc = await LateEntryLog.findOneAndUpdate(
@@ -1301,9 +1163,7 @@ const logLateEntry = async (req, res, next) => {
       },
       { new: true, upsert: true }
     );
-
     if (upperType === 'STUDENT') await Attendance.updateOne({ tenantId, batchCode, date: toInt(date), periodNo: toInt(periodNo), isdeleted: false, 'students.studentId': personId }, { $set: { 'students.$.status': 'LATE' } });
-
     return res.status(200).json({ status: true, message: `${type} late entry logged`, data: doc });
   } catch (err) {
     return next(err);
@@ -1343,16 +1203,13 @@ const bulkUpdateZoomLinks = async (req, res, next) => {
     const userId = safeTrim(req.body?.userId);
     const updates = Array.isArray(req.body?.updates) ? req.body.updates : [];
     if (!tenantId || !updates.length) return res.status(400).json({ status: false, message: 'tenantId and updates[] required' });
-
     const ops = [];
     const keys = [...new Set(updates.map((u) => `${safeTrim(u.batchCode)}_${getPreviousMonday(toInt(u.date))}`).filter((k) => k !== '_0'))];
-
     for (const key of keys) {
       const [batchCode, wkStartStr] = key.split('_');
       const wkStartOn = parseInt(wkStartStr, 10);
       const tt = await TimeTable.findOne({ tenantId, batchCode, wkStartOn, isdeleted: false });
       if (!tt) continue;
-
       let modified = false;
       for (const u of updates.filter((u) => safeTrim(u.batchCode) === batchCode && getPreviousMonday(toInt(u.date)) === wkStartOn)) {
         const date = toInt(u.date);
@@ -1361,7 +1218,6 @@ const bulkUpdateZoomLinks = async (req, res, next) => {
         if (!date || !periodNo) continue;
         const d = new Date(date);
         const day = DAYS[d.getUTCDay() === 0 ? 6 : d.getUTCDay() - 1];
-
         if (!isPublished(tt)) {
           const dayIdx = (tt.week || []).findIndex((wd) => wd.day === day);
           if (dayIdx < 0) continue;
@@ -1379,150 +1235,16 @@ const bulkUpdateZoomLinks = async (req, res, next) => {
           modified = true;
         }
       }
-
       if (modified) {
         await tt.save();
         ops.push(tt._id);
       }
     }
-
     return res.json({ status: true, message: 'Bulk zoom links updated', data: { updatedCount: ops.length } });
   } catch (err) {
     return next(err);
   }
 };
-
-// const validateSchedule = async (req, res, next) => {
-//   try {
-//     const tenantId = pickTenantId(req);
-//     const data = Array.isArray(req.body?.data) ? req.body.data : [];
-//     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-//     if (!data.length) return res.status(400).json({ status: false, message: 'No schedule data provided' });
-//     const conflicts = [];
-//     const proposed = [];
-//     for (let i = 0; i < data.length; i++) {
-//       const item = data[i];
-//       const batchCode = safeTrim(item.batchCode) || `Row ${i + 1}`;
-//       const wkStart = toInt(item.wkStartOn, 0);
-//       const timetableId = safeTrim(item.timetableId) || null;
-//       if (!wkStart) {
-//         conflicts.push({ batchCode, message: 'wkStartOn is required' });
-//         continue;
-//       }
-//       const correctedMonday = getPreviousMonday(wkStart);
-//       const publishedTT = await TimeTable.findOne({
-//         tenantId,
-//         batchCode,
-//         wkStartOn: correctedMonday,
-//         isdeleted: false,
-//         status: 'Active',
-//         ...(timetableId ? { _id: { $ne: timetableId } } : {})
-//       }).lean();
-//       if (publishedTT) {
-//         conflicts.push({
-//           batchCode,
-//           week: correctedMonday,
-//           message: `Timetable already published for batch ${batchCode} for this week. Use day/edit to modify individual days.`,
-//           publishedAt: publishedTT.publishedAt || null,
-//           publishedTimetableId: publishedTT._id
-//         });
-//         continue;
-//       }
-//       let periodTimeError = false;
-//       for (const d of item.week || []) {
-//         const day = normDay(d?.day);
-//         if (!isValidDay(day)) {
-//           conflicts.push({ batchCode, day: d?.day, message: `Invalid day: ${d?.day}` });
-//           periodTimeError = true;
-//           break;
-//         }
-//         for (const p of d?.periods || []) {
-//           const startMin = toInt(p?.time?.startMin, -1);
-//           const endMin = toInt(p?.time?.endMin, -1);
-//           if (startMin < 0 || startMin > 1439) {
-//             conflicts.push({ batchCode, day, periodNo: p.periodNo, message: `Period ${p.periodNo} on ${day}: invalid startMin (${startMin})` });
-//             periodTimeError = true;
-//           } else if (endMin < 0 || endMin > 1439) {
-//             conflicts.push({ batchCode, day, periodNo: p.periodNo, message: `Period ${p.periodNo} on ${day}: invalid endMin (${endMin})` });
-//             periodTimeError = true;
-//           } else if (endMin <= startMin) {
-//             conflicts.push({ batchCode, day, periodNo: p.periodNo, message: `Period ${p.periodNo} on ${day}: endMin must be greater than startMin` });
-//             periodTimeError = true;
-//           }
-//         }
-//         if (periodTimeError) break;
-//       }
-//       if (periodTimeError) continue;
-//       let hasDuplicate = false;
-//       for (const d of item.week || []) {
-//         const day = normDay(d?.day);
-//         const seenPeriodNos = new Set();
-//         for (const p of d?.periods || []) {
-//           const pNo = toInt(p?.periodNo, 0);
-//           if (!pNo) continue;
-//           if (seenPeriodNos.has(pNo)) {
-//             conflicts.push({ batchCode, day, periodNo: pNo, message: `Duplicate periodNo ${pNo} on ${day}` });
-//             hasDuplicate = true;
-//           }
-//           seenPeriodNos.add(pNo);
-//         }
-//       }
-//       if (hasDuplicate) continue;
-//       for (const d of item.week || []) {
-//         const day = normDay(d?.day);
-//         if (!isValidDay(day)) continue;
-//         const exactDate = getOffsetDate(correctedMonday, day);
-//         for (const p of d?.periods || []) {
-//           const facultyId = safeTrim(p?.facultyId);
-//           const startMin = toInt(p?.time?.startMin, -1);
-//           const endMin = toInt(p?.time?.endMin, -1);
-//           const periodType = safeTrim(p?.periodType).toUpperCase();
-//           const mode = safeTrim(p?.mode).toUpperCase();
-//           if (!facultyId || startMin < 0 || endMin < 0) continue;
-//           const isMassClass = mode === 'ONLINE' || periodType === 'PT' || periodType === 'YOGA';
-//           if (isMassClass) continue;
-//           const dbCheck = await checkStaffConflicts(tenantId, facultyId, exactDate, day, startMin, endMin, timetableId, false);
-//           if (dbCheck.conflict) {
-//             conflicts.push({
-//               batchCode,
-//               day,
-//               periodNo: p.periodNo,
-//               facultyId,
-//               facultyName: dbCheck.facultyName || safeTrim(p?.facultyName) || null,
-//               message: dbCheck.message
-//             });
-//           } else {
-//             const internal = proposed.find((pa) => pa.facultyId === facultyId && pa.exactDate === exactDate && startMin < pa.endMin && endMin > pa.startMin);
-//             if (internal) {
-//               conflicts.push({
-//                 batchCode,
-//                 day,
-//                 periodNo: p.periodNo,
-//                 facultyId,
-//                 facultyName: safeTrim(p?.facultyName) || null,
-//                 message: `Internal conflict with batch ${internal.batchCode} on ${day} (Period ${internal.periodNo})`
-//               });
-//             } else {
-//               proposed.push({
-//                 facultyId,
-//                 exactDate,
-//                 startMin,
-//                 endMin,
-//                 batchCode,
-//                 periodNo: p.periodNo,
-//                 facultyName: safeTrim(p?.facultyName) || null
-//               });
-//             }
-//           }
-//         }
-//       }
-//     }
-//     if (conflicts.length) return res.status(400).json({ status: false, message: 'Conflicts detected', conflicts });
-//     return res.status(200).json({ status: true, message: 'All schedules valid' });
-//   } catch (err) {
-//     return next(err);
-//   }
-// };
 
 const validateSchedule = async (req, res, next) => {
   try {
@@ -1543,8 +1265,6 @@ const validateSchedule = async (req, res, next) => {
     const getStaff = async (staffId) => {
       if (staffCache.has(staffId)) return staffCache.get(staffId);
       const s = await Staff.findOne({ tenantId, staffId, isdeleted: false }, { staffName: 1, staffCode: 1, subject: 1, weekoff: 1, facultyType: 1 }).lean();
-      // staffCache.set(staffId, s || null);
-      // return s || null;
       if (s) {
         s.subject = Array.isArray(s.subject) ? s.subject.map((x) => String(x?._id || x)) : s.subject ? [String(s.subject?._id || s.subject)] : [];
       }
@@ -1609,12 +1329,10 @@ const validateSchedule = async (req, res, next) => {
           const mode = safeTrim(p?.mode).toUpperCase() || 'OFFLINE';
           const startMin = toInt(p?.time?.startMin, -1);
           const endMin = toInt(p?.time?.endMin, -1);
-          // ── Check 4: periodNo >= 1 ──────────────────────────────────────────
           if (periodNo < 1) {
             conflicts.push({ batchCode, day, periodNo: p?.periodNo, message: `periodNo must be >= 1` });
             continue;
           }
-          // ── Check 5: Valid time range ───────────────────────────────────────
           if (startMin < 0 || startMin > 1439) {
             conflicts.push({ batchCode, day, periodNo, message: `Period ${periodNo}: invalid startMin (${startMin})` });
             continue;
@@ -1627,14 +1345,10 @@ const validateSchedule = async (req, res, next) => {
             conflicts.push({ batchCode, day, periodNo, message: `Period ${periodNo}: endMin must be > startMin` });
             continue;
           }
-
-          // ── Check 6: facultyId required ─────────────────────────────────────
           if (!facultyId) {
             conflicts.push({ batchCode, day, periodNo, message: `Period ${periodNo}: facultyId is required` });
             continue;
           }
-
-          // ── Check 7: Intra-batch same-day time overlap ──────────────────────
           const overlap = seenPeriods.find((sp) => startMin < sp.endMin && endMin > sp.startMin);
           if (overlap) {
             conflicts.push({
@@ -1647,7 +1361,6 @@ const validateSchedule = async (req, res, next) => {
           }
           seenPeriods.push({ periodNo, startMin, endMin });
           const isMassClass = mode === 'ONLINE' || ['PT', 'YOGA', 'EXAM'].includes(periodType);
-          // ── Check 8: Staff exists ───────────────────────────────────────────
           const staff = await getStaff(facultyId);
           if (!staff) {
             conflicts.push({
@@ -1659,8 +1372,6 @@ const validateSchedule = async (req, res, next) => {
             });
             continue;
           }
-
-          // ── Check 9: Staff must be TEACHING type ────────────────────────────
           if (safeTrim(staff.facultyType).toUpperCase() !== 'TEACHING') {
             conflicts.push({
               batchCode,
@@ -1672,14 +1383,10 @@ const validateSchedule = async (req, res, next) => {
             });
             continue;
           }
-
           if (!isMassClass && subjectId) {
-            // ── Check 10: Subject must be in batch staffMap ─────────────────────
             if (hasBatchMap) {
               const batchSubjectEntry = staffMap.find((s) => safeTrim(s.subjectId) === subjectId);
-
               if (!batchSubjectEntry) {
-                // Fetch subject name for a clearer message
                 const subjectDoc = await getSubject(subjectId);
                 const subjectLabel = subjectDoc ? `"${subjectDoc.subjectName}${subjectDoc.subjectCode ? ' (' + subjectDoc.subjectCode + ')' : ''}"` : `ID: ${subjectId}`;
                 conflicts.push({
@@ -1709,8 +1416,6 @@ const validateSchedule = async (req, res, next) => {
                 continue;
               }
             }
-            // const staffSubjects = Array.isArray(staff.subject) ? staff.subject : [];
-            // const staffTeachesSubject = staffSubjects.some((sid) => String(sid) === subjectId);
             const staffSubjects = Array.isArray(staff.subject) ? staff.subject : [];
             const staffTeachesSubject = staffSubjects.some((sid) => {
               const id = sid?._id ? String(sid._id) : String(sid);
@@ -1747,7 +1452,7 @@ const validateSchedule = async (req, res, next) => {
             }
           }
           if (!isMassClass) {
-            const dbCheck = await checkStaffConflicts(tenantId, facultyId, exactDate, day, startMin, endMin, timetableId, false, periodType, mode);
+            const dbCheck = await checkStaffConflicts(tenantId, facultyId, exactDate, day, startMin, endMin, timetableId, true, periodType, mode);
             if (dbCheck.conflict) {
               conflicts.push({
                 batchCode,
@@ -1804,7 +1509,6 @@ const validateSchedule = async (req, res, next) => {
         conflicts
       });
     }
-
     return res.status(200).json({
       status: true,
       message: 'All schedules valid'
@@ -1918,6 +1622,109 @@ const subjectHoursReport = async (req, res, next) => {
   }
 };
 
+const cloneWeek = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const timetableId = safeTrim(req.body?.timetableId);
+    const userId = safeTrim(req.body?.userId);
+    if (!tenantId || !timetableId) return res.status(400).json({ status: false, message: 'tenantId and timetableId are required' });
+    const source = await TimeTable.findOne({ _id: timetableId, tenantId, isdeleted: false }).lean();
+    if (!source) return res.status(404).json({ status: false, message: 'Timetable not found' });
+    const nextWkStartOn = toInt(source.wkStartOn) + 7 * 24 * 60 * 60 * 1000;
+    const existing = await TimeTable.findOne({
+      tenantId,
+      batchCode: source.batchCode,
+      wkStartOn: nextWkStartOn,
+      isdeleted: false
+    }).lean();
+    if (existing) {
+      return res.status(400).json({
+        status: false,
+        message: `A timetable already exists for ${source.batchCode} for the week starting ${new Date(nextWkStartOn).toISOString().split('T')[0]}. Delete or unpublish it first.`,
+        existingTimetableId: existing._id,
+        existingStatus: existing.status
+      });
+    }
+    const clonedWeek = (Array.isArray(source.week) ? source.week : []).map((dayObj) => ({
+      day: dayObj.day,
+      periods: (Array.isArray(dayObj.periods) ? dayObj.periods : [])
+        .filter((p) => !p.isCancelled)
+        .map((p) => ({
+          periodNo: p.periodNo,
+          time: { ...p.time },
+          periodType: p.periodType,
+          examId: null,
+          examDescription: null,
+          mode: p.mode,
+          zoomUrl: null,
+          facultyId: p.facultyId,
+          facultyName: p.facultyName || null,
+          subjectId: p.subjectId || null,
+          subjectCode: p.subjectCode || null,
+          subjectName: p.subjectName || null,
+          phaseId: p.phaseId || null,
+          phaseName: p.phaseName || null,
+          topic: null,
+          venue: p.venue || null,
+          isCancelled: false,
+          cancelReason: null,
+          rearrangedTo: null,
+          replacementFacultyId: null,
+          replacementSubjectId: null,
+          notes: null
+        }))
+    }));
+    const conflicts = [];
+    for (const dayObj of clonedWeek) {
+      for (const p of dayObj.periods || []) {
+        const ssCheck = await validateStaffSubject(tenantId, source.batchCode, p.facultyId, p.subjectId, p.periodType);
+        if (!ssCheck.ok) {
+          conflicts.push({
+            day: dayObj.day,
+            periodNo: p.periodNo,
+            facultyId: p.facultyId,
+            message: ssCheck.msg
+          });
+        }
+      }
+    }
+    if (conflicts.length) {
+      return res.status(400).json({
+        status: false,
+        message: `Clone blocked — ${conflicts.length} validation issue(s) found. Update staff/subject mapping first.`,
+        conflicts
+      });
+    }
+    const cloned = await TimeTable.create({
+      tenantId,
+      batchCode: source.batchCode,
+      centerCode: source.centerCode || null,
+      phase: source.phase || null,
+      wkStartOn: nextWkStartOn,
+      status: 'DRAFT',
+      week: clonedWeek,
+      dayOverrides: [],
+      periodOverrides: [],
+      createdBy: userId || null,
+      updatedBy: userId || null,
+      isdeleted: false
+    });
+    return res.status(200).json({
+      status: true,
+      message: `Week cloned successfully as DRAFT for week starting ${new Date(nextWkStartOn).toISOString().split('T')[0]}`,
+      data: {
+        timetableId: cloned._id,
+        batchCode: cloned.batchCode,
+        wkStartOn: cloned.wkStartOn,
+        status: cloned.status,
+        periodsCloned: clonedWeek.reduce((sum, d) => sum + d.periods.length, 0)
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   createTimeTable,
   publishTimeTable,
@@ -1942,5 +1749,6 @@ export default {
   listTimeTables,
   viewTimeTable,
   listTimeTablesByBatch,
-  subjectHoursReport
+  subjectHoursReport,
+  cloneWeek
 };
