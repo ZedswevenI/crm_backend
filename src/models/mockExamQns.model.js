@@ -72,6 +72,7 @@ const MockExamQnsSchema = new mongoose.Schema(
       default: []
     },
     correctAnswer: { type: String, default: '' },
+    classNo: { type: Number, default: null, index: true, min: 6, max: 13 },
     tags: { type: [String], default: [] },
     sortOrder: { type: Number, default: 0 },
     status: { type: String, default: 'active' },
@@ -87,7 +88,7 @@ MockExamQnsSchema.index({ tenantId: 1, examId: 1, questionId: 1 }, { unique: tru
 MockExamQnsSchema.index({ tenantId: 1, examId: 1, sectionId: 1, subjectId: 1, isdeleted: 1, sortOrder: 1 }, { name: 'mockqns_section_idx' });
 MockExamQnsSchema.index({ tenantId: 1, examId: 1, subjectId: 1, topicId: 1, subTopicId: 1, isdeleted: 1 }, { name: 'mockqns_bank_idx' });
 MockExamQnsSchema.index({ tenantId: 1, examId: 1, passageId: 1, isdeleted: 1 }, { name: 'mockqns_passage_idx' });
-
+MockExamQnsSchema.index({ tenantId: 1, classNo: 1, subjectId: 1, isdeleted: 1 }, { name: 'mockqns_class_subject_idx' });
 MockExamQnsSchema.pre('validate', function (next) {
   try {
     const qt = String(this.questionType || '').toLowerCase();
@@ -97,7 +98,7 @@ MockExamQnsSchema.pre('validate', function (next) {
     if (needsOptions && !opts.length) {
       return next(new Error('questionOptions is required for mcq_single / mcq_multi / true_false'));
     }
-    if ((qt === 'mcq_single') && opts.filter((o) => o.isCorrect).length < 1) {
+    if (qt === 'mcq_single' && opts.filter((o) => o.isCorrect).length < 1) {
       return next(new Error('At least one correct option is required'));
     }
     if (qt === 'numeric' && this.numericMin !== null && this.numericMax !== null) {

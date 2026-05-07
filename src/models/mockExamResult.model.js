@@ -27,10 +27,10 @@ const SectionResultSchema = new mongoose.Schema(
     sectionId: { type: String, required: true, trim: true },
     subjectId: { type: mongoose.Schema.Types.ObjectId, ref: 'subject', default: null },
     totalQuestions: { type: Number, default: 0 },
-    answeredCount: { type: Number, default: 0 },
-    correctCount: { type: Number, default: 0 },
-    wrongCount: { type: Number, default: 0 },
-    skippedCount: { type: Number, default: 0 },
+    answeredCount: { type: Number, default: null },
+    correctCount: { type: Number, default: null },
+    wrongCount: { type: Number, default: null },
+    skippedCount: { type: Number, default: null },
     totalMarks: { type: Number, default: 0 },
     obtainedMarks: { type: Number, default: 0 },
     timeTaken: { type: Number, default: 0 }
@@ -44,7 +44,7 @@ const GraceLogSchema = new mongoose.Schema(
     graceType: { type: String, required: true, enum: ['exam', 'question'] },
     questionId: { type: String, default: null },
     sectionId: { type: String, default: null },
-    actionType: { type: String, required: true, enum: ['flat_add', 'remove_negative'] },
+    actionType: { type: String, required: true, enum: ['flat_add', 'remove_negative', 'grace', null] },
     marksAdded: { type: Number, default: 0 },
     appliedAt: { type: Number, default: null },
     note: { type: String, default: null }
@@ -54,7 +54,7 @@ const GraceLogSchema = new mongoose.Schema(
 
 const PublishHistorySchema = new mongoose.Schema(
   {
-    action: { type: String, required: true, enum: ['publish', 'republish'] },
+    action: { type: String, required: true, enum: ['publish', 'republish', 'reevaluate'] },
     publishedAt: { type: Number, required: true },
     publishedBy: { type: String, default: null },
     obtainedMarksBefore: { type: Number, default: null },
@@ -80,10 +80,10 @@ const MockExamResultSchema = new mongoose.Schema(
     timeTaken: { type: Number, default: 0 },
     isLate: { type: Boolean, default: false },
     totalQuestions: { type: Number, default: 0 },
-    answeredCount: { type: Number, default: 0 },
-    correctCount: { type: Number, default: 0 },
-    wrongCount: { type: Number, default: 0 },
-    skippedCount: { type: Number, default: 0 },
+    answeredCount: { type: Number, default: null },
+    correctCount: { type: Number, default: null },
+    wrongCount: { type: Number, default: null },
+    skippedCount: { type: Number, default: null },
     totalMarks: { type: Number, default: 0 },
     obtainedMarks: { type: Number, default: 0 },
     percentile: { type: Number, default: null },
