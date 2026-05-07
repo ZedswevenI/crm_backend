@@ -537,32 +537,22 @@ const bulkUpsertTopics = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     const userId = safeTrim(req.body?.userId || req.user?.userId);
-
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-
     const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
     if (!rows.length) return res.status(400).json({ status: false, message: 'rows is required (non-empty array)' });
-
-    // Optional defaults (if frontend sends at top-level)
     const defaultClassNo = toNum(req.body?.classNo);
     const defaultSubjectIdRaw = req.body?.subjectId;
-
-    // 1) Clean + validate + dedupe rows by (classNo + subjectId + topicName)
     const map = new Map();
     const subjectIdStrSet = new Set();
-
     let badRowCount = 0;
-
     for (const r of rows) {
       const classNo = toNum(r?.classNo ?? defaultClassNo);
       const subjectIdRaw = r?.subjectId ?? defaultSubjectIdRaw;
-
       const topicName = normName(r?.topicName);
       if (!ensureClassNo(classNo) || !subjectIdRaw || !topicName) {
         badRowCount++;
         continue;
       }
-
       const subjectIdStr = String(subjectIdRaw).trim();
       if (!mongoose.Types.ObjectId.isValid(subjectIdStr)) {
         badRowCount++;
@@ -1571,7 +1561,6 @@ const updateSchoolExam = async (req, res, next) => {
   }
 };
 
-// 3e. Delete School Exam
 const deleteSchoolExam = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);

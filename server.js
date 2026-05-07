@@ -5,6 +5,7 @@ import dotenv from 'dotenv';
 import routerIndex from './src/routes/index.routes.js';
 import connectDB from './src/config/connect.js';
 import errorHandler from './src/middlewares/errorHandler.js';
+import { startCommunicationScheduler } from './src/helpers/communicationScheduler.helper.js';
 import logger from './src/helpers/logger.js';
 import cookieParser from 'cookie-parser';
 
@@ -49,6 +50,7 @@ const PORT = process.env.PORT;
 connectDB();
 app.listen(PORT, () => {
   logger.info(`Server started , running on ${PORT}`);
+  startCommunicationScheduler();
 });
 
 export default app;

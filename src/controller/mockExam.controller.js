@@ -7,6 +7,7 @@ import MockExamQns from '../models/mockExamQns.model.js';
 import ExamInstruction from '../models/mockExamInstruction.model.js';
 import MockExamBatchAssign from '../models/mockExambatchmapping.model.js';
 import { syncOnMockPublish } from '../helpers/performanceSync.helper.js';
+import StudentProfile from '../models/studentProfile.model.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const safeTrim = (v) => (v == null ? '' : String(v)).trim();
@@ -1128,6 +1129,308 @@ const reevaluate = async (req, res, next) => {
   }
 };
 
+const bulkUploadHistorical = async (req, res, next) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+  try {
+    const tenantId = pickTid(req);
+    const userId = safeTrim(req.body?.userId || '');
+    const examCode = safeTrim(req.body?.examCode);
+    const examName = safeTrim(req.body?.examName);
+    const totalMarks = toNum(req.body?.totalMarks) || 0;
+    const totalQuestions = toNum(req.body?.totalQuestions) || 0;
+    const duration = toNum(req.body?.duration) || 0;
+    const startTime = req.body?.startTime ? toNum(req.body.startTime) : null;
+    const endTime = req.body?.endTime ? toNum(req.body.endTime) : null;
+    const description = safeTrim(req.body?.description || '');
+    const password = safeTrim(req.body?.password || '') || 'historical';
+    const sectionsIn = Array.isArray(req.body?.sections) ? req.body.sections : [];
+    const students = Array.isArray(req.body?.students) ? req.body.students : [];
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+    if (!examCode) return res.status(400).json({ status: false, message: 'examCode is required' });
+    if (!examName) return res.status(400).json({ status: false, message: 'examName is required' });
+    if (!sectionsIn.length) return res.status(400).json({ status: false, message: 'sections[] is required' });
+    if (!students.length) return res.status(400).json({ status: false, message: 'students[] is required' });
+    if (!totalMarks) return res.status(400).json({ status: false, message: 'totalMarks is required' });
+    const dupExam = await MockExam.findOne({ tenantId, examCode, isdeleted: false }, { examId: 1 }).session(session).lean();
+    if (dupExam) {
+      await session.abortTransaction();
+      return res.status(409).json({
+        status: false,
+        message: `Exam with examCode "${examCode}" already exists`
+      });
+    }
+    const sections = sectionsIn.map((s, idx) => {
+      const sectionId = safeTrim(s.sectionId) || uuid();
+      if (!safeTrim(s.sectionCode)) throw Object.assign(new Error(`Section ${idx + 1}: sectionCode is required`), { httpStatus: 400 });
+      if (!safeTrim(s.sectionName)) throw Object.assign(new Error(`Section ${idx + 1}: sectionName is required`), { httpStatus: 400 });
+      if (!s.subjectId) throw Object.assign(new Error(`Section ${idx + 1}: subjectId is required`), { httpStatus: 400 });
+      return {
+        sectionId,
+        sectionCode: safeTrim(s.sectionCode),
+        sectionName: safeTrim(s.sectionName),
+        subjectId: new mongoose.Types.ObjectId(String(s.subjectId)),
+        numberOfQuestions: toNum(s.numberOfQuestions) || 0,
+        sortOrder: toNum(s.sortOrder) || idx,
+        status: 'active'
+      };
+    });
+    const secMap = new Map(sections.map((s) => [s.sectionId, s]));
+    for (const s of students) {
+      const secResults = Array.isArray(s.sectionResults) ? s.sectionResults : [];
+      for (const sr of secResults) {
+        const sid = safeTrim(sr.sectionId);
+        if (!secMap.has(sid)) {
+          await session.abortTransaction();
+          return res.status(400).json({
+            status: false,
+            message: `sectionId "${sid}" not found in sections (admissionNo: ${s.admissionNo})`
+          });
+        }
+      }
+    }
+    const newExamId = uuid();
+    const now = Date.now();
+    const [newExam] = await MockExam.create(
+      [
+        {
+          tenantId,
+          examId: newExamId,
+          examCode,
+          examName,
+          description: description || null,
+          password,
+          testType: 'practice',
+          medium: 'en',
+          calculatorType: 'none',
+          sections,
+          totalQuestions,
+          totalMarks,
+          duration,
+          startTime,
+          endTime,
+          autoPublishAt: null,
+          resultPublishedAt: now,
+          resultPublishedBy: userId || null,
+          status: 'result_published',
+          graces: [],
+          publishLogs: [
+            {
+              action: 'publish',
+              publishedAt: now,
+              publishedBy: userId || null,
+              note: 'Historical exam bulk upload'
+            }
+          ],
+          reevaluateLogs: [],
+          isImported: true,
+          isdeleted: false,
+          createdBy: userId || null,
+          updatedBy: userId || null
+        }
+      ],
+      { session }
+    );
+    const incomingAdmNos = students.map((s) => safeTrim(s.admissionNo)).filter(Boolean);
+    const seen = new Set();
+    const dupes = [];
+    for (const no of incomingAdmNos) {
+      if (seen.has(no)) dupes.push(no);
+      else seen.add(no);
+    }
+    if (dupes.length) {
+      await session.abortTransaction();
+      return res.status(400).json({
+        status: false,
+        message: 'Duplicate admissionNo(s) in students payload',
+        duplicates: dupes
+      });
+    }
+    const profiles = await StudentProfile.find({ tenantId, admissionNo: { $in: incomingAdmNos }, isdeleted: false }, { admissionNo: 1, studentId: 1, batchId: 1, centerId: 1, classNo: 1 })
+      .session(session)
+      .lean();
+    const profileMap = new Map(profiles.map((p) => [safeTrim(p.admissionNo), p]));
+    const validStudents = [];
+    const notFoundErrors = [];
+    for (const s of students) {
+      const admNo = safeTrim(s.admissionNo);
+      if (!admNo) continue;
+      const profile = profileMap.get(admNo);
+      if (!profile) {
+        notFoundErrors.push({
+          admissionNo: admNo,
+          message: `Student not found in profiles`
+        });
+        continue;
+      }
+      validStudents.push({ ...s, _profile: profile });
+    }
+    // const resultDocs = validStudents.map((s) => {
+    //   const admNo = safeTrim(s.admissionNo);
+    //   const profile = s._profile;
+    //   const secResults = (Array.isArray(s.sectionResults) ? s.sectionResults : []).map((sr) => {
+    //     const sid = safeTrim(sr.sectionId);
+    //     const secMeta = secMap.get(sid) || {};
+    //     return {
+    //       sectionId: sid,
+    //       subjectId: secMeta.subjectId || null,
+    //       totalQuestions: toNum(sr.totalQuestions) || 0,
+    //       answeredCount: toNum(sr.answeredCount) || 0,
+    //       correctCount: toNum(sr.correctCount) || 0,
+    //       wrongCount: toNum(sr.wrongCount) || 0,
+    //       skippedCount: toNum(sr.skippedCount) || 0,
+    //       obtainedMarks: toNum(sr.obtainedMarks) || 0,
+    //       timeTaken: toNum(sr.timeTaken) || 0
+    //     };
+    //   });
+    //   const obtainedMarks = toNum(s.obtainedMarks) || 0;
+    //   return {
+    //     tenantId,
+    //     examId: newExamId,
+    //     admissionNo: admNo,
+    //     studentId: safeTrim(profile.studentId) || null,
+    //     batchId: safeTrim(s.batchId) || null,
+    //     centerId: safeTrim(s.centerId) || safeTrim(profile.centerId) || null,
+    //     classNo: s.classNo ? toNum(s.classNo) : profile.classNo || null,
+    //     obtainedMarks,
+    //     totalMarks,
+    //     sectionResults: secResults,
+    //     answers: [],
+    //     totalQuestions: secResults.reduce((sum, sr) => sum + sr.totalQuestions, 0) || 0,
+    //     correctCount: secResults.reduce((sum, sr) => sum + sr.correctCount, 0) || 0,
+    //     wrongCount: secResults.reduce((sum, sr) => sum + sr.wrongCount, 0) || 0,
+    //     skippedCount: secResults.reduce((sum, sr) => sum + sr.skippedCount, 0) || 0,
+    //     answeredCount: secResults.reduce((sum, sr) => sum + sr.answeredCount, 0) || 0,
+    //     startedAt: s.startedAt ? toNum(s.startedAt) : null,
+    //     completedAt: s.completedAt ? toNum(s.completedAt) : now,
+    //     timeTaken: s.timeTaken ? toNum(s.timeTaken) : 0,
+    //     isLate: s.isLate === true,
+    //     rank: null,
+    //     percentile: null,
+    //     status: 'result_published',
+    //     isResultVisible: true,
+    //     graceLogs: [],
+    //     publishHistory: [
+    //       {
+    //         action: 'publish',
+    //         publishedAt: now,
+    //         publishedBy: userId || null,
+    //         obtainedMarksBefore: null,
+    //         obtainedMarksAfter: obtainedMarks,
+    //         rankBefore: null,
+    //         rankAfter: null,
+    //         note: 'Historical bulk upload'
+    //       }
+    //     ],
+    //     isdeleted: false,
+    //     createdBy: userId || null,
+    //     updatedBy: userId || null
+    //   };
+    // });
+    const resultDocs = validStudents.map((s) => {
+      const admNo = safeTrim(s.admissionNo);
+      const profile = s._profile;
+      const secResults = (Array.isArray(s.sectionResults) ? s.sectionResults : []).map((sr) => {
+        const sid = safeTrim(sr.sectionId);
+        const secMeta = secMap.get(sid) || {};
+        return {
+          sectionId: sid,
+          subjectId: secMeta.subjectId || null,
+          totalQuestions: toNum(sr.totalQuestions) || 0,
+          answeredCount: toNum(sr.answeredCount) || 0,
+          correctCount: toNum(sr.correctCount) || 0,
+          wrongCount: toNum(sr.wrongCount) || 0,
+          skippedCount: toNum(sr.skippedCount) || 0,
+          obtainedMarks: toNum(sr.obtainedMarks) || 0,
+          timeTaken: toNum(sr.timeTaken) || 0
+        };
+      });
+
+      const obtainedMarks = toNum(s.obtainedMarks) || 0;
+      const totalQuestions = secResults.reduce((sum, sr) => sum + sr.totalQuestions, 0) || 0;
+      const correctCount = secResults.reduce((sum, sr) => sum + sr.correctCount, 0) || 0;
+      const wrongCount = secResults.reduce((sum, sr) => sum + sr.wrongCount, 0) || 0;
+      const skippedCount = secResults.reduce((sum, sr) => sum + sr.skippedCount, 0) || 0;
+      const answeredCount = secResults.reduce((sum, sr) => sum + sr.answeredCount, 0) || 0;
+
+      return {
+        tenantId,
+        examId: newExamId,
+        admissionNo: admNo,
+        studentId: safeTrim(profile.studentId) || null,
+        batchId: safeTrim(s.batchId) || null,
+        centerId: safeTrim(s.centerId) || safeTrim(profile.centerId) || null,
+        classNo: s.classNo ? toNum(s.classNo) : profile.classNo || null,
+        obtainedMarks,
+        totalMarks,
+        sectionResults: secResults,
+        answers: [],
+        totalQuestions,
+        correctCount,
+        wrongCount,
+        skippedCount,
+        answeredCount,
+        startedAt: s.startedAt ? toNum(s.startedAt) : null,
+        completedAt: s.completedAt ? toNum(s.completedAt) : now,
+        timeTaken: s.timeTaken ? toNum(s.timeTaken) : 0,
+        isLate: s.isLate === true,
+        rank: null,
+        percentile: null,
+        status: 'result_published',
+        isResultVisible: true,
+        isImported: true,
+        graceLogs: [],
+        publishHistory: [
+          {
+            action: 'publish',
+            publishedAt: now,
+            publishedBy: userId || null,
+            obtainedMarksBefore: null,
+            obtainedMarksAfter: obtainedMarks,
+            rankBefore: null,
+            rankAfter: null,
+            note: 'Historical bulk upload'
+          }
+        ],
+        isdeleted: false,
+        createdBy: userId || null,
+        updatedBy: userId || null
+      };
+    });
+    let insertedCount = 0;
+    if (resultDocs.length) {
+      const inserted = await MockExamResult.insertMany(resultDocs, { session, ordered: false });
+      insertedCount = inserted.length;
+    }
+    await session.commitTransaction();
+    return res.status(201).json({
+      status: true,
+      message: `Historical exam created and ${insertedCount} result(s) uploaded`,
+      data: {
+        examId: newExamId,
+        examCode: newExam.examCode,
+        examName: newExam.examName,
+        status: newExam.status,
+        totalStudents: students.length,
+        insertedCount,
+        skippedCount: notFoundErrors.length,
+        errors: notFoundErrors.length ? notFoundErrors : undefined
+      }
+    });
+  } catch (err) {
+    await session.abortTransaction();
+    if (err.httpStatus) {
+      return res.status(err.httpStatus).json({ status: false, message: err.message });
+    }
+    if (err.code === 11000) {
+      return res.status(409).json({ status: false, message: 'Duplicate examCode or result already exists' });
+    }
+    return next(err);
+  } finally {
+    session.endSession();
+  }
+};
+
 export default {
   createExam,
   updateExam,
@@ -1141,5 +1444,6 @@ export default {
   duplicateExam,
   addGrace,
   removeGrace,
-  reevaluate
+  reevaluate,
+  bulkUploadHistorical
 };

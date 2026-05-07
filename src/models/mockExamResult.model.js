@@ -98,6 +98,7 @@ const MockExamResultSchema = new mongoose.Schema(
       enum: ['inprogress', 'completed', 'evaluated', 'result_published']
     },
     isResultVisible: { type: Boolean, default: false },
+    isImported: { type: Boolean, default: false },
     createdBy: { type: String, default: null },
     updatedBy: { type: String, default: null },
     isdeleted: { type: Boolean, default: false }
@@ -112,6 +113,7 @@ MockExamResultSchema.index({ tenantId: 1, examId: 1, isdeleted: 1, centerId: 1 }
 MockExamResultSchema.index({ tenantId: 1, admissionNo: 1, isdeleted: 1 }, { name: 'mockresult_student_idx' });
 MockExamResultSchema.pre('validate', function (next) {
   try {
+    if (this.isImported === true) return next();
     const ans = Array.isArray(this.answers) ? this.answers : [];
     this.totalQuestions = safeNum(this.totalQuestions) || ans.length;
     this.answeredCount = ans.filter((a) => a.answerRaw !== null && a.answerRaw !== undefined && !a.isSkipped).length;

@@ -116,31 +116,6 @@ const buildSort = (raw) => {
   return { [s]: 1 };
 };
 
-// const toStaffResponse = (d) => {
-//   if (!d) return d;
-//   return {
-//     _id: d._id,
-//     staffId: d.staffId,
-//     employeeId: d.employeeId,
-//     staffCode: d.staffCode,
-//     staffName: d.staffName,
-//     role: d.role,
-//     phone: d.phone,
-//     email: d.email,
-//     centerId: d.centerId,
-//     joiningDate: d.joiningDate,
-//     relievingDate: d.relievingDate,
-//     facultyType: d.facultyType,
-//     subject: d.subject,
-//     payroll: d.payroll,
-//     department: d.department,
-//     weekoff: d.weekoff,
-//     status: d.status,
-//     createdAt: d.createdAt,
-//     updatedAt: d.updatedAt
-//   };
-// };
-
 const toStaffResponse = (d) => {
   if (!d) return d;
   return {
@@ -510,66 +485,6 @@ const deleteCenter = async (req, res, next) => {
   }
 };
 
-// const createUser = async (req, res, next) => {
-//   try {
-//     const tenantId = pickTenantId(req);
-//     if (!tenantId) {
-//       return res.status(constants.HTTPS_BAD_REQUEST || 400).json({ status: false, message: 'tenantId (entiId) is required' });
-//     }
-//     const name = safeTrim(req.body.name);
-//     const email = safeLower(req.body.email);
-//     const phone = safeTrim(req.body.phone);
-//     const password = safeTrim(req.body.password);
-//     const roleLevel = safeTrim(req.body.roleLevel) || 'L4';
-//     const roleLabel = ROLE_MAP[roleLevel] || safeTrim(req.body.roleLabel) || ROLE_MAP.L4;
-//     const empCode = req.body.empCode ? safeTrim(req.body.empCode) : null;
-//     if (!name || !email || !phone || !password) {
-//       return res.status(constants.HTTPS_BAD_REQUEST || 400).json({ status: false, message: 'name, email, phone and password are required' });
-//     }
-//     let mappedStaffId = null;
-//     if (empCode) {
-//       const staffMatch = await Staff.findOne({ tenantId, employeeId: empCode, isdeleted: false }).lean();
-//       if (!staffMatch) {
-//         return res.status(constants.HTTPS_BAD_REQUEST || 400).json({
-//           status: false,
-//           message: `No staff record found for empCode: ${empCode}`
-//         });
-//       }
-//       mappedStaffId = staffMatch.staffId;
-//     }
-//     const hashedPassword = await bcrypt.hash(password, Rounds);
-//     const newUserId = uuid();
-//     const doc = await User.create({
-//       tenantId,
-//       userId: newUserId,
-//       staffId: mappedStaffId,
-//       name,
-//       email,
-//       phone,
-//       password: hashedPassword,
-//       empCode,
-//       roleLevel,
-//       roleLabel,
-//       centerId: req.body.centerId ? safeTrim(req.body.centerId) : null,
-//       centerName: req.body.centerName ? safeTrim(req.body.centerName) : null,
-//       status: req.body.status || 'Active',
-//       isdeleted: false
-//     });
-//     if (mappedStaffId) {
-//       await Staff.updateOne({ tenantId, staffId: mappedStaffId, isdeleted: false }, { $set: { userId: newUserId } });
-//     }
-//     const out = doc.toObject();
-//     delete out.password;
-//     return res.status(constants.HTTPS_CREATED || 201).json({ status: true, message: 'User created successfully', data: out });
-//   } catch (err) {
-//     if (err && err.code === 11000) {
-//       const dupField = Object.keys(err.keyPattern || {})[0] || 'unique field';
-//       return res.status(409).json({ status: false, message: `Duplicate ${dupField}.` });
-//     }
-//     return next(err);
-//   }
-// };
-
 const createUser = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
@@ -848,10 +763,6 @@ const deleteUser = async (req, res, next) => {
     const { recId } = req.body;
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
     if (!recId) return res.status(400).json({ status: false, message: 'recId is required' });
-    // const deletedUser = await User.findOneAndUpdate({ _id: recId, tenantId, isdeleted: false }, { $set: { isdeleted: true } }, { new: true }).select('-password');
-    // if (!deletedUser) {
-    //   return res.status(constants.HTTPS_NOT_FOUND || 404).json({ status: false, message: 'User not found or already deleted' });
-    // }
     const deletedUser = await User.findOneAndUpdate({ _id: recId, tenantId, isdeleted: false }, { $set: { isdeleted: true, status: 'Inactive' } }, { new: true }).select('-password');
 
     if (!deletedUser) {
@@ -969,158 +880,6 @@ const changePassword = async (req, res, next) => {
     return next(err);
   }
 };
-
-// const importUsers = async (req, res, next) => {
-//   try {
-//     const tenantId = pickTenantId(req);
-//     if (!tenantId) {
-//       return res.status(constants.HTTPS_BAD_REQUEST || 400).json({ status: false, message: 'tenantId (entiId) is required' });
-//     }
-//     const modeRaw = safeTrim(req.body.mode);
-//     const mode = modeRaw === 'insert' ? 'insert' : 'upsert';
-//     const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
-//     if (!rows.length) {
-//       return res.status(constants.HTTPS_BAD_REQUEST || 400).json({ status: false, message: 'rows is required' });
-//     }
-//     const empCodesFromUpload = rows.map((r) => (r.empCode ? safeTrim(r.empCode) : null)).filter(Boolean);
-//     const matchedStaff = await Staff.find({
-//       tenantId,
-//       employeeId: { $in: empCodesFromUpload.map((code) => new RegExp(`^${code}$`, 'i')) },
-//       isdeleted: false
-//     }).lean();
-//     const staffMappingDict = matchedStaff.reduce((acc, staff) => {
-//       if (staff.employeeId) acc[String(staff.employeeId).toLowerCase()] = staff.staffId;
-//       return acc;
-//     }, {});
-//     const ops = [];
-//     const validEmailsForPostSync = [];
-//     let skipped = 0;
-//     const passwordMap = new Map();
-//     await Promise.all(
-//       rows.map(async (r) => {
-//         const rawPassword = safeTrim(r?.password) || 'Welcome@123';
-//         const key = rawPassword;
-//         if (!passwordMap.has(key)) {
-//           passwordMap.set(key, await bcrypt.hash(rawPassword, Rounds));
-//         }
-//       })
-//     );
-//     for (const r0 of rows) {
-//       const r = r0 || {};
-//       const name = safeTrim(r.name);
-//       const email = safeLower(r.email);
-//       const phone = safeTrim(r.phone);
-//       const roleLevel = safeTrim(r.roleLevel) || 'L4';
-//       const roleLabel = ROLE_MAP[roleLevel] || safeTrim(r.roleLabel) || ROLE_MAP.L4;
-//       const status = safeTrim(r.status) || 'Active';
-//       const empCode = r.empCode !== undefined ? (r.empCode ? safeTrim(r.empCode) : null) : null;
-//       const centerId = r.centerId !== undefined ? (r.centerId ? safeTrim(r.centerId) : null) : null;
-//       const centerName = r.centerName !== undefined ? (r.centerName ? safeTrim(r.centerName) : null) : null;
-//       const rawPassword = safeTrim(r.password) || 'Welcome@123';
-//       if (!name || !email || !phone) {
-//         skipped++;
-//         continue;
-//       }
-//       const hashedPassword = passwordMap.get(rawPassword);
-//       const empCodeKey = empCode ? String(empCode).toLowerCase() : null;
-//       const mappedStaffId = empCodeKey ? staffMappingDict[empCodeKey] || null : null;
-//       const filter = { tenantId, email, isdeleted: false };
-//       if (mappedStaffId) validEmailsForPostSync.push(email);
-//       if (mode === 'insert') {
-//         ops.push({
-//           updateOne: {
-//             filter,
-//             update: {
-//               $setOnInsert: {
-//                 tenantId,
-//                 userId: uuid(),
-//                 staffId: mappedStaffId,
-//                 name,
-//                 email,
-//                 phone,
-//                 password: hashedPassword,
-//                 empCode,
-//                 roleLevel,
-//                 roleLabel,
-//                 centerId,
-//                 centerName,
-//                 status,
-//                 isdeleted: false
-//               }
-//             },
-//             upsert: true
-//           }
-//         });
-//       } else {
-//         ops.push({
-//           updateOne: {
-//             filter,
-//             update: {
-//               $set: {
-//                 name,
-//                 phone,
-//                 empCode,
-//                 staffId: mappedStaffId,
-//                 roleLevel,
-//                 roleLabel,
-//                 centerId,
-//                 centerName,
-//                 status
-//               },
-//               $setOnInsert: {
-//                 tenantId,
-//                 userId: uuid(),
-//                 email,
-//                 password: hashedPassword,
-//                 isdeleted: false
-//               }
-//             },
-//             upsert: true
-//           }
-//         });
-//       }
-//     }
-//     if (!ops.length) {
-//       return res.status(constants.HTTPS_SUCCESS || 200).json({
-//         status: true,
-//         message: 'No valid rows to import',
-//         data: { mode, inserted: 0, updated: 0, skipped }
-//       });
-//     }
-//     const bulkRes = await User.bulkWrite(ops, { ordered: false });
-//     const inserted = bulkRes?.upsertedCount || 0;
-//     const updated = bulkRes?.modifiedCount || 0;
-//     if (validEmailsForPostSync.length > 0) {
-//       const successfullyImportedUsers = await User.find({
-//         tenantId,
-//         email: { $in: validEmailsForPostSync },
-//         isdeleted: false
-//       }).lean();
-//       const staffOps = successfullyImportedUsers
-//         .filter((u) => u.staffId && u.userId)
-//         .map((u) => ({
-//           updateOne: {
-//             filter: { tenantId, staffId: u.staffId, isdeleted: false },
-//             update: { $set: { userId: u.userId } }
-//           }
-//         }));
-//       if (staffOps.length > 0) {
-//         await Staff.bulkWrite(staffOps, { ordered: false });
-//       }
-//     }
-//     return res.status(constants.HTTPS_SUCCESS || 200).json({
-//       status: true,
-//       message: 'User import completed with automatic staff linking',
-//       data: { mode, inserted, updated, skipped }
-//     });
-//   } catch (err) {
-//     if (err && err.code === 11000) {
-//       const dupField = Object.keys(err.keyPattern || {})[0] || 'unique field';
-//       return res.status(409).json({ status: false, message: `Duplicate ${dupField}.` });
-//     }
-//     return next(err);
-//   }
-// };
 
 const importUsers = async (req, res, next) => {
   try {
@@ -1324,32 +1083,23 @@ const createFeePlan = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     const userId = pickUserId(req);
-
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-
     const payload = req.body || {};
     const academicYear = safeTrim(payload.academicYear);
     const programCode = safeTrim(payload.programCode);
     const feePlanName = safeTrim(payload.feePlanName);
-
     if (!academicYear || !programCode || !feePlanName) {
       return res.status(400).json({ status: false, message: 'academicYear, programCode, feePlanName are required' });
     }
-
     const feeHeads = Array.isArray(payload.feeHeads) ? payload.feeHeads : [];
     let instalments = Array.isArray(payload.instalments) ? payload.instalments : [];
-
     if (!feeHeads.length) return res.status(400).json({ status: false, message: 'feeHeads is required' });
     if (!instalments.length) return res.status(400).json({ status: false, message: 'instalments is required' });
-
     const headKeys = new Set(feeHeads.map((h) => normalizeFeeHeadKey(h.key)));
-
-    // normalize instalments to schema fields
     instalments = instalments.map((x, idx) => {
       const feeHead = normalizeFeeHeadKey(x.feeHead || x.feehead || x.feeHeadKey || '');
       const instalmentDate = toEpochMs(x.instalmentDate ?? x.instalmentdate ?? x.date ?? x.insdate);
       const label = x.label ? safeTrim(x.label) : safeTrim(x.feefor) || (instalmentDate ? new Date(instalmentDate).toDateString() : 'On Admission');
-
       return {
         seq: toNum(x.seq) || idx + 1,
         feeHead,
@@ -1361,10 +1111,8 @@ const createFeePlan = async (req, res, next) => {
         discountApplied: feeHead === 'TF'
       };
     });
-
     const bad = instalments.find((i) => !i.feeHead || !headKeys.has(i.feeHead));
     if (bad) return res.status(400).json({ status: false, message: 'Invalid instalment feeHead (must exist in feeHeads)' });
-
     const doc = await FeePlan.create({
       tenantId,
       academicYear,
@@ -1376,17 +1124,13 @@ const createFeePlan = async (req, res, next) => {
       feeHeads,
       instalments,
       status: payload.status || 'Active',
-
       centerCode: payload.centerCode ? safeTrim(payload.centerCode) : null,
       testDate: payload.testDate ? toEpochMs(payload.testDate) : null,
       validTill: payload.validTill ? toEpochMs(payload.validTill) : null,
-
       createdBy: userId || null,
       updatedBy: userId || null,
-
       isdeleted: false
     });
-
     return res.status(constants.HTTPS_CREATED || 201).json({ status: true, message: 'Fee plan created successfully', data: doc });
   } catch (err) {
     if (err && err.code === 11000) {
@@ -1401,13 +1145,10 @@ const viewFeePlan = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     const recId = req.body?.recId;
-
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
     if (!recId) return res.status(400).json({ status: false, message: 'recId is required' });
-
     const doc = await FeePlan.findOne({ _id: recId, tenantId, isdeleted: false });
     if (!doc) return res.status(404).json({ status: false, message: 'Fee plan not found' });
-
     return res.status(constants.HTTPS_SUCCESS || 200).json({ status: true, data: doc });
   } catch (err) {
     return next(err);
@@ -1419,28 +1160,20 @@ const updateFeePlan = async (req, res, next) => {
     const tenantId = pickTenantId(req);
     const userId = pickUserId(req);
     const recId = req.body?.recId;
-
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
     if (!recId) return res.status(400).json({ status: false, message: 'recId is required' });
-
     const payload = req.body || {};
     const updateDoc = {};
-
     if (payload.academicYear !== undefined) updateDoc.academicYear = safeTrim(payload.academicYear);
     if (payload.programCode !== undefined) updateDoc.programCode = safeTrim(payload.programCode);
-
     if (payload.programId !== undefined) updateDoc.programId = payload.programId ? safeTrim(payload.programId) : null;
     if (payload.programName !== undefined) updateDoc.programName = payload.programName ? safeTrim(payload.programName) : null;
-
     if (payload.feePlanName !== undefined) updateDoc.feePlanName = safeTrim(payload.feePlanName);
     if (payload.currency !== undefined) updateDoc.currency = payload.currency ? safeTrim(payload.currency) : 'INR';
-
     if (payload.centerCode !== undefined) updateDoc.centerCode = payload.centerCode ? safeTrim(payload.centerCode) : null;
     if (payload.testDate !== undefined) updateDoc.testDate = payload.testDate ? toEpochMs(payload.testDate) : null;
     if (payload.validTill !== undefined) updateDoc.validTill = payload.validTill ? toEpochMs(payload.validTill) : null;
-
     if (payload.feeHeads !== undefined) updateDoc.feeHeads = Array.isArray(payload.feeHeads) ? payload.feeHeads : [];
-
     if (payload.instalments !== undefined) {
       const rawInst = Array.isArray(payload.instalments) ? payload.instalments : [];
       updateDoc.instalments = rawInst.map((x, idx) => {
@@ -1459,20 +1192,13 @@ const updateFeePlan = async (req, res, next) => {
         };
       });
     }
-
     if (payload.status !== undefined) updateDoc.status = payload.status;
-
-    // always update updatedBy if userId present
     if (userId) updateDoc.updatedBy = userId;
-
     if (!Object.keys(updateDoc).length) {
       return res.status(400).json({ status: false, message: 'No fields to update' });
     }
-
     const updated = await FeePlan.findOneAndUpdate({ _id: recId, tenantId, isdeleted: false }, { $set: updateDoc }, { new: true, runValidators: true });
-
     if (!updated) return res.status(404).json({ status: false, message: 'Fee plan not found or deleted' });
-
     return res.status(constants.HTTPS_SUCCESS || 200).json({ status: true, message: 'Fee plan updated successfully', data: updated });
   } catch (err) {
     if (err && err.code === 11000) {
@@ -1488,14 +1214,10 @@ const deleteFeePlan = async (req, res, next) => {
     const tenantId = pickTenantId(req);
     const userId = pickUserId(req);
     const recId = req.body?.recId;
-
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
     if (!recId) return res.status(400).json({ status: false, message: 'recId is required' });
-
     const deleted = await FeePlan.findOneAndUpdate({ _id: recId, tenantId, isdeleted: false }, { $set: { isdeleted: true, ...(userId ? { updatedBy: userId } : {}) } }, { new: true });
-
     if (!deleted) return res.status(404).json({ status: false, message: 'Fee plan not found or already deleted' });
-
     return res.status(constants.HTTPS_SUCCESS || 200).json({ status: true, message: 'Fee plan deleted successfully', data: deleted });
   } catch (err) {
     return next(err);
@@ -1506,7 +1228,6 @@ const listFeePlans = async (req, res, next) => {
   try {
     const tenantId = safeTrim(req.body?.entiId);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required in body' });
-
     const listType = req.query.list;
     const sort = safeTrim(req.query.sort) || '-createdAt';
     const search = safeTrim(req.query.search);
@@ -1514,21 +1235,17 @@ const listFeePlans = async (req, res, next) => {
     const programCode = safeTrim(req.query.programCode);
     const programId = safeTrim(req.query.programId);
     const status = safeTrim(req.query.status);
-
     const query = { tenantId, isdeleted: false };
     if (academicYear) query.academicYear = academicYear;
     if (programCode) query.programCode = programCode;
     if (programId) query.programId = programId;
     if (status) query.status = status;
-
     if (search) {
       query.$or = [{ feePlanName: { $regex: search, $options: 'i' } }, { feePlanDisplayName: { $regex: search, $options: 'i' } }, { programName: { $regex: search, $options: 'i' } }, { programCode: { $regex: search, $options: 'i' } }];
     }
-
     let data;
     let count;
     let page;
-
     if (listType === 'full') {
       data = await FeePlan.find(query).sort('createdAt');
       count = data.length;
@@ -1536,11 +1253,9 @@ const listFeePlans = async (req, res, next) => {
       page = parseInt(req.query.page, 10) || 1;
       const limit = parseInt(req.query.limit, 10) || 10;
       const skip = (page - 1) * limit;
-
       count = await FeePlan.countDocuments(query);
       data = await FeePlan.find(query).sort(sort).skip(skip).limit(limit);
     }
-
     return res.status(constants.HTTPS_SUCCESS || 200).json({ status: true, message: 'Fee plan list retrieved successfully', data, page, count });
   } catch (err) {
     return next(err);
@@ -1553,69 +1268,51 @@ const bulkUpsertFeePlansFromRows = async (req, res, next) => {
     const userId = pickUserId(req);
     const academicYear = safeTrim(req.body?.academicYear);
     const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
-
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
     if (!academicYear) return res.status(400).json({ status: false, message: 'academicYear is required' });
     if (!rows.length) return res.status(400).json({ status: false, message: 'rows must be a non-empty array' });
-
-    // group by feeplancode + programcode
     const groups = new Map();
     for (const r of rows) {
       const feePlanName = safeTrim(r.feeplancode);
       const programCode = safeTrim(r.programcode);
       if (!feePlanName || !programCode) continue;
-
       const key = `${feePlanName}__${programCode}`;
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(r);
     }
-
     const processed = [];
     const skipped = [];
     const errors = [];
-
     for (const [key, lines] of groups.entries()) {
       try {
         const feePlanName = safeTrim(lines[0].feeplancode);
         const programCode = safeTrim(lines[0].programcode);
-
-        // plan-level optional fields
         const centerCode = safeTrim(lines[0].centres) || null;
         const testDate = toEpochMs(lines[0].testdate);
         const validTill = toEpochMs(lines[0].validity);
-
-        // Resolve program from Program master using programCodes CSV string.
         const codeUpper = String(programCode).trim().toUpperCase();
         const tokenRegex = new RegExp(`(^|,\\s*)${codeUpper}(\\s*,|$)`, 'i');
-
         const programDoc = await Program.findOne({
           tenantId,
           isdeleted: false,
           programCodes: { $regex: tokenRegex }
         }).lean();
-
         if (!programDoc) {
           skipped.push({ feePlanName, programCode, reason: 'Program not found for programCode in Program master' });
           continue;
         }
-
-        // -------- feeHeads aggregation by feehead key --------
         const headAgg = new Map();
-
         for (const l of lines) {
           const headKey = safeTrim(l.feehead).toUpperCase();
           if (!headKey) continue;
-
-          const amount = toNum(l.amount); // base
-          const gstPercent = toNum(l.strate); // gst %
+          const amount = toNum(l.amount);
+          const gstPercent = toNum(l.strate);
           const gstAmount = Number(((amount * gstPercent) / 100).toFixed(2));
           const totalAmount = Number((amount + gstAmount).toFixed(2));
-
           const meta = FEEHEAD_META[headKey] || {
             label: safeTrim(l.feefor) || headKey,
             discountAllowed: headKey === 'TF'
           };
-
           if (!headAgg.has(headKey)) {
             headAgg.set(headKey, {
               key: headKey,
@@ -1627,15 +1324,12 @@ const bulkUpsertFeePlansFromRows = async (req, res, next) => {
               total: 0
             });
           }
-
           const x = headAgg.get(headKey);
           x.base += amount;
           x.gst += gstAmount;
           x.total += totalAmount;
-
           if (Number(x.gstPercent) !== Number(gstPercent)) x.gstPercent = 0;
         }
-
         const feeHeads = Array.from(headAgg.values()).map((h) => ({
           key: h.key,
           label: h.label,
@@ -1645,41 +1339,30 @@ const bulkUpsertFeePlansFromRows = async (req, res, next) => {
           totalAmount: Number(h.total.toFixed(2)),
           discountAllowed: !!h.discountAllowed
         }));
-
-        // totals
         let totalBase = 0;
         let totalGst = 0;
         let totalFee = 0;
-
         feeHeads.forEach((h) => {
           totalBase += Number(h.amount || 0);
           totalGst += Number(h.gstAmount || 0);
           totalFee += Number(h.totalAmount || 0);
         });
-
-        // -------- instalments: NO MERGE. each row -> one instalment --------
         const headKeys = new Set(feeHeads.map((h) => String(h.key || '').toUpperCase()));
-
         const instLines = [];
         for (const l of lines) {
           const feeHead = safeTrim(l.feehead).toUpperCase();
           if (!feeHead) continue;
-
           if (!headKeys.has(feeHead)) {
-            // safety, should never happen since feeHeads built from same lines
             continue;
           }
-
           const amountBase = toNum(l.amount);
           const gstPercent = toNum(l.strate);
           const gstAmount = Number(((amountBase * gstPercent) / 100).toFixed(2));
           const totalAmount = Number((amountBase + gstAmount).toFixed(2));
-
           const instalmentDate = toEpochMs(l.insdate);
           const label = safeTrim(l.feefor) || safeTrim(l.insdate) || 'On Admission';
           const mode = l.mode ? safeTrim(l.mode) : null;
           const chequeFavour = l.chequefavour ? safeTrim(l.chequefavour) : null;
-
           instLines.push({
             feeHead,
             label,
@@ -1690,11 +1373,8 @@ const bulkUpsertFeePlansFromRows = async (req, res, next) => {
             discountApplied: feeHead === 'TF'
           });
         }
-
         instLines.sort((a, b) => Number(a.instalmentDate || 0) - Number(b.instalmentDate || 0));
         const instalments = instLines.map((x, idx) => ({ seq: idx + 1, ...x }));
-
-        // Upsert by tenantId + academicYear + programCode + feePlanName
         const exists = await FeePlan.findOne({
           tenantId,
           academicYear,
@@ -1702,7 +1382,6 @@ const bulkUpsertFeePlansFromRows = async (req, res, next) => {
           feePlanName,
           isdeleted: false
         }).lean();
-
         if (exists) {
           await FeePlan.updateOne(
             { _id: exists._id },
@@ -1710,18 +1389,14 @@ const bulkUpsertFeePlansFromRows = async (req, res, next) => {
               $set: {
                 programId: programDoc.programId || null,
                 programName: programDoc.programName || null,
-
                 centerCode,
                 testDate: testDate === null ? null : testDate,
                 validTill: validTill === null ? null : validTill,
-
                 feeHeads,
                 instalments,
-
                 totalBaseFee: Number(totalBase.toFixed(2)),
                 totalGST: Number(totalGst.toFixed(2)),
                 totalFee: Number(totalFee.toFixed(2)),
-
                 status: 'Active',
                 ...(userId ? { updatedBy: userId } : {})
               }
@@ -1735,25 +1410,19 @@ const bulkUpsertFeePlansFromRows = async (req, res, next) => {
             programCode,
             programId: programDoc.programId || null,
             programName: programDoc.programName || null,
-
             feePlanName,
             currency: 'INR',
-
             centerCode,
             testDate: testDate === null ? null : testDate,
             validTill: validTill === null ? null : validTill,
-
             feeHeads,
             instalments,
-
             totalBaseFee: Number(totalBase.toFixed(2)),
             totalGST: Number(totalGst.toFixed(2)),
             totalFee: Number(totalFee.toFixed(2)),
-
             status: 'Active',
             createdBy: userId || null,
             updatedBy: userId || null,
-
             isdeleted: false
           });
           processed.push({ feePlanName, programCode, action: 'created' });
@@ -1762,7 +1431,6 @@ const bulkUpsertFeePlansFromRows = async (req, res, next) => {
         errors.push({ key, error: e?.message || String(e) });
       }
     }
-
     return res.status(constants.HTTPS_SUCCESS || 200).json({
       status: true,
       message: 'Bulk fee plan import processed',
@@ -1778,17 +1446,13 @@ const setFeePlanStatus = async (req, res, next) => {
     const tenantId = pickTenantId(req);
     const recId = req.body?.recId;
     const status = req.body?.status;
-
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
     if (!recId) return res.status(400).json({ status: false, message: 'recId is required' });
     if (!['Active', 'Inactive'].includes(status)) {
       return res.status(400).json({ status: false, message: 'status must be Active or Inactive' });
     }
-
     const updated = await FeePlan.findOneAndUpdate({ _id: recId, tenantId, isdeleted: false }, { $set: { status } }, { new: true });
-
     if (!updated) return res.status(404).json({ status: false, message: 'Fee plan not found' });
-
     return res.status(200).json({ status: true, message: 'Status updated', data: updated });
   } catch (err) {
     return next(err);
@@ -1892,7 +1556,6 @@ const createStaff = async (req, res, next) => {
       joiningDate,
       relievingDate,
       facultyType: isFaculty ? facultyType : null,
-      // subject: isFaculty && facultyType === 'TEACHING' ? subject : null,
       subject: isFaculty && facultyType === 'TEACHING' ? (Array.isArray(subject) ? subject : [subject].filter(Boolean)) : [],
       payroll,
       department,
@@ -1941,7 +1604,6 @@ const listStaff = async (req, res, next) => {
     const search = safeTrim(req.query.search);
     const list = safeTrim(req.query.list);
     const sort = typeof buildSort === 'function' ? buildSort(req.query.sort) : { createdAt: -1 };
-    // const query = { tenantId, isdeleted: false };
     const centerId = safeTrim(req.query.centerId);
     const role = safeTrim(req.query.role);
     const status = safeTrim(req.query.status);
@@ -2023,7 +1685,6 @@ const updateStaff = async (req, res, next) => {
     if (payload.joiningDate !== undefined) patch.joiningDate = toNum(payload.joiningDate);
     if (payload.relievingDate !== undefined) patch.relievingDate = payload.relievingDate ? toNum(payload.relievingDate) : null;
     if (payload.facultyType !== undefined) patch.facultyType = safeTrim(payload.facultyType) || null;
-    // if (payload.subject !== undefined) patch.subject = safeTrim(payload.subject) || null;
     if (payload.payroll !== undefined) patch.payroll = safeTrim(payload.payroll);
     if (payload.department !== undefined) patch.department = safeTrim(payload.department);
     if (payload.weekoff !== undefined) {
@@ -2049,11 +1710,6 @@ const updateStaff = async (req, res, next) => {
       const deptDoc = await Department.findOne({ _id: patch.department, tenantId, isdeleted: false }).lean();
       if (!deptDoc) return res.status(400).json({ status: false, message: 'Invalid department (not found)' });
     }
-    // if (patch.subject !== undefined && patch.subject) {
-    //   if (!isValidObjectId(patch.subject)) return res.status(400).json({ status: false, message: 'Invalid subject id' });
-    //   const subDoc = await Subject.findOne({ _id: patch.subject, tenantId, isdeleted: false }).lean();
-    //   if (!subDoc) return res.status(400).json({ status: false, message: 'Invalid subject (not found)' });
-    // }
     if (patch.subject !== undefined && patch.subject.length) {
       const invalidIds = patch.subject.filter((id) => !isValidObjectId(id));
       if (invalidIds.length) {
@@ -2191,8 +1847,6 @@ const deleteStaff = async (req, res, next) => {
     const recId = safeTrim(req.body.recId);
     if (!recId) return res.status(400).json({ status: false, message: 'recId is required' });
     const updatedBy = req.body.updatedBy || null;
-    // const doc = await Staff.findOneAndUpdate({ _id: recId, tenantId, isdeleted: false }, { $set: { isdeleted: true, status: 'Inactive', updatedBy } }, { new: true }).lean();
-    // if (!doc) return res.status(404).json({ status: false, message: 'Staff not found' });
     const doc = await Staff.findOneAndUpdate({ _id: recId, tenantId, isdeleted: false }, { $set: { isdeleted: true, status: 'Inactive', updatedBy } }, { new: true }).lean();
     if (!doc) return res.status(404).json({ status: false, message: 'Staff not found' });
     if (doc.userId) {

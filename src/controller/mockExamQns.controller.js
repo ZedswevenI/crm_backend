@@ -79,8 +79,6 @@ function needsOneCorrect(qt) {
 }
 function validateQDoc(d, label) {
   if (!d.tenantId) return `${label}: tenantId required`;
-  // if (!d.examId) return `${label}: examId required`;
-  // if (!d.sectionId) return `${label}: sectionId required`;
   if (d.examId && !d.sectionId) return `${label}: sectionId required when examId is set`;
   if (!ALLOWED_TYPES.has(d.questionType)) return `${label}: invalid questionType`;
   if (!ALLOWED_DIFF.has(d.difficulty)) return `${label}: invalid difficulty`;
@@ -95,11 +93,6 @@ function validateQDoc(d, label) {
   }
   return null;
 }
-
-// const generateQuestionNo = async (tenantId) => {
-//   const doc = await Counter.findOneAndUpdate({ tenantId, key: 'questionNo' }, { $inc: { seq: 1 }, $setOnInsert: { tenantId, key: 'questionNo' } }, { new: true, upsert: true });
-//   return `Q${String(doc.seq).padStart(5, '0')}`;
-// };
 
 const generateQuestionNo = async (tenantId, subjectId) => {
   let subjectPrefix = 'GEN';
@@ -302,10 +295,8 @@ const updateQuestion = async (req, res, next) => {
     const recId = safeTrim(req.body?.recId);
     const userId = pickUid(req);
     if (!recId) return res.status(400).json({ status: false, message: 'recId is required' });
-
     const existing = await MockExamQns.findOne({ _id: recId, isdeleted: false });
     if (!existing) return res.status(404).json({ status: false, message: 'Question not found' });
-
     const set = {};
     const strFields = ['questionType', 'difficulty', 'questionHtml', 'passageHtml', 'instructionHtml', 'solutionHtml', 'correctAnswer', 'status'];
     for (const f of strFields) {
@@ -335,14 +326,12 @@ const updateQuestion = async (req, res, next) => {
       set.passageId = req.body.passageId ? new mongoose.Types.ObjectId(String(req.body.passageId)) : null;
       set.passageHtml = set.passageId ? '' : (set.passageHtml ?? existing.passageHtml); // clear inline if passageId set
     }
-
     const finalType = safeTrim(set.questionType || existing.questionType).toLowerCase();
     const finalOpts = set.questionOptions || existing.questionOptions || [];
     if (needsOptions(finalType)) {
       if (!finalOpts.length) return res.status(400).json({ status: false, message: `questionOptions required for ${finalType}` });
       if (needsOneCorrect(finalType) && !finalOpts.some((o) => o.isCorrect)) return res.status(400).json({ status: false, message: 'At least one correct option required' });
     }
-
     set.updatedBy = userId;
     const updated = await MockExamQns.findOneAndUpdate({ _id: recId, isdeleted: false }, { $set: set }, { new: true }).lean();
     return res.status(200).json({ status: true, message: 'Question updated successfully', data: updated });
@@ -519,10 +508,8 @@ const viewQuestion = async (req, res, next) => {
   try {
     const recId = safeTrim(req.body?.recId);
     if (!recId) return res.status(400).json({ status: false, message: 'recId is required' });
-
     const q = await MockExamQns.findOne({ _id: recId, isdeleted: false }).populate({ path: 'passageId', model: 'exampassage', select: 'title passageHtml language' }).lean();
     if (!q) return res.status(404).json({ status: false, message: 'Question not found' });
-
     return res.status(200).json({ status: true, message: 'Success', data: q });
   } catch (err) {
     return next(err);
@@ -535,10 +522,8 @@ const updateSortOrder = async (req, res, next) => {
     const tenantId = pickTid(req);
     const examId = safeTrim(req.body?.examId);
     const questions = req.body?.questions;
-
     if (!tenantId || !examId) return res.status(400).json({ status: false, message: 'tenantId and examId are required' });
     if (!Array.isArray(questions) || !questions.length) return res.status(400).json({ status: false, message: 'questions[] is required' });
-
     const ops = questions.map((q) => ({
       updateOne: {
         filter: { _id: safeTrim(q.qId), tenantId, examId, isdeleted: false },
@@ -546,7 +531,6 @@ const updateSortOrder = async (req, res, next) => {
       }
     }));
     await MockExamQns.bulkWrite(ops, { ordered: false });
-
     return res.status(200).json({ status: true, message: 'Sort order updated successfully' });
   } catch (err) {
     return next(err);
@@ -585,7 +569,6 @@ const createQuestionInBank = async (req, res, next) => {
       sortOrder,
       status
     } = req.body;
-
     if (!questionType) return res.status(400).json({ status: false, message: 'questionType is required' });
     if (!subjectId || !mustObjId(subjectId)) return res.status(400).json({ status: false, message: 'valid subjectId is required for bank questions' });
     if (!topicId) return res.status(400).json({ status: false, message: 'topicId is required for bank questions' });
@@ -626,7 +609,6 @@ const createQuestionInBank = async (req, res, next) => {
       updatedBy: userId || null,
       isdeleted: false
     });
-
     return res.status(200).json({ status: true, message: 'Question created in bank', data: doc });
   } catch (err) {
     return next(err);
@@ -720,142 +702,6 @@ const listQuestionBank = async (req, res, next) => {
   }
 };
 
-// const mapQuestionToExam = async (req, res, next) => {
-//   try {
-//     const tenantId = pickTid(req);
-//     const userId = pickUid(req);
-//     const recId = safeTrim(req.body?.recId);
-//     const examId = safeTrim(req.body?.examId);
-//     const sectionId = safeTrim(req.body?.sectionId);
-//     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-//     if (!recId) return res.status(400).json({ status: false, message: 'recId (_id) is required' });
-//     if (!examId) return res.status(400).json({ status: false, message: 'examId is required' });
-//     if (!sectionId) return res.status(400).json({ status: false, message: 'sectionId is required' });
-//     const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }).lean();
-//     if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
-//     const section = (exam.sections || []).find((s) => s.sectionId === sectionId);
-//     if (!section) return res.status(400).json({ status: false, message: `Section ${sectionId} not found in exam` });
-//     const question = await MockExamQns.findOne({ _id: recId, tenantId, isdeleted: false });
-//     if (!question) return res.status(404).json({ status: false, message: 'Question not found' });
-//     const resolvedSubjectId = question.subjectId || (section.subjectId ? new mongoose.Types.ObjectId(String(section.subjectId)) : null);
-//     if (!question.examId) {
-//       question.examId = examId;
-//       question.sectionId = sectionId;
-//       question.subjectId = resolvedSubjectId;
-//       question.updatedBy = userId || null;
-//       await question.save();
-//       return res.status(200).json({ status: true, message: 'Question mapped to exam', data: question });
-//     }
-//     const questionNo = await generateQuestionNo(tenantId, question.subjectId);
-//     const raw = question.toObject();
-//     delete raw._id;
-//     delete raw.__v;
-//     delete raw.createdAt;
-//     delete raw.updatedAt;
-//     const duplicate = await MockExamQns.create({
-//       ...raw,
-//       examId,
-//       sectionId,
-//       subjectId: resolvedSubjectId,
-//       questionNo,
-//       questionId: uuid(),
-//       createdBy: userId || null,
-//       updatedBy: userId || null,
-//       isdeleted: false
-//     });
-//     return res.status(200).json({ status: true, message: 'Question duplicated and mapped to exam', data: duplicate });
-//   } catch (err) {
-//     return next(err);
-//   }
-// };
-
-// const unmapQuestionFromExam = async (req, res, next) => {
-//   try {
-//     const tenantId = pickTid(req);
-//     const userId = pickUid(req);
-//     const recId = safeTrim(req.body?.recId);
-
-//     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-//     if (!recId) return res.status(400).json({ status: false, message: 'recId (_id) is required' });
-
-//     const question = await MockExamQns.findOne({ _id: recId, tenantId, isdeleted: false });
-//     if (!question) return res.status(404).json({ status: false, message: 'Question not found' });
-//     if (!question.examId) return res.status(400).json({ status: false, message: 'Question is already in the bank' });
-
-//     question.examId = null;
-//     question.sectionId = null;
-//     question.updatedBy = userId || null;
-//     await question.save();
-
-//     return res.status(200).json({ status: true, message: 'Question unmapped and returned to bank', data: question });
-//   } catch (err) {
-//     return next(err);
-//   }
-// };
-
-// const bulkMapQuestionsToExam = async (req, res, next) => {
-//   try {
-//     const tenantId = pickTid(req);
-//     const userId = pickUid(req);
-//     const examId = safeTrim(req.body?.examId);
-//     const sectionId = safeTrim(req.body?.sectionId);
-//     const recIds = Array.isArray(req.body?.recIds) ? req.body.recIds.map(safeTrim).filter(Boolean) : [];
-//     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-//     if (!examId) return res.status(400).json({ status: false, message: 'examId is required' });
-//     if (!sectionId) return res.status(400).json({ status: false, message: 'sectionId is required' });
-//     if (!recIds.length) return res.status(400).json({ status: false, message: 'recIds[] is required' });
-//     const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }).lean();
-//     if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
-//     const section = (exam.sections || []).find((s) => s.sectionId === sectionId);
-//     if (!section) return res.status(400).json({ status: false, message: `Section ${sectionId} not found in exam` });
-//     const questions = await MockExamQns.find({ _id: { $in: recIds }, tenantId, isdeleted: false });
-//     if (!questions.length) return res.status(404).json({ status: false, message: 'No questions found' });
-//     const results = { mapped: 0, duplicated: 0, errors: [] };
-//     for (const question of questions) {
-//       try {
-//         const resolvedSubjectId = question.subjectId || (section.subjectId ? new mongoose.Types.ObjectId(String(section.subjectId)) : null);
-
-//         if (!question.examId) {
-//           question.examId = examId;
-//           question.sectionId = sectionId;
-//           question.subjectId = resolvedSubjectId;
-//           question.updatedBy = userId || null;
-//           await question.save();
-//           results.mapped++;
-//         } else {
-//           const questionNo = await generateQuestionNo(tenantId, question.subjectId);
-//           const raw = question.toObject();
-//           delete raw._id;
-//           delete raw.__v;
-//           delete raw.createdAt;
-//           delete raw.updatedAt;
-//           await MockExamQns.create({
-//             ...raw,
-//             examId,
-//             sectionId,
-//             subjectId: resolvedSubjectId,
-//             questionNo,
-//             questionId: uuid(),
-//             createdBy: userId || null,
-//             updatedBy: userId || null,
-//             isdeleted: false
-//           });
-//           results.duplicated++;
-//         }
-//       } catch (e) {
-//         results.errors.push({ recId: String(question._id), error: e.message });
-//       }
-//     }
-//     return res.status(200).json({
-//       status: true,
-//       message: `Bulk map complete — ${results.mapped} mapped, ${results.duplicated} duplicated${results.errors.length ? `, ${results.errors.length} errors` : ''}`,
-//       data: results
-//     });
-//   } catch (err) {
-//     return next(err);
-//   }
-// };
-
 const mapQuestionToExam = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
@@ -868,53 +714,37 @@ const mapQuestionToExam = async (req, res, next) => {
     if (!recId) return res.status(400).json({ status: false, message: 'recId (_id) is required' });
     if (!examId) return res.status(400).json({ status: false, message: 'examId is required' });
     if (!sectionId) return res.status(400).json({ status: false, message: 'sectionId is required' });
-
-    // ── Validate exam + section ───────────────────────────────────────────────
     const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false });
     if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
-
     const section = (exam.sections || []).find((s) => safeTrim(s.sectionId) === sectionId);
     if (!section) {
       return res.status(400).json({ status: false, message: `Section ${sectionId} not found in exam` });
     }
-
-    // ── Fetch bank question ───────────────────────────────────────────────────
     const question = await MockExamQns.findOne({ _id: recId, tenantId, isdeleted: false }).lean();
     if (!question) return res.status(404).json({ status: false, message: 'Question not found' });
-
-    // ── Prevent duplicate mapping to same exam+section ────────────────────────
-    // Check if this bank question (_id) was already copied to this exam+section
-    // We track source via questionId — if a copy with same source questionId exists, block
     const alreadyMapped = await MockExamQns.findOne(
       {
         tenantId,
         examId,
         sectionId,
         isdeleted: false,
-        // sourceQuestionId tracks which bank question this was copied from
         sourceQuestionId: question.questionId
       },
       { _id: 1 }
     ).lean();
-
     if (alreadyMapped) {
       return res.status(409).json({
         status: false,
         message: 'This question is already mapped to this exam section'
       });
     }
-
     const resolvedSubjectId = question.subjectId || (section.subjectId ? new mongoose.Types.ObjectId(String(section.subjectId)) : null);
-
-    // ── Always create a copy — bank question stays untouched ──────────────────
     const questionNo = await generateQuestionNo(tenantId, resolvedSubjectId);
-
     const raw = { ...question };
     delete raw._id;
     delete raw.__v;
     delete raw.createdAt;
     delete raw.updatedAt;
-
     const copy = await MockExamQns.create({
       ...raw,
       examId,
@@ -922,13 +752,11 @@ const mapQuestionToExam = async (req, res, next) => {
       subjectId: resolvedSubjectId,
       questionNo,
       questionId: uuid(),
-      sourceQuestionId: question.questionId, // track origin bank question
+      sourceQuestionId: question.questionId,
       createdBy: userId || null,
       updatedBy: userId || null,
       isdeleted: false
     });
-
-    // ── Update exam totalMarks + totalQuestions + section count ───────────────
     const secIdx = (exam.sections || []).findIndex((s) => safeTrim(s.sectionId) === sectionId);
     if (secIdx >= 0) {
       exam.sections[secIdx].numberOfQuestions = (exam.sections[secIdx].numberOfQuestions || 0) + 1;
@@ -938,7 +766,6 @@ const mapQuestionToExam = async (req, res, next) => {
     exam.totalMarks = (toNum(exam.totalMarks) || 0) + toNum(question.positiveMarks);
     exam.updatedBy = userId || null;
     await exam.save();
-
     return res.status(200).json({
       status: true,
       message: 'Question mapped to exam successfully',
@@ -953,18 +780,13 @@ const mapQuestionToExam = async (req, res, next) => {
   }
 };
 
-// ─── unmapQuestionFromExam ────────────────────────────────────────────────────
-// Soft deletes the exam copy — bank question always untouched
 const unmapQuestionFromExam = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     const userId = pickUid(req);
     const recId = safeTrim(req.body?.recId);
-
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
     if (!recId) return res.status(400).json({ status: false, message: 'recId (_id) is required' });
-
-    // Fetch the exam copy
     const question = await MockExamQns.findOne({ _id: recId, tenantId, isdeleted: false }).lean();
     if (!question) {
       return res.status(404).json({ status: false, message: 'Question not found' });
@@ -975,13 +797,8 @@ const unmapQuestionFromExam = async (req, res, next) => {
         message: 'This is a bank question — nothing to unmap'
       });
     }
-
-    // Soft delete the exam copy
     await MockExamQns.findOneAndUpdate({ _id: recId, tenantId, isdeleted: false }, { $set: { isdeleted: true, status: 'inactive', updatedBy: userId || null } });
-
-    // ── Update exam totalMarks + totalQuestions + section count ───────────────
     const exam = await MockExam.findOne({ tenantId, examId: question.examId, isdeleted: false });
-
     if (exam) {
       const secIdx = (exam.sections || []).findIndex((s) => safeTrim(s.sectionId) === safeTrim(question.sectionId));
       if (secIdx >= 0) {
@@ -993,7 +810,6 @@ const unmapQuestionFromExam = async (req, res, next) => {
       exam.updatedBy = userId || null;
       await exam.save();
     }
-
     return res.status(200).json({
       status: true,
       message: 'Question removed from exam. Bank question untouched.',
@@ -1016,29 +832,20 @@ const bulkMapQuestionsToExam = async (req, res, next) => {
     const examId = safeTrim(req.body?.examId);
     const sectionId = safeTrim(req.body?.sectionId);
     const recIds = Array.isArray(req.body?.recIds) ? req.body.recIds.map(safeTrim).filter(Boolean) : [];
-
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
     if (!examId) return res.status(400).json({ status: false, message: 'examId is required' });
     if (!sectionId) return res.status(400).json({ status: false, message: 'sectionId is required' });
     if (!recIds.length) return res.status(400).json({ status: false, message: 'recIds[] is required' });
-
-    // ── Validate exam + section ───────────────────────────────────────────────
     const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false });
     if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
-
     const section = (exam.sections || []).find((s) => safeTrim(s.sectionId) === sectionId);
     if (!section) {
       return res.status(400).json({ status: false, message: `Section ${sectionId} not found in exam` });
     }
-
-    // ── Fetch all bank questions ──────────────────────────────────────────────
     const questions = await MockExamQns.find({ _id: { $in: recIds }, tenantId, isdeleted: false }).lean();
-
     if (!questions.length) {
       return res.status(404).json({ status: false, message: 'No questions found' });
     }
-
-    // ── Check which are already mapped to this exam+section ──────────────────
     const sourceIds = questions.map((q) => q.questionId).filter(Boolean);
     const alreadyMappedDocs = await MockExamQns.find(
       {
@@ -1051,16 +858,12 @@ const bulkMapQuestionsToExam = async (req, res, next) => {
       { sourceQuestionId: 1 }
     ).lean();
     const alreadyMappedSet = new Set(alreadyMappedDocs.map((d) => safeTrim(d.sourceQuestionId)));
-
-    // ── Build copies ──────────────────────────────────────────────────────────
     const results = { mapped: 0, skipped: 0, errors: [] };
     const newDocs = [];
     let totalMarksAdded = 0;
     let totalQuestionsAdded = 0;
-
     for (const question of questions) {
       try {
-        // Skip if already mapped
         if (alreadyMappedSet.has(question.questionId)) {
           results.skipped++;
           results.errors.push({
@@ -1069,17 +872,13 @@ const bulkMapQuestionsToExam = async (req, res, next) => {
           });
           continue;
         }
-
         const resolvedSubjectId = question.subjectId || (section.subjectId ? new mongoose.Types.ObjectId(String(section.subjectId)) : null);
-
         const questionNo = await generateQuestionNo(tenantId, resolvedSubjectId);
-
         const raw = { ...question };
         delete raw._id;
         delete raw.__v;
         delete raw.createdAt;
         delete raw.updatedAt;
-
         newDocs.push({
           ...raw,
           examId,
@@ -1092,7 +891,6 @@ const bulkMapQuestionsToExam = async (req, res, next) => {
           updatedBy: userId || null,
           isdeleted: false
         });
-
         totalMarksAdded += toNum(question.positiveMarks);
         totalQuestionsAdded++;
         results.mapped++;
@@ -1100,13 +898,9 @@ const bulkMapQuestionsToExam = async (req, res, next) => {
         results.errors.push({ recId: String(question._id), error: e.message });
       }
     }
-
-    // ── Insert all copies at once ─────────────────────────────────────────────
     if (newDocs.length) {
       await MockExamQns.insertMany(newDocs, { ordered: false });
     }
-
-    // ── Update exam totals + section count ────────────────────────────────────
     if (totalQuestionsAdded > 0) {
       const secIdx = (exam.sections || []).findIndex((s) => safeTrim(s.sectionId) === sectionId);
       if (secIdx >= 0) {
@@ -1118,7 +912,6 @@ const bulkMapQuestionsToExam = async (req, res, next) => {
       exam.updatedBy = userId || null;
       await exam.save();
     }
-
     return res.status(200).json({
       status: true,
       message: `Bulk map complete — ${results.mapped} mapped, ${results.skipped} skipped`,
@@ -1176,7 +969,6 @@ const bulkUploadAnswers = async (req, res, next) => {
       }
       if (Array.isArray(item.questionOptions) && item.questionOptions.length) {
         const existingOpts = Array.isArray(existing.questionOptions) ? existing.questionOptions : [];
-        // const incomingOptMap = new Map(item.questionOptions.map((o) => [safeTrim(o?.key), o]));
         const incomingOptMap = new Map(item.questionOptions.filter((o) => safeTrim(o?.key) !== '').map((o) => [safeTrim(o?.key), o]));
         const qt = safeTrim(existing.questionType).toLowerCase();
         const updatedOpts = existingOpts.map((opt) => {
