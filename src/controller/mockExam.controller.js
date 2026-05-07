@@ -25,6 +25,11 @@ const mustObjId = (id) => mongoose.Types.ObjectId.isValid(String(id || ''));
 const uuid = () => (typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : crypto.randomBytes(16).toString('hex'));
 const round2 = (n) => Math.round(Number(n) * 100) / 100;
 
+const isValidClassNo = (n) => {
+  const v = toNum(n);
+  return Number.isFinite(v) && v >= 6 && v <= 13;
+};
+
 const buildSections = (raw = []) =>
   raw.map((s, idx) => {
     if (!mustObjId(s?.subjectId)) throw Object.assign(new Error(`Section ${idx + 1}: invalid subjectId`), { httpStatus: 400 });
@@ -40,138 +45,6 @@ const buildSections = (raw = []) =>
       status: safeTrim(s.status) || 'active'
     };
   });
-
-// ─── Internal: recompute all results and rank ─────────────────────────────────
-// const _recomputeResults = async (tenantId, examId, exam, userId, action, publishedAt, note) => {
-//   const results = await MockExamResult.find({ tenantId, examId, isdeleted: false }).lean();
-//   if (!results.length) return;
-//   const questions = await MockExamQns.find({ tenantId, examId, isdeleted: false }).lean();
-//   const qMap = new Map(questions.map((q) => [safeTrim(q.questionId), q]));
-//   const activeGraces = (exam.graces || []).filter((g) => g.isActive);
-//   const examGrace = activeGraces.find((g) => g.graceType === 'exam') || null;
-//   const qGraceMap = new Map(activeGraces.filter((g) => g.graceType === 'question' && g.questionId).map((g) => [safeTrim(g.questionId), g]));
-//   const scored = results.map((r) => {
-//     const prev = r.obtainedMarks;
-//     const prevRank = r.rank;
-//     const rAnswers = _evalAnswers(r.answers, qMap, qGraceMap);
-//     let obtained = rAnswers.reduce((s, a) => s + toNum(a.marksAwarded), 0);
-//     let examGraceMks = 0;
-//     if (examGrace?.actionType === 'flat_add') {
-//       examGraceMks = toNum(examGrace.flatMarks);
-//       obtained += examGraceMks;
-//     }
-//     const graceLogs = [];
-//     if (examGrace?.actionType === 'flat_add') graceLogs.push({ graceId: examGrace.graceId, graceType: 'exam', questionId: null, sectionId: null, actionType: 'flat_add', marksAdded: examGraceMks, appliedAt: examGrace.appliedAt, note: examGrace.note });
-//     for (const [qid, qg] of qGraceMap.entries()) {
-//       const ans = rAnswers.find((a) => a.questionId === qid);
-//       if (ans) graceLogs.push({ graceId: qg.graceId, graceType: 'question', questionId: qid, sectionId: qg.sectionId, actionType: qg.actionType, marksAdded: ans._graceMks || 0, appliedAt: qg.appliedAt, note: qg.note });
-//     }
-//     const sectionResults = _buildSectionResults(rAnswers, exam.sections || []);
-//     return { admissionNo: r.admissionNo, obtained, answers: rAnswers.map(({ _graceMks, ...rest }) => rest), sectionResults, graceLogs, prev, prevRank };
-//   });
-//   scored.sort((a, b) => b.obtained - a.obtained);
-//   const total = scored.length;
-//   scored.forEach((s, i) => {
-//     s.rank = i + 1;
-//     s.percentile = round2(((total - i - 1) / total) * 100);
-//   });
-//   const ops = scored.map((s) => ({
-//     updateOne: {
-//       filter: { tenantId, examId, admissionNo: s.admissionNo, isdeleted: false },
-//       update: {
-//         $set: { obtainedMarks: s.obtained, rank: s.rank, percentile: s.percentile, answers: s.answers, sectionResults: s.sectionResults, graceLogs: s.graceLogs, status: 'result_published', isResultVisible: true, updatedBy: userId || null },
-//         $push: { publishHistory: { action, publishedAt, publishedBy: userId || null, obtainedMarksBefore: s.prev, obtainedMarksAfter: s.obtained, rankBefore: s.prevRank, rankAfter: s.rank, note } }
-//       }
-//     }
-//   }));
-//   if (ops.length) await MockExamResult.bulkWrite(ops, { ordered: false });
-// };
-
-// const _recomputeResults = async (tenantId, examId, exam, userId, action, publishedAt, note) => {
-//   const results = await MockExamResult.find({ tenantId, examId, isdeleted: false }).lean();
-//   if (!results.length) return;
-
-//   const questions = await MockExamQns.find({ tenantId, examId, isdeleted: false }).lean();
-//   const qMap = new Map(questions.map((q) => [safeTrim(q.questionId), q]));
-
-//   // Only active graces — keyed by questionId
-//   const activeGraces = (exam.graces || []).filter((g) => g.isActive);
-//   const qGraceMap = new Map(activeGraces.map((g) => [safeTrim(g.questionId), g]));
-
-//   const scored = results.map((r) => {
-//     const prev = r.obtainedMarks;
-//     const prevRank = r.rank;
-//     const rAnswers = _evalAnswers(r.answers, qMap, qGraceMap);
-//     const obtained = rAnswers.reduce((s, a) => s + toNum(a.marksAwarded), 0);
-
-//     // Build grace logs for this student
-//     const graceLogs = [];
-//     for (const [qid, qg] of qGraceMap.entries()) {
-//       const ans = rAnswers.find((a) => a.questionId === qid);
-//       if (ans) {
-//         graceLogs.push({
-//           graceId: qg.graceId,
-//           graceType: 'question',
-//           questionId: qid,
-//           sectionId: qg.sectionId || null,
-//           actionType: 'grace',
-//           marksAdded: ans._graceMks || 0,
-//           appliedAt: qg.appliedAt,
-//           note: qg.note
-//         });
-//       }
-//     }
-
-//     const sectionResults = _buildSectionResults(rAnswers, exam.sections || []);
-
-//     return {
-//       admissionNo: r.admissionNo,
-//       obtained,
-//       answers: rAnswers.map(({ _graceMks, ...rest }) => rest),
-//       sectionResults,
-//       graceLogs,
-//       prev,
-//       prevRank
-//     };
-//   });
-//   // Rank by obtainedMarks descending
-//   scored.sort((a, b) => b.obtained - a.obtained);
-//   const total = scored.length;
-//   scored.forEach((s, i) => {
-//     s.rank = i + 1;
-//     s.percentile = round2(((total - i - 1) / total) * 100);
-//   });
-//   const ops = scored.map((s) => ({
-//     updateOne: {
-//       filter: { tenantId, examId, admissionNo: s.admissionNo, isdeleted: false },
-//       update: {
-//         $set: {
-//           obtainedMarks: s.obtained,
-//           rank: s.rank,
-//           percentile: s.percentile,
-//           answers: s.answers,
-//           sectionResults: s.sectionResults,
-//           graceLogs: s.graceLogs,
-//           updatedBy: userId || null
-//         },
-//         $push: {
-//           publishHistory: {
-//             action,
-//             publishedAt,
-//             publishedBy: userId || null,
-//             obtainedMarksBefore: s.prev,
-//             obtainedMarksAfter: s.obtained,
-//             rankBefore: s.prevRank,
-//             rankAfter: s.rank,
-//             note
-//           }
-//         }
-//       }
-//     }
-//   }));
-
-//   if (ops.length) await MockExamResult.bulkWrite(ops, { ordered: false });
-// };
 
 // ─── Internal: recompute all results and rank ─────────────────────────────────
 const _recomputeResults = async (tenantId, examId, exam, userId, action, doneAt, note, makeVisible = false) => {
@@ -256,97 +129,15 @@ const _recomputeResults = async (tenantId, examId, exam, userId, action, doneAt,
   return total;
 };
 
-// const _evalAnswers = (answers, qMap, qGraceMap) =>
-//   (answers || []).map((a) => {
-//     const q = qMap.get(safeTrim(a.questionId)) || null;
-//     const grace = qGraceMap.get(safeTrim(a.questionId)) || null;
-//     let marks = toNum(a.marksAwarded);
-//     let graceMks = 0;
-//     if (q) {
-//       const pos = toNum(q.positiveMarks);
-//       const neg = toNum(q.negativeMarks);
-//       if (a.isSkipped) marks = 0;
-//       else if (a.isCorrect === true) marks = pos;
-//       else if (a.isCorrect === false) marks = neg ? -Math.abs(neg) : 0;
-//       if (grace) {
-//         if (grace.actionType === 'remove_negative' && marks < 0) {
-//           graceMks = -marks;
-//           marks = 0;
-//         } else if (grace.actionType === 'flat_add') {
-//           graceMks = toNum(grace.flatMarks);
-//           marks += graceMks;
-//         }
-//       }
-//     }
-//     return { ...a, positiveMarks: q ? toNum(q.positiveMarks) : a.positiveMarks, negativeMarks: q ? toNum(q.negativeMarks) : a.negativeMarks, marksAwarded: marks, _graceMks: graceMks };
-//   });
-
-// const _evalAnswers = (answers, qMap, qGraceMap) =>
-//   (answers || []).map((a) => {
-//     const q = qMap.get(safeTrim(a.questionId)) || null;
-//     const grace = qGraceMap.get(safeTrim(a.questionId)) || null;
-//     let marks = toNum(a.marksAwarded);
-//     let graceMks = 0;
-
-//     if (q) {
-//       const pos = toNum(q.positiveMarks);
-//       const neg = toNum(q.negativeMarks);
-
-//       if (a.isSkipped) marks = 0;
-//       else if (a.isCorrect === true) marks = pos;
-//       else if (a.isCorrect === false) marks = neg ? -Math.abs(neg) : 0;
-
-//       if (grace) {
-//         if (grace.actionType === 'flat_add') {
-//           // ── flat_add: add fixed marks to everyone ─────────────────────────
-//           graceMks = toNum(grace.flatMarks);
-//           marks += graceMks;
-//         } else if (grace.actionType === 'remove_negative') {
-//           // ── remove_negative: NEW BEHAVIOR ────────────────────────────────
-//           // 1. If student lost marks (negative) → remove those negative marks
-//           // 2. Add replacementMarks to everyone for this question
-//           //    including students who skipped
-
-//           const replacement = toNum(grace.replacementMarks);
-
-//           if (marks < 0) {
-//             // Student got it wrong — had negative deduction
-//             // Remove negative, then add replacement
-//             graceMks = -marks + replacement; // e.g. marks=-1 → graceMks = 1 + replacement
-//             marks = replacement;
-//           } else if (a.isSkipped || marks === 0) {
-//             // Student skipped or got 0 — give replacement marks
-//             graceMks = replacement;
-//             marks = replacement;
-//           } else {
-//             if (replacement > 0) {
-//               graceMks = replacement;
-//               marks += replacement;
-//             }
-//           }
-//         }
-//       }
-//     }
-//     return {
-//       ...a,
-//       positiveMarks: q ? toNum(q.positiveMarks) : a.positiveMarks,
-//       negativeMarks: q ? toNum(q.negativeMarks) : a.negativeMarks,
-//       marksAwarded: marks,
-//       _graceMks: graceMks
-//     };
-//   });
-
 const _evalAnswers = (answers, qMap, qGraceMap) =>
   (answers || []).map((a) => {
     const q = qMap.get(safeTrim(a.questionId)) || null;
     const grace = qGraceMap.get(safeTrim(a.questionId)) || null;
     let marks = 0;
     let graceMks = 0;
-
     if (q) {
       const pos = toNum(q.positiveMarks);
       const neg = toNum(q.negativeMarks);
-
       if (a.isSkipped) {
         marks = 0;
       } else if (a.isCorrect === true) {
@@ -404,25 +195,23 @@ const createExam = async (req, res, next) => {
     const duration = toNum(req.body?.duration) || 180;
     const startTime = req.body?.startTime ? toNum(req.body.startTime) : null;
     const endTime = req.body?.endTime ? toNum(req.body.endTime) : null;
+    const classNo = req.body?.classNo ? toNum(req.body.classNo) : null;
+    if (classNo !== null && !isValidClassNo(classNo)) {
+      return res.status(400).json({ status: false, message: 'classNo must be between 6 and 13' });
+    }
     const autoPublishAt = req.body?.autoPublishAt ? toNum(req.body.autoPublishAt) : null;
-
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
     if (!examCode) return res.status(400).json({ status: false, message: 'examCode is required' });
     if (!examName) return res.status(400).json({ status: false, message: 'examName is required' });
     if (!password) return res.status(400).json({ status: false, message: 'password is required' });
     if (startTime && endTime && startTime >= endTime) return res.status(400).json({ status: false, message: 'startTime must be before endTime' });
     if (autoPublishAt && endTime && autoPublishAt < endTime) return res.status(400).json({ status: false, message: 'autoPublishAt should be after endTime' });
-
     if (req.body?.instructionId && !mustObjId(req.body.instructionId)) return res.status(400).json({ status: false, message: 'Invalid instructionId' });
-
     let sections = [];
     if (Array.isArray(req.body?.sections)) sections = buildSections(req.body.sections);
-
     const dup = await MockExam.findOne({ tenantId, examCode, isdeleted: false }, { examId: 1 }).lean();
     if (dup) return res.status(409).json({ status: false, message: 'Exam with this examCode already exists' });
-
     const totalQ = sections.reduce((s, sec) => s + sec.numberOfQuestions, 0) || toNum(req.body?.totalQuestions);
-
     const doc = await MockExam.create({
       tenantId,
       examId: uuid(),
@@ -440,12 +229,12 @@ const createExam = async (req, res, next) => {
       duration,
       startTime,
       endTime,
+      classNo,
       autoPublishAt,
       status: 'draft',
       createdBy: userId || null,
       isdeleted: false
     });
-
     return res.status(201).json({ status: true, message: 'Mock exam created successfully', data: doc });
   } catch (err) {
     if (err.httpStatus) return res.status(err.httpStatus).json({ status: false, message: err.message });
@@ -460,13 +249,10 @@ const updateExam = async (req, res, next) => {
     const tenantId = pickTid(req);
     const userId = pickUid(req);
     const examId = safeTrim(req.body?.examId);
-
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
     if (!examId) return res.status(400).json({ status: false, message: 'examId is required' });
-
     const doc = await MockExam.findOne({ tenantId, examId, isdeleted: false });
     if (!doc) return res.status(404).json({ status: false, message: 'Exam not found' });
-
     const set = {};
     const str = (k) => {
       if (req.body?.[k] !== undefined) {
@@ -480,7 +266,6 @@ const updateExam = async (req, res, next) => {
     const nul = (k) => {
       if (req.body?.[k] !== undefined) set[k] = req.body[k] ? toNum(req.body[k]) : null;
     };
-
     str('examName');
     str('examCode');
     str('description');
@@ -495,7 +280,6 @@ const updateExam = async (req, res, next) => {
     nul('startTime');
     nul('endTime');
     nul('autoPublishAt');
-
     if (set.examCode) {
       const dup = await MockExam.findOne({ tenantId, examCode: set.examCode, isdeleted: false, examId: { $ne: examId } }, { examId: 1 }).lean();
       if (dup) return res.status(409).json({ status: false, message: 'examCode already in use' });
@@ -508,16 +292,20 @@ const updateExam = async (req, res, next) => {
       set.sections = buildSections(req.body.sections);
       if (!set.totalQuestions) set.totalQuestions = set.sections.reduce((s, sec) => s + sec.numberOfQuestions, 0);
     }
-
+    if (req.body?.classNo !== undefined) {
+      const cn = req.body.classNo ? toNum(req.body.classNo) : null;
+      if (cn !== null && !isValidClassNo(cn)) {
+        return res.status(400).json({ status: false, message: 'classNo must be between 6 and 13' });
+      }
+      set.classNo = cn;
+    }
     const st = set.startTime !== undefined ? set.startTime : doc.startTime;
     const et = set.endTime !== undefined ? set.endTime : doc.endTime;
     const ap = set.autoPublishAt !== undefined ? set.autoPublishAt : doc.autoPublishAt;
     if (st && et && st >= et) return res.status(400).json({ status: false, message: 'startTime must be before endTime' });
     if (ap && et && ap < et) return res.status(400).json({ status: false, message: 'autoPublishAt should be after endTime' });
-
     if (!Object.keys(set).length) return res.status(400).json({ status: false, message: 'No fields to update' });
     set.updatedBy = userId || null;
-
     const updated = await MockExam.findOneAndUpdate({ tenantId, examId, isdeleted: false }, { $set: set }, { new: true, runValidators: true }).lean();
     return res.status(200).json({ status: true, message: 'Exam updated successfully', data: { ...updated, password: undefined } });
   } catch (err) {
@@ -532,13 +320,11 @@ const listExams = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 10));
     const skip = (page - 1) * limit;
     const sort = req.query.sort || '-createdAt';
     const listAll = String(req.query.list || '').toLowerCase() === 'full';
-
     const query = { tenantId, isdeleted: false };
     if (req.query.testType) query.testType = safeTrim(req.query.testType);
     if (req.query.status) query.status = safeTrim(req.query.status);
@@ -547,7 +333,10 @@ const listExams = async (req, res, next) => {
       const rx = { $regex: safeTrim(req.query.search), $options: 'i' };
       query.$or = [{ examCode: rx }, { examName: rx }, { examId: rx }];
     }
-
+    if (req.query.classNo) query.classNo = toNum(req.query.classNo);
+    if (req.query.isImported !== undefined) {
+      query.isImported = req.query.isImported === 'true';
+    }
     let rows, count;
     const proj = { password: 0 };
     if (listAll) {
@@ -556,10 +345,8 @@ const listExams = async (req, res, next) => {
     } else {
       [rows, count] = await Promise.all([MockExam.find(query, proj).sort(sort).skip(skip).limit(limit).lean(), MockExam.countDocuments(query)]);
     }
-
     const now = Date.now();
     rows = rows.map((r) => ({ ...r, isLive: !!(r.startTime && r.endTime && now >= r.startTime && now <= r.endTime) }));
-
     return res.status(200).json({ status: true, message: 'Exams retrieved successfully', data: rows, count, ...(listAll ? {} : { page, limit }) });
   } catch (err) {
     return next(err);
@@ -599,34 +386,6 @@ const deleteExam = async (req, res, next) => {
     return next(err);
   }
 };
-
-// ─── PUBLISH RESULT ───────────────────────────────────────────────────────────
-// const publishResult = async (req, res, next) => {
-//   try {
-//     const tenantId = pickTid(req);
-//     const examId = safeTrim(req.body?.examId);
-//     const userId = pickUid(req);
-//     const publishedAt = toNum(req.body?.publishedAt) || Date.now();
-//     const note = safeTrim(req.body?.note) || null;
-//     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-//     if (!examId) return res.status(400).json({ status: false, message: 'examId is required' });
-//     const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false });
-//     if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
-//     const action = exam.resultPublishedAt ? 'republish' : 'publish';
-//     await _recomputeResults(tenantId, examId, exam, userId, action, publishedAt, note);
-//     const updated = await MockExam.findOneAndUpdate(
-//       { tenantId, examId, isdeleted: false },
-//       {
-//         $set: { resultPublishedAt: publishedAt, resultPublishedBy: userId || null, status: 'result_published', updatedBy: userId || null },
-//         $push: { publishLogs: { action, publishedAt, publishedBy: userId || null, note } }
-//       },
-//       { new: true, projection: { password: 0 } }
-//     ).lean();
-//     return res.status(200).json({ status: true, message: `Result ${action}ed successfully`, data: updated });
-//   } catch (err) {
-//     return next(err);
-//   }
-// };
 
 const publishResult = async (req, res, next) => {
   try {
@@ -676,93 +435,6 @@ const publishResult = async (req, res, next) => {
     return next(err);
   }
 };
-
-// const applyGrace = async (req, res, next) => {
-//   try {
-//     const tenantId = pickTid(req);
-//     const examId = safeTrim(req.body?.examId);
-//     const userId = pickUid(req);
-//     const graceType = safeTrim(req.body?.graceType);
-//     const actionType = safeTrim(req.body?.actionType);
-//     const questionId = safeTrim(req.body?.questionId) || null;
-//     const sectionId = safeTrim(req.body?.sectionId) || null;
-//     const flatMarks = toNum(req.body?.flatMarks);
-//     const replacementMarks = toNum(req.body?.replacementMarks); // ← ADD
-//     const note = safeTrim(req.body?.note) || null;
-//     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-//     if (!examId) return res.status(400).json({ status: false, message: 'examId is required' });
-//     if (!['exam', 'question'].includes(graceType)) {
-//       return res.status(400).json({ status: false, message: 'graceType must be exam or question' });
-//     }
-//     if (!['flat_add', 'remove_negative'].includes(actionType)) {
-//       return res.status(400).json({ status: false, message: 'actionType must be flat_add or remove_negative' });
-//     }
-//     if (graceType === 'question' && !questionId) {
-//       return res.status(400).json({ status: false, message: 'questionId is required for question grace' });
-//     }
-//     if (actionType === 'flat_add' && flatMarks <= 0) {
-//       return res.status(400).json({ status: false, message: 'flatMarks must be > 0 for flat_add' });
-//     }
-//     if (actionType === 'remove_negative' && replacementMarks < 0) {
-//       return res.status(400).json({ status: false, message: 'replacementMarks cannot be negative for remove_negative' });
-//     }
-//     const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false });
-//     if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
-//     const graceId = graceType === 'question' ? `grace_q_${questionId}` : `grace_exam_${examId}`;
-//     const newGrace = {
-//       graceId,
-//       graceType,
-//       questionId,
-//       sectionId,
-//       actionType,
-//       flatMarks,
-//       replacementMarks,
-//       appliedAt: Date.now(),
-//       appliedBy: userId || null,
-//       note,
-//       isActive: true
-//     };
-
-//     const idx = exam.graces.findIndex((g) => g.graceId === graceId);
-//     if (idx >= 0) exam.graces[idx] = newGrace;
-//     else exam.graces.push(newGrace);
-
-//     exam.updatedBy = userId || null;
-//     await exam.save();
-
-//     return res.status(200).json({
-//       status: true,
-//       message: 'Grace applied successfully',
-//       data: {
-//         graceId,
-//         graceType,
-//         actionType,
-//         flatMarks,
-//         replacementMarks
-//       }
-//     });
-//   } catch (err) {
-//     return next(err);
-//   }
-// };
-
-// const removeGrace = async (req, res, next) => {
-//   try {
-//     const tenantId = pickTid(req);
-//     const examId = safeTrim(req.body?.examId);
-//     const graceId = safeTrim(req.body?.graceId);
-//     const userId = pickUid(req);
-
-//     if (!tenantId || !examId || !graceId) return res.status(400).json({ status: false, message: 'tenantId, examId, graceId are required' });
-
-//     const updated = await MockExam.findOneAndUpdate({ tenantId, examId, isdeleted: false }, { $set: { 'graces.$[g].isActive': false, updatedBy: userId || null } }, { arrayFilters: [{ 'g.graceId': graceId }], new: true }).lean();
-//     if (!updated) return res.status(404).json({ status: false, message: 'Exam or grace not found' });
-
-//     return res.status(200).json({ status: true, message: 'Grace removed successfully' });
-//   } catch (err) {
-//     return next(err);
-//   }
-// };
 
 const checkAndAutoPublish = async (req, res, next) => {
   try {
@@ -925,6 +597,7 @@ const duplicateExam = async (req, res, next) => {
           totalQuestions: totalQ,
           totalMarks: toNum(req.body?.totalMarks) || sourceExam.totalMarks || 0,
           duration,
+          classNo: toNum(req.body?.classNo) || sourceExam.classNo || null,
           startTime,
           endTime,
           autoPublishAt,
@@ -1129,6 +802,257 @@ const reevaluate = async (req, res, next) => {
   }
 };
 
+// const bulkUploadHistorical = async (req, res, next) => {
+//   const session = await mongoose.startSession();
+//   session.startTransaction();
+//   try {
+//     const tenantId = pickTid(req);
+//     const userId = safeTrim(req.body?.userId || '');
+//     const examCode = safeTrim(req.body?.examCode);
+//     const examName = safeTrim(req.body?.examName);
+//     const totalMarks = toNum(req.body?.totalMarks) || 0;
+//     const totalQuestions = toNum(req.body?.totalQuestions) || 0;
+//     const duration = toNum(req.body?.duration) || 0;
+//     const startTime = req.body?.startTime ? toNum(req.body.startTime) : null;
+//     const endTime = req.body?.endTime ? toNum(req.body.endTime) : null;
+//     const description = safeTrim(req.body?.description || '');
+//     const password = safeTrim(req.body?.password || '') || 'historical';
+//     const sectionsIn = Array.isArray(req.body?.sections) ? req.body.sections : [];
+//     const students = Array.isArray(req.body?.students) ? req.body.students : [];
+//     const classNo = req.body?.classNo ? toNum(req.body.classNo) : null;
+//     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+//     if (!examCode) return res.status(400).json({ status: false, message: 'examCode is required' });
+//     if (!examName) return res.status(400).json({ status: false, message: 'examName is required' });
+//     if (!sectionsIn.length) return res.status(400).json({ status: false, message: 'sections[] is required' });
+//     if (!students.length) return res.status(400).json({ status: false, message: 'students[] is required' });
+//     if (!totalMarks) return res.status(400).json({ status: false, message: 'totalMarks is required' });
+//     if (classNo !== null && !isValidClassNo(classNo)) {
+//       return res.status(400).json({ status: false, message: 'classNo must be between 6 and 13' });
+//     }
+//     const dupExam = await MockExam.findOne({ tenantId, examCode, isdeleted: false }, { examId: 1 }).session(session).lean();
+//     if (dupExam) {
+//       await session.abortTransaction();
+//       return res.status(409).json({
+//         status: false,
+//         message: `Exam with examCode "${examCode}" already exists`
+//       });
+//     }
+//     const secResults = (Array.isArray(s.sectionResults) ? s.sectionResults : []).map((sr) => {
+//       const sid = safeTrim(sr.sectionId);
+//       const secMeta = secMap.get(sid) || {};
+//       const nullableNum = (v) => (v !== null && v !== undefined ? toNum(v) : null);
+//       return {
+//         sectionId: sid,
+//         subjectId: secMeta.subjectId || null,
+//         totalMarks: toNum(sr.totalMarks) || 0,
+//         totalQuestions: toNum(sr.totalQuestions) || 0,
+//         answeredCount: nullableNum(sr.answeredCount),
+//         correctCount: nullableNum(sr.correctCount),
+//         wrongCount: nullableNum(sr.wrongCount),
+//         skippedCount: nullableNum(sr.skippedCount),
+//         obtainedMarks: toNum(sr.obtainedMarks) || 0,
+//         timeTaken: toNum(sr.timeTaken) || 0
+//       };
+//     });
+//     const secMap = new Map(sections.map((s) => [s.sectionId, s]));
+//     for (const s of students) {
+//       const secResults = Array.isArray(s.sectionResults) ? s.sectionResults : [];
+//       for (const sr of secResults) {
+//         const sid = safeTrim(sr.sectionId);
+//         if (!secMap.has(sid)) {
+//           await session.abortTransaction();
+//           return res.status(400).json({
+//             status: false,
+//             message: `sectionId "${sid}" not found in sections (admissionNo: ${s.admissionNo})`
+//           });
+//         }
+//       }
+//     }
+//     const newExamId = uuid();
+//     const now = Date.now();
+//     const [newExam] = await MockExam.create(
+//       [
+//         {
+//           tenantId,
+//           examId: newExamId,
+//           examCode,
+//           examName,
+//           description: description || null,
+//           password,
+//           testType: 'practice',
+//           medium: 'en',
+//           calculatorType: 'none',
+//           sections,
+//           totalQuestions,
+//           totalMarks,
+//           duration,
+//           startTime,
+//           endTime,
+//           classNo,
+//           autoPublishAt: null,
+//           resultPublishedAt: now,
+//           resultPublishedBy: userId || null,
+//           status: 'result_published',
+//           graces: [],
+//           publishLogs: [
+//             {
+//               action: 'publish',
+//               publishedAt: now,
+//               publishedBy: userId || null,
+//               note: 'Historical exam bulk upload'
+//             }
+//           ],
+//           reevaluateLogs: [],
+//           isImported: true,
+//           isdeleted: false,
+//           createdBy: userId || null,
+//           updatedBy: userId || null
+//         }
+//       ],
+//       { session }
+//     );
+//     const incomingAdmNos = students.map((s) => safeTrim(s.admissionNo)).filter(Boolean);
+//     const seen = new Set();
+//     const dupes = [];
+//     for (const no of incomingAdmNos) {
+//       if (seen.has(no)) dupes.push(no);
+//       else seen.add(no);
+//     }
+//     if (dupes.length) {
+//       await session.abortTransaction();
+//       return res.status(400).json({
+//         status: false,
+//         message: 'Duplicate admissionNo(s) in students payload',
+//         duplicates: dupes
+//       });
+//     }
+//     const profiles = await StudentProfile.find({ tenantId, admissionNo: { $in: incomingAdmNos }, isdeleted: false }, { admissionNo: 1, studentId: 1, batchId: 1, centerId: 1, classNo: 1 })
+//       .session(session)
+//       .lean();
+//     const profileMap = new Map(profiles.map((p) => [safeTrim(p.admissionNo), p]));
+//     const validStudents = [];
+//     const notFoundErrors = [];
+//     for (const s of students) {
+//       const admNo = safeTrim(s.admissionNo);
+//       if (!admNo) continue;
+//       const profile = profileMap.get(admNo);
+//       if (!profile) {
+//         notFoundErrors.push({
+//           admissionNo: admNo,
+//           message: `Student not found in profiles`
+//         });
+//         continue;
+//       }
+//       validStudents.push({ ...s, _profile: profile });
+//     }
+//     const resultDocs = validStudents.map((s) => {
+//       const admNo = safeTrim(s.admissionNo);
+//       const profile = s._profile;
+//       const secResults = (Array.isArray(s.sectionResults) ? s.sectionResults : []).map((sr) => {
+//         const sid = safeTrim(sr.sectionId);
+//         const secMeta = secMap.get(sid) || {};
+//         return {
+//           sectionId: sid,
+//           subjectId: secMeta.subjectId || null,
+//           totalQuestions: toNum(sr.totalQuestions) || 0,
+//           answeredCount: toNum(sr.answeredCount) || 0,
+//           correctCount: toNum(sr.correctCount) || 0,
+//           wrongCount: toNum(sr.wrongCount) || 0,
+//           skippedCount: toNum(sr.skippedCount) || 0,
+//           obtainedMarks: toNum(sr.obtainedMarks) || 0,
+//           timeTaken: toNum(sr.timeTaken) || 0
+//         };
+//       });
+//       const obtainedMarks = toNum(s.obtainedMarks) || 0;
+//       const totalQuestions = secResults.reduce((sum, sr) => sum + sr.totalQuestions, 0) || 0;
+//       const nullableSum = (field) => {
+//         const hasAny = secResults.some((sr) => sr[field] !== null && sr[field] !== undefined);
+//         if (!hasAny) return null;
+//         return secResults.reduce((sum, sr) => sum + (sr[field] ?? 0), 0);
+//       };
+
+//       const correctCount = nullableSum('correctCount');
+//       const wrongCount = nullableSum('wrongCount');
+//       const skippedCount = nullableSum('skippedCount');
+//       const answeredCount = nullableSum('answeredCount');
+//       return {
+//         tenantId,
+//         examId: newExamId,
+//         admissionNo: admNo,
+//         studentId: safeTrim(profile.studentId) || null,
+//         batchId: safeTrim(s.batchId) || null,
+//         centerId: safeTrim(s.centerId) || safeTrim(profile.centerId) || null,
+//         classNo: s.classNo ? toNum(s.classNo) : profile.classNo || null,
+//         obtainedMarks,
+//         totalMarks,
+//         sectionResults: secResults,
+//         answers: [],
+//         totalQuestions,
+//         correctCount,
+//         wrongCount,
+//         skippedCount,
+//         answeredCount,
+//         startedAt: s.startedAt ? toNum(s.startedAt) : null,
+//         completedAt: s.completedAt ? toNum(s.completedAt) : now,
+//         timeTaken: s.timeTaken ? toNum(s.timeTaken) : 0,
+//         isLate: s.isLate === true,
+//         rank: null,
+//         percentile: null,
+//         status: 'result_published',
+//         isResultVisible: true,
+//         isImported: true,
+//         graceLogs: [],
+//         publishHistory: [
+//           {
+//             action: 'publish',
+//             publishedAt: now,
+//             publishedBy: userId || null,
+//             obtainedMarksBefore: null,
+//             obtainedMarksAfter: obtainedMarks,
+//             rankBefore: null,
+//             rankAfter: null,
+//             note: 'Historical bulk upload'
+//           }
+//         ],
+//         isdeleted: false,
+//         createdBy: userId || null,
+//         updatedBy: userId || null
+//       };
+//     });
+//     let insertedCount = 0;
+//     if (resultDocs.length) {
+//       const inserted = await MockExamResult.insertMany(resultDocs, { session, ordered: false });
+//       insertedCount = inserted.length;
+//     }
+//     await session.commitTransaction();
+//     return res.status(201).json({
+//       status: true,
+//       message: `Historical exam created and ${insertedCount} result(s) uploaded`,
+//       data: {
+//         examId: newExamId,
+//         examCode: newExam.examCode,
+//         examName: newExam.examName,
+//         status: newExam.status,
+//         totalStudents: students.length,
+//         insertedCount,
+//         skippedCount: notFoundErrors.length,
+//         errors: notFoundErrors.length ? notFoundErrors : undefined
+//       }
+//     });
+//   } catch (err) {
+//     await session.abortTransaction();
+//     if (err.httpStatus) {
+//       return res.status(err.httpStatus).json({ status: false, message: err.message });
+//     }
+//     if (err.code === 11000) {
+//       return res.status(409).json({ status: false, message: 'Duplicate examCode or result already exists' });
+//     }
+//     return next(err);
+//   } finally {
+//     session.endSession();
+//   }
+// };
+
 const bulkUploadHistorical = async (req, res, next) => {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -1146,12 +1070,20 @@ const bulkUploadHistorical = async (req, res, next) => {
     const password = safeTrim(req.body?.password || '') || 'historical';
     const sectionsIn = Array.isArray(req.body?.sections) ? req.body.sections : [];
     const students = Array.isArray(req.body?.students) ? req.body.students : [];
+    const classNo = req.body?.classNo ? toNum(req.body.classNo) : null;
+
+    // ── Validations ───────────────────────────────────────────────────────────
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
     if (!examCode) return res.status(400).json({ status: false, message: 'examCode is required' });
     if (!examName) return res.status(400).json({ status: false, message: 'examName is required' });
     if (!sectionsIn.length) return res.status(400).json({ status: false, message: 'sections[] is required' });
     if (!students.length) return res.status(400).json({ status: false, message: 'students[] is required' });
     if (!totalMarks) return res.status(400).json({ status: false, message: 'totalMarks is required' });
+    if (classNo !== null && !isValidClassNo(classNo)) {
+      return res.status(400).json({ status: false, message: 'classNo must be between 6 and 13' });
+    }
+
+    // ── Check examCode uniqueness ─────────────────────────────────────────────
     const dupExam = await MockExam.findOne({ tenantId, examCode, isdeleted: false }, { examId: 1 }).session(session).lean();
     if (dupExam) {
       await session.abortTransaction();
@@ -1160,6 +1092,8 @@ const bulkUploadHistorical = async (req, res, next) => {
         message: `Exam with examCode "${examCode}" already exists`
       });
     }
+
+    // ── Build sections ────────────────────────────────────────────────────────
     const sections = sectionsIn.map((s, idx) => {
       const sectionId = safeTrim(s.sectionId) || uuid();
       if (!safeTrim(s.sectionCode)) throw Object.assign(new Error(`Section ${idx + 1}: sectionCode is required`), { httpStatus: 400 });
@@ -1175,10 +1109,14 @@ const bulkUploadHistorical = async (req, res, next) => {
         status: 'active'
       };
     });
+
+    // ── Build secMap ──────────────────────────────────────────────────────────
     const secMap = new Map(sections.map((s) => [s.sectionId, s]));
+
+    // ── Validate student sectionIds ───────────────────────────────────────────
     for (const s of students) {
-      const secResults = Array.isArray(s.sectionResults) ? s.sectionResults : [];
-      for (const sr of secResults) {
+      const srs = Array.isArray(s.sectionResults) ? s.sectionResults : [];
+      for (const sr of srs) {
         const sid = safeTrim(sr.sectionId);
         if (!secMap.has(sid)) {
           await session.abortTransaction();
@@ -1189,8 +1127,11 @@ const bulkUploadHistorical = async (req, res, next) => {
         }
       }
     }
+
+    // ── Create exam ───────────────────────────────────────────────────────────
     const newExamId = uuid();
     const now = Date.now();
+
     const [newExam] = await MockExam.create(
       [
         {
@@ -1209,6 +1150,7 @@ const bulkUploadHistorical = async (req, res, next) => {
           duration,
           startTime,
           endTime,
+          classNo,
           autoPublishAt: null,
           resultPublishedAt: now,
           resultPublishedBy: userId || null,
@@ -1231,7 +1173,10 @@ const bulkUploadHistorical = async (req, res, next) => {
       ],
       { session }
     );
+
+    // ── Check duplicate admissionNos in payload ───────────────────────────────
     const incomingAdmNos = students.map((s) => safeTrim(s.admissionNo)).filter(Boolean);
+
     const seen = new Set();
     const dupes = [];
     for (const no of incomingAdmNos) {
@@ -1246,112 +1191,68 @@ const bulkUploadHistorical = async (req, res, next) => {
         duplicates: dupes
       });
     }
+
+    // ── Fetch student profiles ────────────────────────────────────────────────
     const profiles = await StudentProfile.find({ tenantId, admissionNo: { $in: incomingAdmNos }, isdeleted: false }, { admissionNo: 1, studentId: 1, batchId: 1, centerId: 1, classNo: 1 })
       .session(session)
       .lean();
+
     const profileMap = new Map(profiles.map((p) => [safeTrim(p.admissionNo), p]));
+
     const validStudents = [];
     const notFoundErrors = [];
+
     for (const s of students) {
       const admNo = safeTrim(s.admissionNo);
       if (!admNo) continue;
       const profile = profileMap.get(admNo);
       if (!profile) {
-        notFoundErrors.push({
-          admissionNo: admNo,
-          message: `Student not found in profiles`
-        });
+        notFoundErrors.push({ admissionNo: admNo, message: 'Student not found in profiles' });
         continue;
       }
       validStudents.push({ ...s, _profile: profile });
     }
-    // const resultDocs = validStudents.map((s) => {
-    //   const admNo = safeTrim(s.admissionNo);
-    //   const profile = s._profile;
-    //   const secResults = (Array.isArray(s.sectionResults) ? s.sectionResults : []).map((sr) => {
-    //     const sid = safeTrim(sr.sectionId);
-    //     const secMeta = secMap.get(sid) || {};
-    //     return {
-    //       sectionId: sid,
-    //       subjectId: secMeta.subjectId || null,
-    //       totalQuestions: toNum(sr.totalQuestions) || 0,
-    //       answeredCount: toNum(sr.answeredCount) || 0,
-    //       correctCount: toNum(sr.correctCount) || 0,
-    //       wrongCount: toNum(sr.wrongCount) || 0,
-    //       skippedCount: toNum(sr.skippedCount) || 0,
-    //       obtainedMarks: toNum(sr.obtainedMarks) || 0,
-    //       timeTaken: toNum(sr.timeTaken) || 0
-    //     };
-    //   });
-    //   const obtainedMarks = toNum(s.obtainedMarks) || 0;
-    //   return {
-    //     tenantId,
-    //     examId: newExamId,
-    //     admissionNo: admNo,
-    //     studentId: safeTrim(profile.studentId) || null,
-    //     batchId: safeTrim(s.batchId) || null,
-    //     centerId: safeTrim(s.centerId) || safeTrim(profile.centerId) || null,
-    //     classNo: s.classNo ? toNum(s.classNo) : profile.classNo || null,
-    //     obtainedMarks,
-    //     totalMarks,
-    //     sectionResults: secResults,
-    //     answers: [],
-    //     totalQuestions: secResults.reduce((sum, sr) => sum + sr.totalQuestions, 0) || 0,
-    //     correctCount: secResults.reduce((sum, sr) => sum + sr.correctCount, 0) || 0,
-    //     wrongCount: secResults.reduce((sum, sr) => sum + sr.wrongCount, 0) || 0,
-    //     skippedCount: secResults.reduce((sum, sr) => sum + sr.skippedCount, 0) || 0,
-    //     answeredCount: secResults.reduce((sum, sr) => sum + sr.answeredCount, 0) || 0,
-    //     startedAt: s.startedAt ? toNum(s.startedAt) : null,
-    //     completedAt: s.completedAt ? toNum(s.completedAt) : now,
-    //     timeTaken: s.timeTaken ? toNum(s.timeTaken) : 0,
-    //     isLate: s.isLate === true,
-    //     rank: null,
-    //     percentile: null,
-    //     status: 'result_published',
-    //     isResultVisible: true,
-    //     graceLogs: [],
-    //     publishHistory: [
-    //       {
-    //         action: 'publish',
-    //         publishedAt: now,
-    //         publishedBy: userId || null,
-    //         obtainedMarksBefore: null,
-    //         obtainedMarksAfter: obtainedMarks,
-    //         rankBefore: null,
-    //         rankAfter: null,
-    //         note: 'Historical bulk upload'
-    //       }
-    //     ],
-    //     isdeleted: false,
-    //     createdBy: userId || null,
-    //     updatedBy: userId || null
-    //   };
-    // });
+
+    // ── Build result docs ─────────────────────────────────────────────────────
+    // ── Null-aware helper — null means "data not available" ───────────────────
+    const nullableNum = (v) => (v !== null && v !== undefined ? toNum(v) : null);
+
     const resultDocs = validStudents.map((s) => {
       const admNo = safeTrim(s.admissionNo);
       const profile = s._profile;
+
+      // ── Build section results with null-aware counts ───────────────────────
       const secResults = (Array.isArray(s.sectionResults) ? s.sectionResults : []).map((sr) => {
         const sid = safeTrim(sr.sectionId);
         const secMeta = secMap.get(sid) || {};
         return {
           sectionId: sid,
           subjectId: secMeta.subjectId || null,
+          totalMarks: toNum(sr.totalMarks) || 0, // ← section totalMarks
           totalQuestions: toNum(sr.totalQuestions) || 0,
-          answeredCount: toNum(sr.answeredCount) || 0,
-          correctCount: toNum(sr.correctCount) || 0,
-          wrongCount: toNum(sr.wrongCount) || 0,
-          skippedCount: toNum(sr.skippedCount) || 0,
+          answeredCount: nullableNum(sr.answeredCount), // ← null-aware
+          correctCount: nullableNum(sr.correctCount), // ← null-aware
+          wrongCount: nullableNum(sr.wrongCount), // ← null-aware
+          skippedCount: nullableNum(sr.skippedCount), // ← null-aware
           obtainedMarks: toNum(sr.obtainedMarks) || 0,
           timeTaken: toNum(sr.timeTaken) || 0
         };
       });
 
+      // ── Top level aggregation — null-aware ────────────────────────────────
       const obtainedMarks = toNum(s.obtainedMarks) || 0;
-      const totalQuestions = secResults.reduce((sum, sr) => sum + sr.totalQuestions, 0) || 0;
-      const correctCount = secResults.reduce((sum, sr) => sum + sr.correctCount, 0) || 0;
-      const wrongCount = secResults.reduce((sum, sr) => sum + sr.wrongCount, 0) || 0;
-      const skippedCount = secResults.reduce((sum, sr) => sum + sr.skippedCount, 0) || 0;
-      const answeredCount = secResults.reduce((sum, sr) => sum + sr.answeredCount, 0) || 0;
+      const totalQs = secResults.reduce((sum, sr) => sum + (sr.totalQuestions ?? 0), 0) || 0;
+
+      const nullableSum = (field) => {
+        const hasAny = secResults.some((sr) => sr[field] !== null && sr[field] !== undefined);
+        if (!hasAny) return null;
+        return secResults.reduce((sum, sr) => sum + (sr[field] ?? 0), 0);
+      };
+
+      const correctCount = nullableSum('correctCount');
+      const wrongCount = nullableSum('wrongCount');
+      const skippedCount = nullableSum('skippedCount');
+      const answeredCount = nullableSum('answeredCount');
 
       return {
         tenantId,
@@ -1365,7 +1266,7 @@ const bulkUploadHistorical = async (req, res, next) => {
         totalMarks,
         sectionResults: secResults,
         answers: [],
-        totalQuestions,
+        totalQuestions: totalQs,
         correctCount,
         wrongCount,
         skippedCount,
@@ -1397,12 +1298,16 @@ const bulkUploadHistorical = async (req, res, next) => {
         updatedBy: userId || null
       };
     });
+
+    // ── Insert results ────────────────────────────────────────────────────────
     let insertedCount = 0;
     if (resultDocs.length) {
       const inserted = await MockExamResult.insertMany(resultDocs, { session, ordered: false });
       insertedCount = inserted.length;
     }
+
     await session.commitTransaction();
+
     return res.status(201).json({
       status: true,
       message: `Historical exam created and ${insertedCount} result(s) uploaded`,

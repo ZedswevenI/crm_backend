@@ -25,6 +25,11 @@ const pickUid = (req) => safeTrim(req.body?.userId || req.user?.userId);
 const mustObjId = (id) => mongoose.Types.ObjectId.isValid(String(id || ''));
 const uuid = () => (typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : crypto.randomBytes(16).toString('hex'));
 
+const isValidClassNo = (n) => {
+  const v = toNum(n);
+  return Number.isFinite(v) && v >= 6 && v <= 13;
+};
+
 const BUCKET = process.env.AWS_S3_QUESTION_BUCKET;
 const REGION = process.env.AWS_REGION || 'ap-south-1';
 const ALLOWED_TYPES = new Set(['mcq_single', 'mcq_multi', 'true_false', 'short_answer', 'integer', 'subjective', 'numeric', 'passage_qns', 'matrix']);
@@ -200,6 +205,7 @@ const createQuestion = async (req, res, next) => {
       rightColumn: normalizeColumns(req.body?.rightColumn),
       questionOptions: opts,
       correctAnswer: String(req.body?.correctAnswer || ''),
+      classNo: toNum(exam.classNo) || null,
       tags: Array.isArray(req.body?.tags) ? req.body.tags.map(safeTrim).filter(Boolean) : [],
       sortOrder: toNum(req.body?.sortOrder),
       status: safeTrim(req.body?.status) || 'active',
@@ -273,6 +279,7 @@ const createQuestionsBulk = async (req, res, next) => {
         tags: Array.isArray(q?.tags) ? q.tags.map(safeTrim).filter(Boolean) : [],
         sortOrder: toNum(q?.sortOrder, idx),
         status: safeTrim(q?.status) || 'active',
+        classNo: toNum(exam.classNo) || null,
         isdeleted: false,
         createdBy: userId,
         updatedBy: userId
@@ -569,6 +576,10 @@ const createQuestionInBank = async (req, res, next) => {
       sortOrder,
       status
     } = req.body;
+    const classNo = req.body?.classNo ? toNum(req.body.classNo) : null;
+    if (!isValidClassNo(classNo)) {
+      return res.status(400).json({ status: false, message: 'classNo must be between 6 and 13' });
+    }
     if (!questionType) return res.status(400).json({ status: false, message: 'questionType is required' });
     if (!subjectId || !mustObjId(subjectId)) return res.status(400).json({ status: false, message: 'valid subjectId is required for bank questions' });
     if (!topicId) return res.status(400).json({ status: false, message: 'topicId is required for bank questions' });
@@ -605,6 +616,7 @@ const createQuestionInBank = async (req, res, next) => {
       tags: Array.isArray(tags) ? tags.map(safeTrim).filter(Boolean) : [],
       sortOrder: toNum(sortOrder, 0),
       status: safeTrim(status) || 'active',
+      classNo,
       createdBy: userId || null,
       updatedBy: userId || null,
       isdeleted: false
@@ -627,6 +639,12 @@ const createQuestionsBulkInBank = async (req, res, next) => {
       if (!q.questionType) return res.status(400).json({ status: false, message: 'questionType is required for all questions' });
       if (!q.subjectId || !mustObjId(q.subjectId)) return res.status(400).json({ status: false, message: 'valid subjectId is required for all bank questions' });
       if (!q.topicId) return res.status(400).json({ status: false, message: 'topicId is required for all bank questions' });
+      if (!isValidClassNo(q.classNo)) {
+        return res.status(400).json({
+          status: false,
+          message: `classNo must be between 6 and 13 (question index ${questions.indexOf(q) + 1})`
+        });
+      }
       const questionNo = await generateQuestionNo(tenantId, q.subjectId);
       docs.push({
         tenantId,
@@ -658,6 +676,7 @@ const createQuestionsBulkInBank = async (req, res, next) => {
         tags: Array.isArray(q.tags) ? q.tags.map(safeTrim).filter(Boolean) : [],
         sortOrder: toNum(q.sortOrder, 0),
         status: safeTrim(q.status) || 'active',
+        classNo: toNum(q.classNo),
         createdBy: userId || null,
         updatedBy: userId || null,
         isdeleted: false
@@ -681,6 +700,7 @@ const listQuestionBank = async (req, res, next) => {
     const difficulty = req.query.difficulty;
     const questionType = req.query.questionType;
     const status = req.query.status;
+    const classNo = req.query.classNo || req.body?.classNo;
     const page = Math.max(parseInt(req.query.page || req.body.page || '1', 10), 1);
     const limit = Math.min(Math.max(parseInt(req.query.limit || req.body.limit || '20', 10), 1), 200);
     const query = { tenantId, examId: null, isdeleted: false };
@@ -690,6 +710,7 @@ const listQuestionBank = async (req, res, next) => {
     if (difficulty) query.difficulty = safeTrim(difficulty);
     if (questionType) query.questionType = safeTrim(questionType).toLowerCase();
     if (status) query.status = safeTrim(status);
+    if (classNo) query.classNo = toNum(classNo);
     if (req.body.list === 'full') {
       const rows = await MockExamQns.find(query).sort({ createdAt: -1 }).lean();
       return res.status(200).json({ status: true, data: rows, count: rows.length });
@@ -709,7 +730,6 @@ const mapQuestionToExam = async (req, res, next) => {
     const recId = safeTrim(req.body?.recId);
     const examId = safeTrim(req.body?.examId);
     const sectionId = safeTrim(req.body?.sectionId);
-
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
     if (!recId) return res.status(400).json({ status: false, message: 'recId (_id) is required' });
     if (!examId) return res.status(400).json({ status: false, message: 'examId is required' });
@@ -722,6 +742,12 @@ const mapQuestionToExam = async (req, res, next) => {
     }
     const question = await MockExamQns.findOne({ _id: recId, tenantId, isdeleted: false }).lean();
     if (!question) return res.status(404).json({ status: false, message: 'Question not found' });
+    if (exam.classNo && question.classNo && toNum(exam.classNo) !== toNum(question.classNo)) {
+      return res.status(400).json({
+        status: false,
+        message: `Class mismatch — exam is for Class ${exam.classNo} but question belongs to Class ${question.classNo}`
+      });
+    }
     const alreadyMapped = await MockExamQns.findOne(
       {
         tenantId,
@@ -864,6 +890,14 @@ const bulkMapQuestionsToExam = async (req, res, next) => {
     let totalQuestionsAdded = 0;
     for (const question of questions) {
       try {
+        if (exam.classNo && question.classNo && toNum(exam.classNo) !== toNum(question.classNo)) {
+          results.skipped++;
+          results.errors.push({
+            recId: String(question._id),
+            message: `Class mismatch — exam is for Class ${exam.classNo} but question belongs to Class ${question.classNo}`
+          });
+          continue;
+        }
         if (alreadyMappedSet.has(question.questionId)) {
           results.skipped++;
           results.errors.push({

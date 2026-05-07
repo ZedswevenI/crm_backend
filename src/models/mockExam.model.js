@@ -85,6 +85,7 @@ const MockExamSchema = new mongoose.Schema(
     resultPublishedAt: { type: Number, default: null },
     resultPublishedBy: { type: String, default: null },
     reevaluateLogs: { type: [ReevaluateLogSchema], default: [] },
+    classNo: { type: Number, default: null, index: true, min: 6, max: 13 },
     status: {
       type: String,
       default: 'draft',
