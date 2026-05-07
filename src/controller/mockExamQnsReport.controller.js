@@ -4,14 +4,12 @@ import QuestionReport from '../models/questionReport.model.js';
 import MockExamQns from '../models/mockExamQns.model.js';
 import AssignmentQns from '../models/assingmentQns.model.js';
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
 const safeTrim = (v) => (v == null ? '' : String(v)).trim();
 const pickTid = (req) => safeTrim(req.body?.entiId || req.body?.tenantId);
 const pickUid = (req) => safeTrim(req.body?.userId || req.user?.userId);
 
 const fetchQuestionDetails = async (questionIds, sourceType) => {
   if (!questionIds.length) return new Map();
-
   const projection = {
     questionId: 1,
     questionType: 1,
@@ -33,7 +31,6 @@ const fetchQuestionDetails = async (questionIds, sourceType) => {
     numericMax: 1,
     hasPartialMarking: 1
   };
-
   let questions = [];
   if (sourceType === 'mockexam') {
     questions = await MockExamQns.find({ questionId: { $in: questionIds }, isdeleted: false }, projection)
@@ -42,11 +39,9 @@ const fetchQuestionDetails = async (questionIds, sourceType) => {
   } else {
     questions = await AssignmentQns.find({ questionId: { $in: questionIds }, isdeleted: false }, projection).lean();
   }
-
   return new Map(questions.map((q) => [safeTrim(q.questionId), q]));
 };
 
-// ─── Merge question details into a doc ───────────────────────────────────────
 const mergeQuestionDetails = (doc, qMap) => {
   const q = qMap.get(safeTrim(doc.questionId)) || null;
   return {
@@ -74,12 +69,6 @@ const mergeQuestionDetails = (doc, qMap) => {
   };
 };
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// BOOKMARK APIs
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// ─── createBookmark ───────────────────────────────────────────────────────────
-// POST /bookmark/create
 const createBookmark = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
@@ -129,19 +118,15 @@ const deleteBookmark = async (req, res, next) => {
     const bookmarkId = safeTrim(req.body?.bookmarkId);
     const questionId = safeTrim(req.body?.questionId);
     const studentId = safeTrim(req.body?.studentId);
-
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-
     const query = { tenantId, isdeleted: false };
     if (bookmarkId) query.bookmarkId = bookmarkId;
     else if (questionId && studentId) {
       query.questionId = questionId;
       query.studentId = studentId;
     } else return res.status(400).json({ status: false, message: 'bookmarkId or (questionId + studentId) is required' });
-
     const doc = await StudentBookmark.findOneAndUpdate(query, { $set: { isdeleted: true, updatedBy: userId || null } }, { new: true });
     if (!doc) return res.status(404).json({ status: false, message: 'Bookmark not found' });
-
     return res.status(200).json({ status: true, message: 'Bookmark removed' });
   } catch (err) {
     return next(err);
@@ -155,34 +140,24 @@ const listBookmarks = async (req, res, next) => {
     const sourceType = safeTrim(req.body?.sourceType) || null;
     const examId = safeTrim(req.body?.examId) || null;
     const subjectId = safeTrim(req.body?.subjectId) || null;
-
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
     if (!studentId) return res.status(400).json({ status: false, message: 'studentId is required' });
-
     const page = Math.max(parseInt(req.body?.page || '1', 10), 1);
     const limit = Math.min(Math.max(parseInt(req.body?.limit || '20', 10), 1), 100);
     const skip = (page - 1) * limit;
-
     const query = { tenantId, studentId, isdeleted: false };
     if (sourceType) query.sourceType = sourceType;
     if (examId) query.examId = examId;
     if (subjectId) query.subjectId = subjectId;
-
     const [bookmarks, count] = await Promise.all([StudentBookmark.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(), StudentBookmark.countDocuments(query)]);
-
     if (!bookmarks.length) return res.status(200).json({ status: true, data: [], count: 0, page, limit });
-
-    // Group by sourceType to batch fetch question details efficiently
     const mockexamIds = bookmarks.filter((b) => b.sourceType === 'mockexam').map((b) => b.questionId);
     const assignmentIds = bookmarks.filter((b) => b.sourceType === 'assignment').map((b) => b.questionId);
-
     const [mockexamMap, assignmentMap] = await Promise.all([mockexamIds.length ? fetchQuestionDetails(mockexamIds, 'mockexam') : Promise.resolve(new Map()), assignmentIds.length ? fetchQuestionDetails(assignmentIds, 'assignment') : Promise.resolve(new Map())]);
-
     const data = bookmarks.map((b) => {
       const qMap = b.sourceType === 'mockexam' ? mockexamMap : assignmentMap;
       return mergeQuestionDetails(b, qMap);
     });
-
     return res.status(200).json({ status: true, data, count, page, limit });
   } catch (err) {
     return next(err);
@@ -199,7 +174,6 @@ const createReport = async (req, res, next) => {
     const sourceType = safeTrim(req.body?.sourceType) || 'assignment';
     const issueType = safeTrim(req.body?.issueType);
     const description = safeTrim(req.body?.description);
-
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
     if (!studentId) return res.status(400).json({ status: false, message: 'studentId is required' });
     if (!studentName) return res.status(400).json({ status: false, message: 'studentName is required' });
@@ -207,7 +181,6 @@ const createReport = async (req, res, next) => {
     if (!issueType) return res.status(400).json({ status: false, message: 'issueType is required' });
     if (!description) return res.status(400).json({ status: false, message: 'description is required' });
     if (!['mockexam', 'assignment'].includes(sourceType)) return res.status(400).json({ status: false, message: 'sourceType must be mockexam or assignment' });
-
     const doc = await QuestionReport.create({
       tenantId,
       reportId: uuid(),
@@ -225,7 +198,6 @@ const createReport = async (req, res, next) => {
       createdBy: userId || null,
       updatedBy: userId || null
     });
-
     return res.status(201).json({ status: true, message: 'Report submitted successfully', data: doc });
   } catch (err) {
     return next(err);
@@ -236,11 +208,9 @@ const listReports = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-
     const page = Math.max(parseInt(req.body?.page || '1', 10), 1);
     const limit = Math.min(Math.max(parseInt(req.body?.limit || '20', 10), 1), 100);
     const skip = (page - 1) * limit;
-
     const query = { tenantId, isdeleted: false };
     if (req.body?.status) query.status = safeTrim(req.body.status);
     if (req.body?.sourceType) query.sourceType = safeTrim(req.body.sourceType);
@@ -248,9 +218,7 @@ const listReports = async (req, res, next) => {
     if (req.body?.studentId) query.studentId = safeTrim(req.body.studentId);
     if (req.body?.issueType) query.issueType = safeTrim(req.body.issueType);
     if (req.body?.questionId) query.questionId = safeTrim(req.body.questionId);
-
     const [rows, count] = await Promise.all([QuestionReport.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(), QuestionReport.countDocuments(query)]);
-
     return res.status(200).json({ status: true, data: rows, count, page, limit });
   } catch (err) {
     return next(err);
@@ -263,25 +231,19 @@ const updateReportStatus = async (req, res, next) => {
     const userId = pickUid(req);
     const recId = safeTrim(req.body?.recId);
     const status = safeTrim(req.body?.status);
-
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
     if (!recId) return res.status(400).json({ status: false, message: 'recId is required' });
     if (!status) return res.status(400).json({ status: false, message: 'status is required' });
-
     const VALID = ['PENDING', 'REVIEWING', 'FIXED', 'REJECTED'];
     if (!VALID.includes(status)) return res.status(400).json({ status: false, message: `status must be one of: ${VALID.join(', ')}` });
-
     const set = { status, updatedBy: userId || null };
     if (req.body?.adminRemark !== undefined) set.adminRemark = safeTrim(req.body.adminRemark) || null;
     if (['FIXED', 'REJECTED'].includes(status)) {
       set.resolvedBy = userId || null;
       set.resolvedAt = Date.now();
     }
-
     const doc = await QuestionReport.findOneAndUpdate({ _id: recId, tenantId, isdeleted: false }, { $set: set }, { new: true }).lean();
-
     if (!doc) return res.status(404).json({ status: false, message: 'Report not found' });
-
     return res.status(200).json({ status: true, message: 'Report status updated', data: doc });
   } catch (err) {
     return next(err);

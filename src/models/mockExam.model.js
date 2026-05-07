@@ -92,6 +92,7 @@ const MockExamSchema = new mongoose.Schema(
     },
     graces: { type: [GraceSchema], default: [] },
     publishLogs: { type: [PublishLogSchema], default: [] },
+    isImported: { type: Boolean, default: false },
     createdBy: { type: String, default: null },
     updatedBy: { type: String, default: null },
     isdeleted: { type: Boolean, default: false }
