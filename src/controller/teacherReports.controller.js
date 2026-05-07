@@ -13,6 +13,23 @@ import Subject from '../models/subject.model.js';
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const pickTid = (req) => String(req?.body?.entiId || req?.body?.tenantId || '').trim();
 const safeTrim = (v) => (v === undefined || v === null ? '' : String(v).trim());
+
+const pickBatchIds = (req) => {
+  const arr = req.body?.batchIds;
+  return Array.isArray(arr) && arr.length ? arr.map(safeTrim).filter(Boolean) : [];
+};
+const pickBatchCodes = (req) => {
+  const arr = req.body?.batchCodes;
+  return Array.isArray(arr) && arr.length ? arr.map(safeTrim).filter(Boolean) : [];
+};
+const applyBatchIdFilter = (query, ids) => {
+  if (ids.length === 1) query.batchId = ids[0];
+  else if (ids.length > 1) query.batchId = { $in: ids };
+};
+const applyBatchCodeFilter = (query, codes) => {
+  if (codes.length === 1) query.batchCode = codes[0];
+  else if (codes.length > 1) query.batchCode = { $in: codes };
+};
 const toInt = (v, def = 0) => {
   const n = Number(v);
   return Number.isFinite(n) ? Math.trunc(n) : def;
@@ -266,20 +283,16 @@ const getStaffLateEntryReport = async (req, res, next) => {
     const staffId = safeTrim(req.body?.staffId || '');
     const fromDate = toInt(req.body?.fromDate, 0);
     const toDate = toInt(req.body?.toDate, 0);
-
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
     if (!staffId) return res.status(400).json({ status: false, message: 'staffId is required' });
     if (!fromDate) return res.status(400).json({ status: false, message: 'fromDate is required' });
     if (!toDate) return res.status(400).json({ status: false, message: 'toDate is required' });
 
-    const entries = await LateEntryLog.find({
-      tenantId,
-      type: 'STAFF',
-      entryType: 'LATE',
-      personId: staffId,
-      isdeleted: false,
-      date: { $gte: fromDate, $lte: toDate }
-    })
+    const lateBatchCodes = pickBatchCodes(req);
+    const lateQuery = { tenantId, type: 'STAFF', entryType: 'LATE', personId: staffId, isdeleted: false, date: { $gte: fromDate, $lte: toDate } };
+    applyBatchCodeFilter(lateQuery, lateBatchCodes);
+
+    const entries = await LateEntryLog.find(lateQuery)
       .sort({ date: 1 })
       .lean();
 
@@ -336,20 +349,16 @@ const getStaffEarlyLeavingReport = async (req, res, next) => {
     const staffId = safeTrim(req.body?.staffId || '');
     const fromDate = toInt(req.body?.fromDate, 0);
     const toDate = toInt(req.body?.toDate, 0);
-
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
     if (!staffId) return res.status(400).json({ status: false, message: 'staffId is required' });
     if (!fromDate) return res.status(400).json({ status: false, message: 'fromDate is required' });
     if (!toDate) return res.status(400).json({ status: false, message: 'toDate is required' });
 
-    const entries = await LateEntryLog.find({
-      tenantId,
-      type: 'STAFF',
-      entryType: 'EARLY_LEAVE',
-      personId: staffId,
-      isdeleted: false,
-      date: { $gte: fromDate, $lte: toDate }
-    })
+    const earlyBatchCodes = pickBatchCodes(req);
+    const earlyQuery = { tenantId, type: 'STAFF', entryType: 'EARLY_LEAVE', personId: staffId, isdeleted: false, date: { $gte: fromDate, $lte: toDate } };
+    applyBatchCodeFilter(earlyQuery, earlyBatchCodes);
+
+    const entries = await LateEntryLog.find(earlyQuery)
       .sort({ date: 1 })
       .lean();
 
@@ -397,12 +406,13 @@ const getStaffAssignmentReport = async (req, res, next) => {
     const staffId = safeTrim(req.body?.staffId || '');
     const fromDate = toInt(req.body?.fromDate, 0);
     const toDate = toInt(req.body?.toDate, 0);
-
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
     if (!staffId) return res.status(400).json({ status: false, message: 'staffId is required' });
 
-    // Get batches where staff teaches this subject
-    const batches = await Batch.find({ tenantId, isdeleted: false }).lean();
+    const asnBatchIds = pickBatchIds(req);
+    const batchQuery = { tenantId, isdeleted: false };
+    applyBatchIdFilter(batchQuery, asnBatchIds);
+    const batches = await Batch.find(batchQuery).lean();
     const staffBatches = batches.filter((b) => (b.staffMap || []).some((s) => safeTrim(s.staffId) === staffId));
 
     if (!staffBatches.length) {
@@ -531,7 +541,6 @@ const getStaffAttendanceReport = async (req, res, next) => {
     const staffId = safeTrim(req.body?.staffId || '');
     const fromDate = toInt(req.body?.fromDate, 0);
     const toDate = toInt(req.body?.toDate, fromDate); // default = same day
-
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
     if (!staffId) return res.status(400).json({ status: false, message: 'staffId is required' });
     if (!fromDate) return res.status(400).json({ status: false, message: 'fromDate is required' });
@@ -550,12 +559,10 @@ const getStaffAttendanceReport = async (req, res, next) => {
     }
 
     // Fetch all active timetables for these weeks
-    const timetables = await TimeTable.find({
-      tenantId,
-      wkStartOn: { $in: [...weekStarts] },
-      status: 'Active',
-      isdeleted: false
-    }).lean();
+    const attBatchCodes = pickBatchCodes(req);
+    const ttQuery = { tenantId, wkStartOn: { $in: [...weekStarts] }, status: 'Active', isdeleted: false };
+    applyBatchCodeFilter(ttQuery, attBatchCodes);
+    const timetables = await TimeTable.find(ttQuery).lean();
 
     // Build date → [ { batchCode, timetableId, period } ] for this staff
     const scheduleByDate = new Map();
@@ -686,13 +693,14 @@ const getStaffFeedbackReport = async (req, res, next) => {
     const staffId = safeTrim(req.body?.staffId || '');
     const fromDate = toInt(req.body?.fromDate, 0);
     const toDate = toInt(req.body?.toDate, 0);
-
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
     if (!staffId) return res.status(400).json({ status: false, message: 'staffId is required' });
 
+    const fbBatchCodes = pickBatchCodes(req);
     const query = { tenantId, isdeleted: false, 'staffRemarks.staffId': staffId };
     if (fromDate) query.ptmDate = { $gte: fromDate };
     if (toDate) query.ptmDate = { ...(query.ptmDate || {}), $lte: toDate };
+    applyBatchCodeFilter(query, fbBatchCodes);
 
     const ptmDocs = await PTM.find(query).lean();
 
@@ -768,12 +776,13 @@ const getStaffExamReport = async (req, res, next) => {
     const staffId = safeTrim(req.body?.staffId || '');
     const fromDate = toInt(req.body?.fromDate, 0);
     const toDate = toInt(req.body?.toDate, 0);
-
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
     if (!staffId) return res.status(400).json({ status: false, message: 'staffId is required' });
 
-    // Get all batches where staff teaches
-    const batches = await Batch.find({ tenantId, isdeleted: false }).lean();
+    const exBatchIds = pickBatchIds(req);
+    const batchQuery = { tenantId, isdeleted: false };
+    applyBatchIdFilter(batchQuery, exBatchIds);
+    const batches = await Batch.find(batchQuery).lean();
     const staffBatches = batches.filter((b) => safeTrim(b.classTeacherId) === staffId || (b.staffMap || []).some((s) => safeTrim(s.staffId) === staffId));
 
     if (!staffBatches.length) {
