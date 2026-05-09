@@ -22,6 +22,8 @@ routes.post('/event-config/list', validatetoken, communicationCtrl.listEventConf
 routes.post('/event-config/toggle', validatetoken, communicationCtrl.toggleEventConfig);
 routes.post('/event-config/delete', validatetoken, communicationCtrl.deleteEventConfig);
 
+routes.post('/excel-bulk-mail/send', validatetoken, communicationCtrl.sendExcelBulkMail);
+
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Communication routes' }));
 
 export default routes;
