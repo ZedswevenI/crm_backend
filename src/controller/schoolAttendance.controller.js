@@ -1,6 +1,7 @@
 import SchoolAttendance from '../models/schoolAttendance.model.js';
 import Batch from '../models/batch.model.js';
 import StudentProfile from '../models/studentProfile.model.js';
+import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
 
 const pickTenantId = (req) => String(req?.body?.tenantId || req?.body?.entiId || '').trim();
 const safeTrim = (v) => (v === undefined || v === null ? '' : String(v).trim());
@@ -153,6 +154,33 @@ const markSchoolAttendance = async (req, res, next) => {
       },
       { upsert: true, new: true }
     ).lean();
+    const absentStudents = students.filter((s) => s.status === 'ABSENT');
+    if (absentStudents.length > 0) {
+      const dateObj = new Date(date);
+      const formattedDate = dateObj.toLocaleDateString('en-IN', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric'
+      });
+      for (const s of absentStudents) {
+        triggerCommunicationEventSafe({
+          tenantId,
+          eventCode: 'DAILY_ABSENCE_ALERT',
+          admissionNo: s.admissionNo,
+          sourceModule: 'ATTENDANCE',
+          sourceRefId: doc.attendanceId,
+          userId: markedBy || null,
+          extraData: {
+            admissionNo: s.admissionNo,
+            attendanceDate: formattedDate,
+            batchCode: batch.batchCode,
+            batchName: batch.batchName || '',
+            centerName: safeTrim(batch.centerName || ''),
+            academicYear: safeTrim(batch.academicYear || '')
+          }
+        });
+      }
+    }
     return res.status(200).json({
       status: true,
       message: 'School attendance marked successfully',
