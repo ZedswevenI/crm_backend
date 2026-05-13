@@ -34,6 +34,10 @@ const schoolAttendanceSchema = new mongoose.Schema(
     markedByRole: { type: String, default: null }, // L1, L3, classTeacher
     remarks: { type: String, trim: true, default: null },
     students: { type: [studentAttendanceSchema], default: [] },
+    isFinalised: { type: Boolean, default: false },
+    finalisedBy: { type: String, default: null },
+    finalisedByName: { type: String, default: null },
+    finalisedAt: { type: Number, default: null },
     isdeleted: { type: Boolean, default: false, index: true },
     createdBy: { type: String, default: null },
     updatedBy: { type: String, default: null }

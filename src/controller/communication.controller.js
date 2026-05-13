@@ -6,6 +6,7 @@ import { resolveStudentRecipients } from '../services/recipientResolver.service.
 import { buildTemplateDataFromStudent, renderTemplate } from '../services/templateRenderer.service.js';
 import { processCommunicationCampaign } from '../services/communicationProcessor.service.js';
 import CommunicationEventConfig from '../models/communicationeventconfig.model.js';
+import { uploadPublicEmailImageToS3 } from '../middlewares/s3.service.js';
 
 const pickTenantId = (req) => String(req.body?.entiId || req.body?.tenantId || '').trim();
 const safeTrim = (v) => (v === null || v === undefined ? '' : String(v).trim());
@@ -476,7 +477,7 @@ const sendExcelBulkMail = async (req, res, next) => {
       tenantId,
       title,
       templateId: `EXCEL_${Date.now()}`,
-      templateName: 'Bulk Mail ${Date.now()}',
+      templateName: `Bulk Mail ${Date.now()}`,
       category: 'EXCEL_BULK',
       channel: 'email',
       subject: subjectTemplate,
@@ -570,6 +571,38 @@ const sendExcelBulkMail = async (req, res, next) => {
   }
 };
 
+const uploadEmailAsset = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    if (!tenantId) {
+      return res.status(400).json({
+        status: false,
+        message: 'tenantId (entiId) is required'
+      });
+    }
+    if (!req.files) {
+      return res.status(400).json({
+        status: false,
+        message: 'Image file is required'
+      });
+    }
+    if (req.files[0].size > 2 * 1024 * 1024) {
+      return res.status(400).json({
+        status: false,
+        message: 'Image size should not exceed 2MB'
+      });
+    }
+    const url = await uploadPublicEmailImageToS3(req.files[0], tenantId);
+    return res.status(200).json({
+      status: true,
+      message: 'Email image uploaded successfully',
+      data: { url }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   createTemplate,
   updateTemplate,
@@ -586,5 +619,6 @@ export default {
   listEventConfigs,
   toggleEventConfig,
   deleteEventConfig,
-  sendExcelBulkMail
+  sendExcelBulkMail,
+  uploadEmailAsset
 };
