@@ -2,12 +2,8 @@ import 'dotenv/config';
 import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import fs from 'fs';
-
-console.log('--- AWS CONFIG DEBUG ---');
-console.log('REGION:', process.env.AWS_REGION);
-console.log('BUCKET:', process.env.AWS_S3_Z7I_BUCKET);
-console.log('ACCESS_KEY_ID exists?:', !!process.env.AWS_ACCESS_KEY_ID);
-console.log('SECRET_KEY exists?:', !!process.env.AWS_SECRET_ACCESS_KEY);
+import path from 'path';
+import crypto from 'crypto';
 
 const s3Client = new S3Client({
   region: process.env.AWS_REGION,
@@ -89,3 +85,32 @@ export async function parseS3Url(fullUrl) {
   }
   return null;
 }
+
+export const uploadPublicEmailImageToS3 = async (file, tenantId) => {
+  if (!file) return null;
+  const allowedTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp'];
+  if (!allowedTypes.includes(file.mimetype)) {
+    throw new Error('Only PNG, JPG, JPEG and WEBP images are allowed');
+  }
+  const bucket = process.env.AWS_S3_Z7I_EMAIL_BUCKET;
+  const region = process.env.AWS_REGION || 'ap-south-1';
+  if (!bucket) {
+    throw new Error('AWS_S3_Z7I_EMAIL_BUCKET is not configured');
+  }
+  const ext = path.extname(file.originalname || '').toLowerCase();
+  const baseName = path
+    .basename(file.originalname || 'email-image', ext)
+    .replace(/\s+/g, '_')
+    .replace(/[^a-zA-Z0-9_\-]/g, '');
+  const random = crypto.randomBytes(8).toString('hex');
+  const fileName = `${baseName}-${Date.now()}-${random}${ext}`;
+  const key = `email-assets/${tenantId}/${fileName}`;
+  const command = new PutObjectCommand({
+    Bucket: bucket,
+    Key: key,
+    Body: file.buffer,
+    ContentType: file.mimetype
+  });
+  await s3Client.send(command);
+  return `https://${bucket}.s3.${region}.amazonaws.com/${key}`;
+};

@@ -82,6 +82,7 @@ const getSchoolAttendanceStudents = async (req, res, next) => {
       status: true,
       isHoliday: false,
       isEditMode: !!existing,
+      isFinalised: existing?.isFinalised || false,
       attendanceId: existing?.attendanceId || null,
       existingRemarks: existing?.remarks || '',
       data: studentList
@@ -110,6 +111,12 @@ const markSchoolAttendance = async (req, res, next) => {
       return res.status(400).json({
         status: false,
         message: `Cannot mark attendance — this day is declared as ${existing.holidayName || existing.type}`
+      });
+    }
+    if (existing?.isFinalised) {
+      return res.status(400).json({
+        status: false,
+        message: 'Attendance is already finalised and cannot be edited'
       });
     }
     const unmarked = studentsRaw.filter((s) => !['PRESENT', 'ABSENT', 'LATE'].includes(safeTrim(s.status)));
@@ -154,33 +161,33 @@ const markSchoolAttendance = async (req, res, next) => {
       },
       { upsert: true, new: true }
     ).lean();
-    const absentStudents = students.filter((s) => s.status === 'ABSENT');
-    if (absentStudents.length > 0) {
-      const dateObj = new Date(date);
-      const formattedDate = dateObj.toLocaleDateString('en-IN', {
-        day: '2-digit',
-        month: 'short',
-        year: 'numeric'
-      });
-      for (const s of absentStudents) {
-        triggerCommunicationEventSafe({
-          tenantId,
-          eventCode: 'DAILY_ABSENCE_ALERT',
-          admissionNo: s.admissionNo,
-          sourceModule: 'ATTENDANCE',
-          sourceRefId: doc.attendanceId,
-          userId: markedBy || null,
-          extraData: {
-            admissionNo: s.admissionNo,
-            attendanceDate: formattedDate,
-            batchCode: batch.batchCode,
-            batchName: batch.batchName || '',
-            centerName: safeTrim(batch.centerName || ''),
-            academicYear: safeTrim(batch.academicYear || '')
-          }
-        });
-      }
-    }
+    // const absentStudents = students.filter((s) => s.status === 'ABSENT');
+    // if (absentStudents.length > 0) {
+    //   const dateObj = new Date(date);
+    //   const formattedDate = dateObj.toLocaleDateString('en-IN', {
+    //     day: '2-digit',
+    //     month: 'short',
+    //     year: 'numeric'
+    //   });
+    //   for (const s of absentStudents) {
+    //     triggerCommunicationEventSafe({
+    //       tenantId,
+    //       eventCode: 'DAILY_ABSENCE_ALERT',
+    //       admissionNo: s.admissionNo,
+    //       sourceModule: 'ATTENDANCE',
+    //       sourceRefId: doc.attendanceId,
+    //       userId: markedBy || null,
+    //       extraData: {
+    //         admissionNo: s.admissionNo,
+    //         attendanceDate: formattedDate,
+    //         batchCode: batch.batchCode,
+    //         batchName: batch.batchName || '',
+    //         centerName: safeTrim(batch.centerName || ''),
+    //         academicYear: safeTrim(batch.academicYear || '')
+    //       }
+    //     });
+    //   }
+    // }
     return res.status(200).json({
       status: true,
       message: 'School attendance marked successfully',
@@ -408,7 +415,8 @@ const checkMarkedBatches = async (req, res, next) => {
     const records = await SchoolAttendance.find({ tenantId, batchCode: { $in: batchCodes }, date: { $gte: fromDate, $lte: toDate }, isdeleted: false }, { batchCode: 1, type: 1 }).lean();
     const markedBatchCodes = [...new Set(records.filter((r) => r.type === 'ATTENDANCE').map((r) => r.batchCode))];
     const holidayBatchCodes = [...new Set(records.filter((r) => HOLIDAY_TYPES.includes(r.type)).map((r) => r.batchCode))];
-    return res.status(200).json({ status: true, markedBatchCodes, holidayBatchCodes });
+    const finalisedBatchCodes = [...new Set(records.filter((r) => r.type === 'ATTENDANCE' && r.isFinalised === true).map((r) => r.batchCode))];
+    return res.status(200).json({ status: true, markedBatchCodes, holidayBatchCodes, finalisedBatchCodes });
   } catch (err) {
     return next(err);
   }
@@ -505,6 +513,100 @@ const getMonthlyAttendanceReport = async (req, res, next) => {
   }
 };
 
+const finaliseAttendance = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const batchCode = safeTrim(req.body?.batchCode);
+    const date = toInt(req.body?.date);
+    const finalisedBy = safeTrim(req.body?.userId || req.body?.markedBy);
+    const finalisedByName = safeTrim(req.body?.finalisedByName || '');
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+    if (!batchCode) return res.status(400).json({ status: false, message: 'batchCode is required' });
+    if (!date) return res.status(400).json({ status: false, message: 'date is required' });
+    const existing = await SchoolAttendance.findOne({
+      tenantId,
+      batchCode,
+      date,
+      isdeleted: false
+    }).lean();
+    if (!existing) {
+      return res.status(404).json({
+        status: false,
+        message: 'No attendance record found. Please mark attendance before finalising'
+      });
+    }
+    if (HOLIDAY_TYPES.includes(existing.type)) {
+      return res.status(400).json({
+        status: false,
+        message: `Cannot finalise — this day is declared as ${existing.holidayName || existing.type}`
+      });
+    }
+    if (existing.isFinalised) {
+      return res.status(400).json({
+        status: false,
+        message: 'Attendance is already finalised'
+      });
+    }
+    const doc = await SchoolAttendance.findOneAndUpdate(
+      { tenantId, batchCode, date, isdeleted: false },
+      {
+        $set: {
+          isFinalised: true,
+          finalisedBy: finalisedBy || null,
+          finalisedByName: finalisedByName || null,
+          finalisedAt: Date.now(),
+          updatedBy: finalisedBy || null
+        }
+      },
+      { new: true }
+    ).lean();
+    const absentStudents = (doc.students || []).filter((s) => s.status === 'ABSENT');
+    if (absentStudents.length > 0) {
+      const formattedDate = new Date(date).toLocaleDateString('en-IN', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric'
+      });
+      for (const s of absentStudents) {
+        triggerCommunicationEventSafe({
+          tenantId,
+          eventCode: 'DAILY_ABSENCE_ALERT',
+          admissionNo: s.admissionNo,
+          sourceModule: 'ATTENDANCE',
+          sourceRefId: doc.attendanceId,
+          userId: finalisedBy || null,
+          extraData: {
+            admissionNo: s.admissionNo,
+            attendanceDate: formattedDate,
+            batchCode: doc.batchCode,
+            batchName: doc.batchName || '',
+            academicYear: safeTrim(doc.academicYear || '')
+          }
+        });
+      }
+    }
+    return res.status(200).json({
+      status: true,
+      message: 'Attendance finalised successfully',
+      data: {
+        attendanceId: doc.attendanceId,
+        batchCode,
+        date,
+        isFinalised: true,
+        finalisedBy: finalisedBy || null,
+        finalisedAt: doc.finalisedAt,
+        totalStudents: doc.students?.length || 0,
+        presentCount: (doc.students || []).filter((s) => s.status === 'PRESENT').length,
+        absentCount: absentStudents.length,
+        lateCount: (doc.students || []).filter((s) => s.status === 'LATE').length,
+        emailsSent: absentStudents.length
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   listBatchesForSchoolAttendance,
   getSchoolAttendanceStudents,
@@ -515,5 +617,6 @@ export default {
   listHolidays,
   getSchoolAttendanceSummary,
   checkMarkedBatches,
-  getMonthlyAttendanceReport
+  getMonthlyAttendanceReport,
+  finaliseAttendance
 };
