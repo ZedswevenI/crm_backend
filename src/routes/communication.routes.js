@@ -4,6 +4,7 @@ const routes = Router();
 
 import validatetoken from '../middlewares/auth.js';
 import communicationCtrl from '../controller/communication.controller.js';
+import { uploadQuestionImage } from '../middlewares/multer.js';
 
 routes.post('/template/create', validatetoken, communicationCtrl.createTemplate);
 routes.post('/template/update', validatetoken, communicationCtrl.updateTemplate);
@@ -21,6 +22,9 @@ routes.post('/event-config/save', validatetoken, communicationCtrl.saveEventConf
 routes.post('/event-config/list', validatetoken, communicationCtrl.listEventConfigs);
 routes.post('/event-config/toggle', validatetoken, communicationCtrl.toggleEventConfig);
 routes.post('/event-config/delete', validatetoken, communicationCtrl.deleteEventConfig);
+
+routes.post('/excel-bulk-mail/send', validatetoken, communicationCtrl.sendExcelBulkMail);
+routes.post('/email-asset/upload', validatetoken, uploadQuestionImage, communicationCtrl.uploadEmailAsset);
 
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Communication routes' }));
 
