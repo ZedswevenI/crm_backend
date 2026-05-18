@@ -4,6 +4,7 @@ import FeedbackResponse from '../models/feedbackResponse.model.js';
 import StudentProfile from '../models/studentProfile.model.js';
 import Staff from '../models/staff.model.js';
 import Batch from '../models/batch.model.js';
+import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
 
 const pickTenantId = (req) => (req.body?.entiId || req.body?.tenantId || '').toString().trim();
 const safeTrim = (v) => (v === null || v === undefined ? '' : String(v)).trim();
@@ -245,33 +246,33 @@ const createFeedbackForm = async (req, res, next) => {
       createdBy: userId
     });
     // email trigger
-    if (safeTrim(form.status).toUpperCase() === 'ACTIVE') {
-      const students = await getFeedbackTargetStudents({
-        tenantId,
-        batchCodes: form.assignedBatches
-      });
-      for (const st of students || []) {
-        triggerCommunicationEventSafe({
-          tenantId,
-          eventCode: 'FEEDBACK_FORM_ASSIGNED',
-          admissionNo: safeTrim(st?.admissionNo),
-          studentId: safeTrim(st?.studentId),
-          sourceModule: 'FEEDBACK',
-          sourceRefId: String(form._id),
-          userId,
-          extraData: {
-            formId: String(form._id),
-            feedbackTitle: form.title,
-            feedbackCategory: form.category,
-            templateTitle: form.templateTitle,
-            batchCode: safeTrim(st?.batchCode),
-            startDate: form.startDate,
-            endDate: form.endDate,
-            phase: form.phase || ''
-          }
-        });
-      }
-    }
+    // if (safeTrim(form.status).toUpperCase() === 'ACTIVE') {
+    //   const students = await getFeedbackTargetStudents({
+    //     tenantId,
+    //     batchCodes: form.assignedBatches
+    //   });
+    //   for (const st of students || []) {
+    //     triggerCommunicationEventSafe({
+    //       tenantId,
+    //       eventCode: 'FEEDBACK_FORM_ASSIGNED',
+    //       admissionNo: safeTrim(st?.admissionNo),
+    //       studentId: safeTrim(st?.studentId),
+    //       sourceModule: 'FEEDBACK',
+    //       sourceRefId: String(form._id),
+    //       userId,
+    //       extraData: {
+    //         formId: String(form._id),
+    //         feedbackTitle: form.title,
+    //         feedbackCategory: form.category,
+    //         templateTitle: form.templateTitle,
+    //         batchCode: safeTrim(st?.batchCode),
+    //         startDate: form.startDate,
+    //         endDate: form.endDate,
+    //         phase: form.phase || ''
+    //       }
+    //     });
+    //   }
+    // }
     return res.status(201).json({ status: true, message: 'Feedback form created successfully', data: form });
   } catch (err) {
     return next(err);
@@ -375,33 +376,33 @@ const changeFeedbackFormStatus = async (req, res, next) => {
     if (form.status === 'CLOSED' && newStatus !== 'CLOSED') return res.status(400).json({ status: false, message: 'A CLOSED form cannot be reopened' });
     const updated = await FeedbackForm.findOneAndUpdate({ _id: formId, tenantId, isdeleted: false }, { $set: { status: newStatus, updatedBy: userId } }, { new: true }).lean();
     // email trigger
-    if (safeTrim(newStatus).toUpperCase() === 'ACTIVE') {
-      const students = await getFeedbackTargetStudents({
-        tenantId,
-        batchCodes: updated.assignedBatches
-      });
-      for (const st of students || []) {
-        triggerCommunicationEventSafe({
-          tenantId,
-          eventCode: 'FEEDBACK_FORM_ASSIGNED',
-          admissionNo: safeTrim(st?.admissionNo),
-          studentId: safeTrim(st?.studentId),
-          sourceModule: 'FEEDBACK',
-          sourceRefId: String(updated._id),
-          userId,
-          extraData: {
-            formId: String(updated._id),
-            feedbackTitle: updated.title,
-            feedbackCategory: updated.category,
-            templateTitle: updated.templateTitle,
-            batchCode: safeTrim(st?.batchCode),
-            startDate: updated.startDate,
-            endDate: updated.endDate,
-            phase: updated.phase || ''
-          }
-        });
-      }
-    }
+    // if (safeTrim(newStatus).toUpperCase() === 'ACTIVE') {
+    //   const students = await getFeedbackTargetStudents({
+    //     tenantId,
+    //     batchCodes: updated.assignedBatches
+    //   });
+    //   for (const st of students || []) {
+    //     triggerCommunicationEventSafe({
+    //       tenantId,
+    //       eventCode: 'FEEDBACK_FORM_ASSIGNED',
+    //       admissionNo: safeTrim(st?.admissionNo),
+    //       studentId: safeTrim(st?.studentId),
+    //       sourceModule: 'FEEDBACK',
+    //       sourceRefId: String(updated._id),
+    //       userId,
+    //       extraData: {
+    //         formId: String(updated._id),
+    //         feedbackTitle: updated.title,
+    //         feedbackCategory: updated.category,
+    //         templateTitle: updated.templateTitle,
+    //         batchCode: safeTrim(st?.batchCode),
+    //         startDate: updated.startDate,
+    //         endDate: updated.endDate,
+    //         phase: updated.phase || ''
+    //       }
+    //     });
+    //   }
+    // }
     return res.status(200).json({ status: true, message: `Form status changed to ${newStatus}`, data: updated });
   } catch (err) {
     return next(err);
