@@ -33,6 +33,7 @@ routes.post('/publish', validatetoken, timeTableController.publishTimeTable);
 routes.post('/unpublish', validatetoken, timeTableController.unpublishTimeTable);
 routes.post('/delete', validatetoken, timeTableController.deleteTimeTable);
 routes.post('/clone-week', validatetoken, timeTableController.cloneWeek);
+routes.post('/day/uncancel', validatetoken, timeTableController.uncancelDay);
 
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Timetable routes' }));
 
