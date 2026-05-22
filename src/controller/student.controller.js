@@ -201,7 +201,11 @@ const viewProfile = async (req, res, next) => {
         name: profile.student.name,
         status: profile.status,
         mobile: profile.student.phone,
+        phone1: profile.student.phone1 || '',
+        phone2: profile.student.phone2 || '',
         email: profile.student.email,
+        email1: profile.student.email1 || '',
+        email2: profile.student.email2 || '',
         parentName: profile.student.parentName,
         parentMobile: profile.student.parentPhone,
         addressLine1: admission?.student?.address || '',
@@ -1380,39 +1384,33 @@ const updateBasicDetails = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     const studentId = safeTrim(req.body?.studentId);
-
     if (!tenantId || !studentId) {
       return res.status(400).json({ status: false, message: 'tenantId and studentId are required' });
     }
-
     const profile = await StudentProfile.findOne({ tenantId, studentId, isdeleted: false });
     if (!profile) return res.status(404).json({ status: false, message: 'Student profile not found' });
-
     const admissionId = profile.admissionId;
-
-    // Update Student Profile Details
     const profileUpdate = {};
     if (req.body.name) profileUpdate['student.name'] = safeTrim(req.body.name);
     if (req.body.phone) profileUpdate['student.phone'] = safeTrim(req.body.phone);
+    if (req.body.phone1 !== undefined) profileUpdate['student.phone1'] = safeTrim(req.body.phone1);
+    if (req.body.phone2 !== undefined) profileUpdate['student.phone2'] = safeTrim(req.body.phone2);
     if (req.body.email) profileUpdate['student.email'] = safeTrim(req.body.email);
+    if (req.body.email1 !== undefined) profileUpdate['student.email1'] = safeTrim(req.body.email1);
+    if (req.body.email2 !== undefined) profileUpdate['student.email2'] = safeTrim(req.body.email2);
     if (req.body.parentName) profileUpdate['student.parentName'] = safeTrim(req.body.parentName);
     if (req.body.parentMobile) profileUpdate['student.parentPhone'] = safeTrim(req.body.parentMobile);
-
     if (Object.keys(profileUpdate).length > 0) {
       await StudentProfile.updateOne({ tenantId, studentId }, { $set: profileUpdate });
     }
-
-    // Update Admission Collection Details (Address, DOB, Gender, etc.)
     const admissionUpdate = {};
     if (req.body.addressLine1) admissionUpdate['student.address'] = safeTrim(req.body.addressLine1);
     if (req.body.city) admissionUpdate['student.city'] = safeTrim(req.body.city);
     if (req.body.gender) admissionUpdate['student.gender'] = safeTrim(req.body.gender);
     if (req.body.dob) admissionUpdate['student.dateOfBirth'] = toNum(req.body.dob);
-
     if (Object.keys(admissionUpdate).length > 0) {
       await Admission.updateOne({ tenantId, admissionId }, { $set: admissionUpdate });
     }
-
     return res.status(200).json({ status: true, message: 'Student basic details updated successfully' });
   } catch (err) {
     return next(err);
@@ -1531,11 +1529,9 @@ const bulkUpdateStudents = async (req, res, next) => {
     const students = Array.isArray(req.body?.students) ? req.body.students : [];
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
     if (!students.length) return res.status(400).json({ status: false, message: 'students array is required' });
-
     let successCount = 0;
     let failedCount = 0;
     const errors = [];
-
     for (const s of students) {
       const admissionNo = safeTrim(s['Enrolment Number'] || s['Admission No'] || s.admissionNo || '');
       if (!admissionNo) {
@@ -1543,22 +1539,22 @@ const bulkUpdateStudents = async (req, res, next) => {
         errors.push({ admissionNo: '-', reason: 'Missing admissionNo' });
         continue;
       }
-
       const profileUpdate = {};
       if (safeTrim(s['Full Name'] || s.fullName)) profileUpdate['student.name'] = safeTrim(s['Full Name'] || s.fullName);
       if (safeTrim(s['Mobile'] || s.mobile)) profileUpdate['student.phone'] = safeTrim(s['Mobile'] || s.mobile);
+      if (safeTrim(s['Phone 1'] || s.phone1)) profileUpdate['student.phone1'] = safeTrim(s['Phone 1'] || s.phone1);
+      if (safeTrim(s['Phone 2'] || s.phone2)) profileUpdate['student.phone2'] = safeTrim(s['Phone 2'] || s.phone2);
       if (safeTrim(s['Email'] || s.email)) profileUpdate['student.email'] = safeTrim(s['Email'] || s.email);
+      if (safeTrim(s['Email 1'] || s.email1)) profileUpdate['student.email1'] = safeTrim(s['Email 1'] || s.email1);
+      if (safeTrim(s['Email 2'] || s.email2)) profileUpdate['student.email2'] = safeTrim(s['Email 2'] || s.email2);
       if (safeTrim(s['Parent Name'] || s.parentName)) profileUpdate['student.parentName'] = safeTrim(s['Parent Name'] || s.parentName);
       if (safeTrim(s['Parent Mobile'] || s.parentMobile)) profileUpdate['student.parentPhone'] = safeTrim(s['Parent Mobile'] || s.parentMobile);
-
       if (!Object.keys(profileUpdate).length) {
         failedCount++;
         errors.push({ admissionNo, reason: 'No fields to update' });
         continue;
       }
-
       const result = await StudentProfile.updateOne({ tenantId, admissionNo, isdeleted: false }, { $set: { ...profileUpdate, updatedBy: safeTrim(req.body?.userId || '') } });
-
       if (result.matchedCount === 0) {
         failedCount++;
         errors.push({ admissionNo, reason: 'Student not found' });
@@ -1566,7 +1562,6 @@ const bulkUpdateStudents = async (req, res, next) => {
         successCount++;
       }
     }
-
     return res.status(200).json({
       status: true,
       message: 'Bulk update completed',
