@@ -28,7 +28,11 @@ const StudentProfileSchema = new mongoose.Schema(
     student: {
       name: { type: String, required: true, trim: true },
       phone: { type: String, required: false, trim: true },
+      phone1: { type: String, trim: true, default: null },
+      phone2: { type: String, trim: true, default: null },
       email: { type: String, trim: false },
+      email1: { type: String, trim: true, default: null },
+      email2: { type: String, trim: true, default: null },
       parentName: { type: String, required: false, trim: true },
       parentPhone: { type: String, required: false, trim: true, default: null },
       address: { type: String, trim: false, default: null },

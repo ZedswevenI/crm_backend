@@ -200,7 +200,21 @@ const getStaffListReport = async (req, res, next) => {
     const currentStaff = batches.flatMap((b) =>
       (b.staffMap || []).map((entry) => {
         const doc = staffDocMap.get(safeTrim(entry.staffId)) || {};
-        return { slNo: ++slNo, batchCode: b.batchCode, batchName: b.batchName, staffId: entry.staffId, staffName: doc.staffName || entry.staffName || null, staffCode: doc.staffCode || null, subjectId: entry.subjectId || null, subjectName: entry.subjectName || null, facultyType: doc.facultyType || null, phone: doc.phone || null, email: doc.email || null, role: doc.role || null, status: doc.status || null };
+        return {
+          slNo: ++slNo,
+          batchCode: b.batchCode,
+          batchName: b.batchName,
+          staffId: entry.staffId,
+          staffName: doc.staffName || entry.staffName || null,
+          staffCode: doc.staffCode || null,
+          subjectId: entry.subjectId || null,
+          subjectName: entry.subjectName || null,
+          facultyType: doc.facultyType || null,
+          phone: doc.phone || null,
+          email: doc.email || null,
+          role: doc.role || null,
+          status: doc.status || null
+        };
       })
     );
 
@@ -224,7 +238,7 @@ const getLateEntryReport = async (req, res, next) => {
     const entryType = safeTrim(req.body?.entryType || ''); // LATE | EARLY_LEAVE | ''
 
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-    
+
     if (!fromDate) return res.status(400).json({ status: false, message: 'fromDate is required' });
     if (!toDate) return res.status(400).json({ status: false, message: 'toDate is required' });
 
@@ -287,42 +301,32 @@ const getLateEntryReport = async (req, res, next) => {
   }
 };
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// REPORT 4 — Timetable Report
-// POST /batch/reports/timetable
-// ═══════════════════════════════════════════════════════════════════════════════
 const getTimetableReport = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     const batchCode = safeTrim(req.body?.batchCode || '');
     const fromDate = toInt(req.body?.fromDate, 0);
     const toDate = toInt(req.body?.toDate, 0);
-
+    const subjectId = safeTrim(req.body?.subjectId || '');
+    const mode = safeTrim(req.body?.mode || '').toUpperCase();
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-    
     if (!fromDate) return res.status(400).json({ status: false, message: 'fromDate is required' });
-
     const effectiveToDate = toDate || fromDate;
     const msPerDay = 86400000;
     if (effectiveToDate - fromDate > 31 * msPerDay) {
       return res.status(400).json({ status: false, message: 'Date range cannot exceed 31 days' });
     }
-
-    // Collect all week starts in range
     const weekStarts = new Set();
     let curr = fromDate;
     while (curr <= effectiveToDate) {
       weekStarts.add(getPreviousMonday(curr));
       curr += msPerDay;
     }
-
     const batchCodes = pickBatchCodes(req);
     const ttQuery = { tenantId, wkStartOn: { $in: [...weekStarts] }, status: 'Active', isdeleted: false };
     applyBatchCodeFilter(ttQuery, batchCodes);
     const timetables = await TimeTable.find(ttQuery).lean();
-
     const ttMap = new Map(timetables.map((tt) => [tt.wkStartOn, tt]));
-
     const schedule = [];
     curr = fromDate;
     while (curr <= effectiveToDate) {
@@ -337,33 +341,37 @@ const getTimetableReport = async (req, res, next) => {
         schedule.push({
           date: curr,
           day: DAYS[d.getUTCDay()],
+          batchCode: tt.batchCode,
           timetableId: String(tt._id),
           isHoliday: false,
-          periods: periods.map((p) => ({
-            periodNo: p.periodNo,
-            periodType: p.periodType || null,
-            mode: p.mode || null,
-            subjectId: p.subjectId || null,
-            subjectName: p.subjectName || null,
-            facultyId: p.facultyId || null,
-            facultyName: p.facultyName || null,
-            startTime: p.time?.startLabel || null,
-            endTime: p.time?.endLabel || null,
-            startMin: p.time?.startMin || null,
-            endMin: p.time?.endMin || null,
-            venue: p.venue || null,
-            topic: p.topic || null,
-            isCancelled: !!p.isCancelled
-          }))
+          periods: periods
+            .filter((p) => {
+              if (subjectId && safeTrim(p.subjectId) !== subjectId) return false;
+              if (mode && safeTrim(p.mode).toUpperCase() !== mode) return false;
+              return true;
+            })
+            .map((p) => ({
+              periodNo: p.periodNo,
+              periodType: p.periodType || null,
+              mode: p.mode || null,
+              subjectId: p.subjectId || null,
+              subjectName: p.subjectName || null,
+              facultyId: p.facultyId || null,
+              facultyName: p.facultyName || null,
+              startTime: p.time?.startLabel || null,
+              endTime: p.time?.endLabel || null,
+              startMin: p.time?.startMin || null,
+              endMin: p.time?.endMin || null,
+              venue: p.venue || null,
+              topic: p.topic || null,
+              isCancelled: !!p.isCancelled
+            }))
         });
       }
       curr += msPerDay;
     }
-
-    // Summary
     const totalPeriods = schedule.reduce((s, d) => s + d.periods.filter((p) => !p.isCancelled).length, 0);
     const cancelledCount = schedule.reduce((s, d) => s + d.periods.filter((p) => p.isCancelled).length, 0);
-
     return res.status(200).json({
       status: true,
       batchCode,
@@ -389,16 +397,19 @@ const getPhaseAllotmentReport = async (req, res, next) => {
     const subjectId = safeTrim(req.body?.subjectId || ''); // optional filter
 
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-    
 
-    const batch = (batchId || batchCode) ? await resolveBatch(tenantId, batchId, batchCode) : null;
+    const batch = batchId || batchCode ? await resolveBatch(tenantId, batchId, batchCode) : null;
     if ((batchId || batchCode) && !batch) return res.status(404).json({ status: false, message: 'Batch not found' });
 
     // Get all published timetables for batch (or all batches)
     const paBatchIds = pickBatchIds(req);
-    const paBatches = paBatchIds.length ? await Batch.find({ tenantId, batchId: { $in: paBatchIds }, isdeleted: false }).lean() : (batch ? [batch] : null);
+    const paBatches = paBatchIds.length ? await Batch.find({ tenantId, batchId: { $in: paBatchIds }, isdeleted: false }).lean() : batch ? [batch] : null;
     const ttFilter = { tenantId, isdeleted: false, status: 'Active' };
-    if (paBatches) applyBatchCodeFilter(ttFilter, paBatches.map((b) => b.batchCode));
+    if (paBatches)
+      applyBatchCodeFilter(
+        ttFilter,
+        paBatches.map((b) => b.batchCode)
+      );
     const timetables = await TimeTable.find(ttFilter).lean();
 
     // Build subject → phaseId → minutes allotted from timetable
@@ -484,7 +495,10 @@ const getPhaseAllotmentReport = async (req, res, next) => {
 
     // Fetch phases for this batch's program + classNo (or all if no batch)
     const phaseQuery = { tenantId, isdeleted: false, status: 'Active' };
-    if (batch) { phaseQuery.programId = batch.programId; phaseQuery.classNo = batch.classNo; }
+    if (batch) {
+      phaseQuery.programId = batch.programId;
+      phaseQuery.classNo = batch.classNo;
+    }
     if (subjectId) phaseQuery.subjectId = new mongoose.Types.ObjectId(subjectId);
 
     const phases = await Phase.find(phaseQuery).sort({ subjectId: 1, sortOrder: 1 }).lean();
@@ -606,9 +620,8 @@ const getAssignmentCompletionReport = async (req, res, next) => {
     const subjectId = safeTrim(req.body?.subjectId || '');
 
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-    
 
-    const batch = (batchId || batchCode) ? await resolveBatch(tenantId, batchId, batchCode) : null;
+    const batch = batchId || batchCode ? await resolveBatch(tenantId, batchId, batchCode) : null;
     if ((batchId || batchCode) && !batch) return res.status(404).json({ status: false, message: 'Batch not found' });
 
     const abBatchIds = pickBatchIds(req);
@@ -703,9 +716,8 @@ const getExamCompletionReport = async (req, res, next) => {
     const batchCode = safeTrim(req.body?.batchCode || '');
 
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-    
 
-    const batch = (batchId || batchCode) ? await resolveBatch(tenantId, batchId, batchCode) : null;
+    const batch = batchId || batchCode ? await resolveBatch(tenantId, batchId, batchCode) : null;
     if ((batchId || batchCode) && !batch) return res.status(404).json({ status: false, message: 'Batch not found' });
 
     const exBatchIds = pickBatchIds(req);
@@ -772,10 +784,6 @@ const getExamCompletionReport = async (req, res, next) => {
   }
 };
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// REPORT 8 — Batch Info Details (all batches)
-// POST /batch/reports/batch-info
-// ═══════════════════════════════════════════════════════════════════════════════
 const getBatchInfoReport = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
@@ -783,17 +791,17 @@ const getBatchInfoReport = async (req, res, next) => {
     const centerId = safeTrim(req.body?.centerId || '');
     const academicYear = safeTrim(req.body?.academicYear || '');
     const status = safeTrim(req.body?.status || '');
-
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-
     const query = { tenantId, isdeleted: false };
-    if (programId) query.programId = programId;
-    if (centerId) query.centerId = centerId;
+    const programIds = Array.isArray(req.body?.programIds) ? req.body.programIds.filter(Boolean) : [];
+    const centerIds = Array.isArray(req.body?.centerIds) ? req.body.centerIds.filter(Boolean) : [];
+    if (programIds.length === 1) query.programId = programIds[0];
+    else if (programIds.length > 1) query.programId = { $in: programIds };
+    if (centerIds.length === 1) query.centerId = centerIds[0];
+    else if (centerIds.length > 1) query.centerId = { $in: centerIds };
     if (academicYear) query.academicYear = academicYear;
     if (status && status !== 'ALL') query.status = status;
-
     const batches = await Batch.find(query).sort({ centerName: 1, programName: 1, academicYear: 1, batchName: 1 }).lean();
-
     const data = batches.map((b, idx) => ({
       slNo: idx + 1,
       batchId: b.batchId,
@@ -818,8 +826,6 @@ const getBatchInfoReport = async (req, res, next) => {
       endDate: b.endDate || null,
       remarks: b.remarks || null
     }));
-
-    // Group by center
     const byCenterMap = new Map();
     for (const b of data) {
       const key = b.centerName || b.centerId;
@@ -827,7 +833,6 @@ const getBatchInfoReport = async (req, res, next) => {
       byCenterMap.get(key).batches.push(b);
     }
     const byCenter = Array.from(byCenterMap.values());
-
     return res.status(200).json({
       status: true,
       count: data.length,
@@ -844,29 +849,42 @@ const getBatchInfoReport = async (req, res, next) => {
   }
 };
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// REPORT 9 — Subject Class Allotment (Timetable based)
-// POST /batch/reports/subject-hours
-// ═══════════════════════════════════════════════════════════════════════════════
 const getSubjectHoursReport = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     const batchId = safeTrim(req.body?.batchId || '');
     const batchCode = safeTrim(req.body?.batchCode || '');
     const phaseId = safeTrim(req.body?.phaseId || '');
-
+    const filterSubjectId = safeTrim(req.body?.subjectId || '');
+    const fromDate = toInt(req.body?.fromDate, 0);
+    const toDate = toInt(req.body?.toDate, 0);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-    
-
-    const batch = (batchId || batchCode) ? await resolveBatch(tenantId, batchId, batchCode) : null;
+    const batch = batchId || batchCode ? await resolveBatch(tenantId, batchId, batchCode) : null;
     if ((batchId || batchCode) && !batch) return res.status(404).json({ status: false, message: 'Batch not found' });
-
     const shBatchIds = pickBatchIds(req);
-    const shBatches = shBatchIds.length ? await Batch.find({ tenantId, batchId: { $in: shBatchIds }, isdeleted: false }).lean() : (batch ? [batch] : null);
+    const shBatches = shBatchIds.length ? await Batch.find({ tenantId, batchId: { $in: shBatchIds }, isdeleted: false }).lean() : batch ? [batch] : null;
+    // const shTtQuery = { tenantId, isdeleted: false, status: 'Active' };
+    // if (shBatches)
+    //   applyBatchCodeFilter(
+    //     shTtQuery,
+    //     shBatches.map((b) => b.batchCode)
+    //   );
+    // const timetables = await TimeTable.find(shTtQuery).lean();
     const shTtQuery = { tenantId, isdeleted: false, status: 'Active' };
-    if (shBatches) applyBatchCodeFilter(shTtQuery, shBatches.map((b) => b.batchCode));
+    if (shBatches)
+      applyBatchCodeFilter(
+        shTtQuery,
+        shBatches.map((b) => b.batchCode)
+      );
+    if (fromDate) {
+      const fromMonday = getPreviousMonday(fromDate);
+      shTtQuery.wkStartOn = { $gte: fromMonday };
+    }
+    if (toDate) {
+      const toMonday = getPreviousMonday(toDate);
+      shTtQuery.wkStartOn = { ...shTtQuery.wkStartOn, $lte: toMonday };
+    }
     const timetables = await TimeTable.find(shTtQuery).lean();
-
     if (!timetables.length) {
       return res.status(200).json({
         status: true,
@@ -876,19 +894,85 @@ const getSubjectHoursReport = async (req, res, next) => {
         summary: { totalAllottedHours: 0 }
       });
     }
-
-    const subjectMins = new Map();
+    const batchNameMap = new Map((shBatches || []).map((b) => [b.batchCode, b.batchName]));
+    // const subjectMins = new Map();
+    // const subjectMeta = new Map();
+    // const countP = (p) => {
+    //   if (p?.isCancelled) return;
+    //   const sid = safeTrim(p?.subjectId);
+    //   if (!sid) return;
+    //   if (phaseId && safeTrim(p?.phaseId) !== phaseId) return;
+    //   const start = toInt(p?.time?.startMin, -1);
+    //   const end = toInt(p?.time?.endMin, -1);
+    //   if (start < 0 || end <= start) return;
+    //   subjectMins.set(sid, (subjectMins.get(sid) || 0) + (end - start));
+    //   if (!subjectMeta.has(sid)) {
+    //     subjectMeta.set(sid, {
+    //       subjectCode: safeTrim(p?.subjectCode) || null,
+    //       subjectName: safeTrim(p?.subjectName) || null
+    //     });
+    //   }
+    // };
+    // for (const tt of timetables) {
+    //   for (const dayObj of tt.week || []) {
+    //     for (const p of dayObj.periods || []) countP(p);
+    //   }
+    //   for (const ov of tt.dayOverrides || []) {
+    //     if (ov.action === 'CANCEL_DAY') continue;
+    //     if (ov.action === 'REPLACE_DAY') {
+    //       for (const p of ov.periods || []) countP(p);
+    //     }
+    //   }
+    //   const ovrMap = new Map();
+    //   for (const ov of tt.periodOverrides || []) {
+    //     ovrMap.set(`${ov.date}_${normDay(ov.day)}_${ov.periodNo}`, ov);
+    //   }
+    //   for (const ov of ovrMap.values()) {
+    //     if (ov.action === 'CANCEL_PERIOD') {
+    //       const dayObj = (tt.week || []).find((d) => normDay(d.day) === normDay(ov.day));
+    //       const base = (dayObj?.periods || []).find((p) => toInt(p?.periodNo) === toInt(ov.periodNo));
+    //       if (base && !base.isCancelled) {
+    //         const sid = safeTrim(base.subjectId);
+    //         const s = toInt(base.time?.startMin, -1);
+    //         const e = toInt(base.time?.endMin, -1);
+    //         if (sid && s >= 0 && e > s) {
+    //           if (!phaseId || safeTrim(base.phaseId) === phaseId) {
+    //             subjectMins.set(sid, Math.max(0, (subjectMins.get(sid) || 0) - (e - s)));
+    //           }
+    //         }
+    //       }
+    //     } else if (ov.action === 'REPLACE_PERIOD' && ov.period) {
+    //       const dayObj = (tt.week || []).find((d) => normDay(d.day) === normDay(ov.day));
+    //       const base = (dayObj?.periods || []).find((p) => toInt(p?.periodNo) === toInt(ov.periodNo));
+    //       if (base && !base.isCancelled) {
+    //         const sid = safeTrim(base.subjectId);
+    //         const s = toInt(base.time?.startMin, -1);
+    //         const e = toInt(base.time?.endMin, -1);
+    //         if (sid && s >= 0 && e > s) {
+    //           if (!phaseId || safeTrim(base.phaseId) === phaseId) {
+    //             subjectMins.set(sid, Math.max(0, (subjectMins.get(sid) || 0) - (e - s)));
+    //           }
+    //         }
+    //       }
+    //       countP({ ...ov.period, periodNo: ov.periodNo });
+    //     } else if (ov.action === 'ADD_PERIOD' && ov.period) {
+    //       countP({ ...ov.period, periodNo: ov.periodNo });
+    //     }
+    //   }
+    // }
+    const batchSubjectMins = new Map();
     const subjectMeta = new Map();
-
-    const countP = (p) => {
+    const countP = (p, batchCode) => {
       if (p?.isCancelled) return;
       const sid = safeTrim(p?.subjectId);
       if (!sid) return;
+      if (filterSubjectId && sid !== filterSubjectId) return;
       if (phaseId && safeTrim(p?.phaseId) !== phaseId) return;
       const start = toInt(p?.time?.startMin, -1);
       const end = toInt(p?.time?.endMin, -1);
       if (start < 0 || end <= start) return;
-      subjectMins.set(sid, (subjectMins.get(sid) || 0) + (end - start));
+      const key = `${batchCode}_${sid}`;
+      batchSubjectMins.set(key, (batchSubjectMins.get(key) || 0) + (end - start));
       if (!subjectMeta.has(sid)) {
         subjectMeta.set(sid, {
           subjectCode: safeTrim(p?.subjectCode) || null,
@@ -896,15 +980,15 @@ const getSubjectHoursReport = async (req, res, next) => {
         });
       }
     };
-
     for (const tt of timetables) {
+      const bc = tt.batchCode;
       for (const dayObj of tt.week || []) {
-        for (const p of dayObj.periods || []) countP(p);
+        for (const p of dayObj.periods || []) countP(p, bc);
       }
       for (const ov of tt.dayOverrides || []) {
         if (ov.action === 'CANCEL_DAY') continue;
         if (ov.action === 'REPLACE_DAY') {
-          for (const p of ov.periods || []) countP(p);
+          for (const p of ov.periods || []) countP(p, bc);
         }
       }
       const ovrMap = new Map();
@@ -921,7 +1005,8 @@ const getSubjectHoursReport = async (req, res, next) => {
             const e = toInt(base.time?.endMin, -1);
             if (sid && s >= 0 && e > s) {
               if (!phaseId || safeTrim(base.phaseId) === phaseId) {
-                subjectMins.set(sid, Math.max(0, (subjectMins.get(sid) || 0) - (e - s)));
+                const key = `${bc}_${sid}`;
+                batchSubjectMins.set(key, Math.max(0, (batchSubjectMins.get(key) || 0) - (e - s)));
               }
             }
           }
@@ -934,33 +1019,53 @@ const getSubjectHoursReport = async (req, res, next) => {
             const e = toInt(base.time?.endMin, -1);
             if (sid && s >= 0 && e > s) {
               if (!phaseId || safeTrim(base.phaseId) === phaseId) {
-                subjectMins.set(sid, Math.max(0, (subjectMins.get(sid) || 0) - (e - s)));
+                const key = `${bc}_${sid}`;
+                batchSubjectMins.set(key, Math.max(0, (batchSubjectMins.get(key) || 0) - (e - s)));
               }
             }
           }
-          countP({ ...ov.period, periodNo: ov.periodNo });
+          countP({ ...ov.period, periodNo: ov.periodNo }, bc);
         } else if (ov.action === 'ADD_PERIOD' && ov.period) {
-          countP({ ...ov.period, periodNo: ov.periodNo });
+          countP({ ...ov.period, periodNo: ov.periodNo }, bc);
         }
       }
     }
-
     const toHours = (m) => round2(m / 60);
-    const data = Array.from(subjectMins.entries())
-      .map(([sid, mins]) => {
-        const meta = subjectMeta.get(sid) || {};
-        return {
-          subjectId: sid,
-          subjectCode: meta.subjectCode || null,
-          subjectName: meta.subjectName || null,
-          allottedHours: toHours(mins),
-          allottedMinutes: mins
-        };
-      })
-      .sort((a, b) => (a.subjectName || '').localeCompare(b.subjectName || ''));
-
-    const totalAllottedHours = toHours(Array.from(subjectMins.values()).reduce((s, m) => s + m, 0));
-
+    const data = [];
+    for (const [key, mins] of batchSubjectMins.entries()) {
+      const [batchCode, ...subjectParts] = key.split('_');
+      const sid = subjectParts.join('_');
+      const meta = subjectMeta.get(sid) || {};
+      data.push({
+        batchCode,
+        batchName: batchNameMap.get(batchCode) || null,
+        subjectId: sid,
+        subjectCode: meta.subjectCode || null,
+        subjectName: meta.subjectName || null,
+        allottedHours: toHours(mins),
+        allottedMinutes: mins
+      });
+    }
+    data.sort((a, b) => {
+      const bc = a.batchCode.localeCompare(b.batchCode);
+      if (bc !== 0) return bc;
+      return (a.subjectName || '').localeCompare(b.subjectName || '');
+    });
+    const totalAllottedHours = toHours(Array.from(batchSubjectMins.values()).reduce((s, m) => s + m, 0));
+    // const toHours = (m) => round2(m / 60);
+    // const data = Array.from(subjectMins.entries())
+    //   .map(([sid, mins]) => {
+    //     const meta = subjectMeta.get(sid) || {};
+    //     return {
+    //       subjectId: sid,
+    //       subjectCode: meta.subjectCode || null,
+    //       subjectName: meta.subjectName || null,
+    //       allottedHours: toHours(mins),
+    //       allottedMinutes: mins
+    //     };
+    //   })
+    //   .sort((a, b) => (a.subjectName || '').localeCompare(b.subjectName || ''));
+    // const totalAllottedHours = toHours(Array.from(subjectMins.values()).reduce((s, m) => s + m, 0));
     return res.status(200).json({
       status: true,
       batchCode: batch?.batchCode || null,
@@ -976,33 +1081,22 @@ const getSubjectHoursReport = async (req, res, next) => {
   }
 };
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// REPORT 10 — Feedback Report (batchwise + staffwise)
-// POST /batch/reports/feedback
-// ═══════════════════════════════════════════════════════════════════════════════
 const getFeedbackReport = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     const batchCode = safeTrim(req.body?.batchCode || '');
     const fromDate = toInt(req.body?.fromDate, 0);
     const toDate = toInt(req.body?.toDate, 0);
-
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-    
-
     const fbBatchCodes = pickBatchCodes(req);
     const query = { tenantId, isdeleted: false };
     applyBatchCodeFilter(query, fbBatchCodes);
     if (fromDate) query.ptmDate = { $gte: fromDate };
     if (toDate) query.ptmDate = { ...query.ptmDate, $lte: toDate };
-
     const ptmDocs = await PTM.find(query).lean();
-
     if (!ptmDocs.length) {
       return res.status(200).json({ status: true, batchCode, count: 0, batchSummary: null, staffSummary: [], data: [] });
     }
-
-    // Batch-level summary
     const total = ptmDocs.length;
     const completed = ptmDocs.filter((p) => p.status === 'COMPLETED').length;
     const noShow = ptmDocs.filter((p) => p.status === 'NO_SHOW').length;
@@ -1010,7 +1104,6 @@ const getFeedbackReport = async (req, res, next) => {
     const scheduled = ptmDocs.filter((p) => p.status === 'SCHEDULED').length;
     const prePtmSubmitted = ptmDocs.filter((p) => !!p.prePtmSubmittedAt).length;
     const postPtmSubmitted = ptmDocs.filter((p) => !!p.postPtmSubmittedAt).length;
-
     const batchSummary = {
       totalStudents: total,
       completed,
@@ -1024,11 +1117,7 @@ const getFeedbackReport = async (req, res, next) => {
       prePtmSubmissionPct: round2((prePtmSubmitted / total) * 100),
       postPtmSubmissionPct: round2((postPtmSubmitted / total) * 100)
     };
-
-    // Staff-wise summary — from staffRemarks[]
     const staffRemarksMap = new Map();
-    // key: staffId → { staffId, staffName, subjectName, studentsCovered: Set, remarksCount }
-
     for (const ptm of ptmDocs) {
       const remarks = Array.isArray(ptm.staffRemarks) ? ptm.staffRemarks : [];
       for (const r of remarks) {
@@ -1051,7 +1140,6 @@ const getFeedbackReport = async (req, res, next) => {
         entry.studentsCovered.add(ptm.admissionNo || ptm.studentId);
       }
     }
-
     const staffSummary = Array.from(staffRemarksMap.values())
       .map((e) => ({
         staffId: e.staffId,
@@ -1063,8 +1151,6 @@ const getFeedbackReport = async (req, res, next) => {
         studentsCovered: e.studentsCovered.size
       }))
       .sort((a, b) => (a.subjectName || '').localeCompare(b.subjectName || ''));
-
-    // Per-student detail
     const data = ptmDocs.map((p) => ({
       ptmId: p.ptmId,
       studentId: p.studentId,
@@ -1079,7 +1165,6 @@ const getFeedbackReport = async (req, res, next) => {
       staffFeedbackCount: Array.isArray(p.staffRemarks) ? p.staffRemarks.length : 0,
       staffRemarks: Array.isArray(p.staffRemarks) ? p.staffRemarks : []
     }));
-
     return res.status(200).json({
       status: true,
       batchCode,
@@ -1095,10 +1180,6 @@ const getFeedbackReport = async (req, res, next) => {
   }
 };
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// REPORT 11 — Batch PTM Report (session level)
-// POST /batch/reports/ptm
-// ═══════════════════════════════════════════════════════════════════════════════
 const getBatchPtmReport = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
@@ -1106,24 +1187,17 @@ const getBatchPtmReport = async (req, res, next) => {
     const fromDate = toInt(req.body?.fromDate, 0);
     const toDate = toInt(req.body?.toDate, 0);
     const status = safeTrim(req.body?.status || '');
-
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-    
-
     const ptmBatchCodes = pickBatchCodes(req);
     const query = { tenantId, isdeleted: false };
     applyBatchCodeFilter(query, ptmBatchCodes);
     if (fromDate) query.ptmDate = { $gte: fromDate };
     if (toDate) query.ptmDate = { ...query.ptmDate, $lte: toDate };
     if (status && status !== 'ALL') query.status = status;
-
     const ptmDocs = await PTM.find(query).sort({ ptmDate: -1, startTime: 1 }).lean();
-
     if (!ptmDocs.length) {
       return res.status(200).json({ status: true, batchCode, sessions: [], count: 0 });
     }
-
-    // Group by ptmDate + startTime (= one session)
     const sessionMap = new Map();
     for (const p of ptmDocs) {
       const key = `${p.ptmDate}_${p.startTime}`;
@@ -1142,7 +1216,6 @@ const getBatchPtmReport = async (req, res, next) => {
       }
       sessionMap.get(key).students.push(p);
     }
-
     const sessions = Array.from(sessionMap.values())
       .map((s) => {
         const students = s.students;
@@ -1153,7 +1226,6 @@ const getBatchPtmReport = async (req, res, next) => {
         const scheduled = students.filter((p) => p.status === 'SCHEDULED').length;
         const prePtmSubmitted = students.filter((p) => !!p.prePtmSubmittedAt).length;
         const postPtmSubmitted = students.filter((p) => !!p.postPtmSubmittedAt).length;
-
         return {
           ptmDate: s.ptmDate,
           startTime: s.startTime,
@@ -1174,7 +1246,6 @@ const getBatchPtmReport = async (req, res, next) => {
           postPtmPendingCount: total - postPtmSubmitted,
           prePtmSubmissionPct: total > 0 ? round2((prePtmSubmitted / total) * 100) : 0,
           postPtmSubmissionPct: total > 0 ? round2((postPtmSubmitted / total) * 100) : 0,
-          // Per-student detail
           students: students.map((p) => ({
             ptmId: p.ptmId,
             studentId: p.studentId,
@@ -1188,8 +1259,6 @@ const getBatchPtmReport = async (req, res, next) => {
         };
       })
       .sort((a, b) => b.ptmDate - a.ptmDate);
-
-    // Overall summary
     const allStudents = ptmDocs;
     const summary = {
       totalSessions: sessions.length,
@@ -1200,13 +1269,328 @@ const getBatchPtmReport = async (req, res, next) => {
       prePtmSubmitted: allStudents.filter((p) => !!p.prePtmSubmittedAt).length,
       postPtmSubmitted: allStudents.filter((p) => !!p.postPtmSubmittedAt).length
     };
-
     return res.status(200).json({
       status: true,
       batchCode,
       summary,
       count: sessions.length,
       sessions
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const getCgpaReport = async (req, res, next) => {
+  try {
+    const tenantId = pickTid(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+
+    const cgBatchIds = pickBatchIds(req);
+    const subjectId = safeTrim(req.body?.subjectId || '');
+
+    // Fetch batch docs for names
+    const batchQuery = { tenantId, isdeleted: false };
+    if (cgBatchIds.length) batchQuery.batchId = { $in: cgBatchIds };
+    const batches = await Batch.find(batchQuery, { batchId: 1, batchCode: 1, batchName: 1 }).lean();
+    const batchMap = new Map(batches.map((b) => [b.batchId, b]));
+
+    if (!batches.length) {
+      return res.status(200).json({ status: true, count: 0, data: [], studentDetail: [] });
+    }
+
+    // Fetch enabled assignments for these batches
+    const enableQuery = { tenantId, isdeleted: false, status: 'enabled' };
+    applyBatchIdFilter(enableQuery, cgBatchIds.length ? cgBatchIds : batches.map((b) => b.batchId));
+    if (subjectId) enableQuery.subjectId = subjectId;
+
+    const enabledRows = await BatchAssignEnable.find(enableQuery).lean();
+
+    if (!enabledRows.length) {
+      return res.status(200).json({ status: true, count: 0, data: [], studentDetail: [] });
+    }
+
+    // Fetch subject names
+    const subjectIds = [...new Set(enabledRows.map((r) => safeTrim(r.subjectId)).filter(Boolean))];
+    const subjectDocs = await Subject.find(
+      {
+        _id: {
+          $in: subjectIds
+            .map((id) => {
+              try {
+                return new mongoose.Types.ObjectId(id);
+              } catch {
+                return null;
+              }
+            })
+            .filter(Boolean)
+        }
+      },
+      { subjectName: 1, subjectCode: 1 }
+    ).lean();
+    const subjectDocMap = new Map(subjectDocs.map((s) => [String(s._id), s]));
+
+    // Group by batchId + subjectId
+    // key: `${batchId}::${subjectId}`
+    const groupMap = new Map();
+
+    for (const row of enabledRows) {
+      const bid = safeTrim(row.batchId);
+      const sid = safeTrim(row.subjectId);
+      const key = `${bid}::${sid}`;
+
+      if (!groupMap.has(key)) {
+        groupMap.set(key, {
+          batchId: bid,
+          subjectId: sid,
+          students: []
+        });
+      }
+
+      // Collect all students from this enabled test
+      for (const stu of row.students || []) {
+        groupMap.get(key).students.push({
+          admissionNo: safeTrim(stu.admissionNo),
+          studentId: safeTrim(stu.studentId || ''),
+          status: safeTrim(stu.status),
+          cgpa: stu.cgpa !== null && stu.cgpa !== undefined ? Number(stu.cgpa) : null
+        });
+      }
+    }
+
+    // Build summary per batch+subject — merge duplicate students (take latest cgpa)
+    const summaryData = [];
+    const studentDetailData = [];
+
+    for (const [key, grp] of groupMap.entries()) {
+      const batch = batchMap.get(grp.batchId) || {};
+      const subDoc = subjectDocMap.get(grp.subjectId) || {};
+
+      // Deduplicate students — keep highest cgpa per admissionNo
+      const stuMap = new Map();
+      for (const stu of grp.students) {
+        const existing = stuMap.get(stu.admissionNo);
+        if (!existing || (stu.cgpa !== null && (existing.cgpa === null || stu.cgpa > existing.cgpa))) {
+          stuMap.set(stu.admissionNo, stu);
+        }
+      }
+
+      const allStudents = Array.from(stuMap.values());
+      const completedStudents = allStudents.filter((s) => s.status === 'COMPLETED');
+      const withCgpa = completedStudents.filter((s) => s.cgpa !== null);
+
+      const avgCgpa = withCgpa.length > 0 ? round2(withCgpa.reduce((s, st) => s + st.cgpa, 0) / withCgpa.length) : null;
+      const minCgpa = withCgpa.length > 0 ? round2(Math.min(...withCgpa.map((s) => s.cgpa))) : null;
+      const maxCgpa = withCgpa.length > 0 ? round2(Math.max(...withCgpa.map((s) => s.cgpa))) : null;
+
+      summaryData.push({
+        batchId: grp.batchId,
+        batchCode: batch.batchCode || grp.batchId,
+        batchName: batch.batchName || null,
+        subjectId: grp.subjectId,
+        subjectName: subDoc.subjectName || null,
+        subjectCode: subDoc.subjectCode || null,
+        totalStudents: allStudents.length,
+        completedStudents: completedStudents.length,
+        studentsWithCgpa: withCgpa.length,
+        avgCgpa,
+        minCgpa,
+        maxCgpa
+      });
+
+      // Per-student detail
+      for (const stu of allStudents) {
+        studentDetailData.push({
+          batchCode: batch.batchCode || grp.batchId,
+          batchName: batch.batchName || null,
+          subjectName: subDoc.subjectName || null,
+          subjectCode: subDoc.subjectCode || null,
+          admissionNo: stu.admissionNo,
+          status: stu.status,
+          cgpa: stu.cgpa !== null ? stu.cgpa : '-'
+        });
+      }
+    }
+
+    // Sort summary by batchCode then subjectName
+    summaryData.sort((a, b) => {
+      const bc = (a.batchCode || '').localeCompare(b.batchCode || '');
+      if (bc !== 0) return bc;
+      return (a.subjectName || '').localeCompare(b.subjectName || '');
+    });
+
+    studentDetailData.sort((a, b) => {
+      const bc = (a.batchCode || '').localeCompare(b.batchCode || '');
+      if (bc !== 0) return bc;
+      const sc = (a.subjectName || '').localeCompare(b.subjectName || '');
+      if (sc !== 0) return sc;
+      return (a.admissionNo || '').localeCompare(b.admissionNo || '');
+    });
+
+    const summary = {
+      totalBatches: new Set(summaryData.map((r) => r.batchCode)).size,
+      totalStudents: studentDetailData.length,
+      overallAvgCgpa: summaryData.filter((r) => r.avgCgpa !== null).length > 0 ? round2(summaryData.filter((r) => r.avgCgpa !== null).reduce((s, r) => s + r.avgCgpa, 0) / summaryData.filter((r) => r.avgCgpa !== null).length) : null
+    };
+
+    return res.status(200).json({
+      status: true,
+      summary,
+      count: summaryData.length,
+      data: summaryData,
+      studentDetail: studentDetailData
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const getSlashReport = async (req, res, next) => {
+  try {
+    const tenantId = pickTid(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+
+    const slBatchIds = pickBatchIds(req);
+    const subjectId = safeTrim(req.body?.subjectId || '');
+
+    // Fetch batch docs for names
+    const batchQuery = { tenantId, isdeleted: false };
+    if (slBatchIds.length) batchQuery.batchId = { $in: slBatchIds };
+    const batches = await Batch.find(batchQuery, { batchId: 1, batchCode: 1, batchName: 1 }).lean();
+    const batchMap = new Map(batches.map((b) => [b.batchId, b]));
+
+    if (!batches.length) {
+      return res.status(200).json({ status: true, count: 0, data: [] });
+    }
+
+    // Fetch all enabled assignments for these batches
+    const enableQuery = { tenantId, isdeleted: false, status: 'enabled' };
+    applyBatchIdFilter(enableQuery, slBatchIds.length ? slBatchIds : batches.map((b) => b.batchId));
+    if (subjectId) enableQuery.subjectId = subjectId;
+
+    const enabledRows = await BatchAssignEnable.find(enableQuery).lean();
+
+    if (!enabledRows.length) {
+      return res.status(200).json({ status: true, count: 0, data: [] });
+    }
+
+    // Fetch subject names
+    const subjectIds = [...new Set(enabledRows.map((r) => safeTrim(r.subjectId)).filter(Boolean))];
+    const subjectDocs = await Subject.find(
+      {
+        _id: {
+          $in: subjectIds
+            .map((id) => {
+              try {
+                return new mongoose.Types.ObjectId(id);
+              } catch {
+                return null;
+              }
+            })
+            .filter(Boolean)
+        }
+      },
+      { subjectName: 1, subjectCode: 1 }
+    ).lean();
+    const subjectDocMap = new Map(subjectDocs.map((s) => [String(s._id), s]));
+
+    // Group by batchId + subjectId
+    // key: `${batchId}::${subjectId}`
+    const groupMap = new Map();
+
+    for (const row of enabledRows) {
+      const bid = safeTrim(row.batchId);
+      const sid = safeTrim(row.subjectId);
+      const key = `${bid}::${sid}`;
+
+      if (!groupMap.has(key)) {
+        groupMap.set(key, {
+          batchId: bid,
+          subjectId: sid,
+          testIds: new Set(),
+          // studentId → { testIds completed }
+          studentTestMap: new Map()
+        });
+      }
+
+      const grp = groupMap.get(key);
+      const testId = safeTrim(row.testId);
+      if (testId) grp.testIds.add(testId);
+
+      // Track per-student per-test status
+      for (const stu of row.students || []) {
+        const admNo = safeTrim(stu.admissionNo);
+        if (!admNo) continue;
+        if (!grp.studentTestMap.has(admNo)) {
+          grp.studentTestMap.set(admNo, {
+            admissionNo: admNo,
+            completedTests: new Set(),
+            inProgressTests: new Set(),
+            assignedTests: new Set()
+          });
+        }
+        const stuData = grp.studentTestMap.get(admNo);
+        const status = safeTrim(stu.status);
+        if (status === 'COMPLETED') stuData.completedTests.add(testId);
+        else if (status === 'IN_PROGRESS') stuData.inProgressTests.add(testId);
+        else stuData.assignedTests.add(testId);
+      }
+    }
+
+    // Build report rows
+    const data = [];
+
+    for (const [key, grp] of groupMap.entries()) {
+      const batch = batchMap.get(grp.batchId) || {};
+      const subDoc = subjectDocMap.get(grp.subjectId) || {};
+      const availableTests = grp.testIds.size;
+      const allStudents = Array.from(grp.studentTestMap.values());
+      const totalStudents = allStudents.length;
+
+      // Completed all = student who completed ALL available tests
+      const fullyCompleted = allStudents.filter((s) => s.completedTests.size === availableTests).length;
+      // In Progress = at least one in progress or partially completed
+      const inProgress = allStudents.filter((s) => s.inProgressTests.size > 0 || (s.completedTests.size > 0 && s.completedTests.size < availableTests)).length;
+      // Not started = all tests still assigned
+      const notStarted = allStudents.filter((s) => s.completedTests.size === 0 && s.inProgressTests.size === 0).length;
+
+      const completionPct = totalStudents > 0 && availableTests > 0 ? round2((fullyCompleted / totalStudents) * 100) : 0;
+
+      data.push({
+        batchId: grp.batchId,
+        batchCode: batch.batchCode || grp.batchId,
+        batchName: batch.batchName || null,
+        subjectId: grp.subjectId,
+        subjectName: subDoc.subjectName || null,
+        subjectCode: subDoc.subjectCode || null,
+        availableTests,
+        totalStudents,
+        fullyCompleted,
+        inProgress,
+        notStarted,
+        completionPct
+      });
+    }
+
+    // Sort by batchCode then subjectName
+    data.sort((a, b) => {
+      const bc = (a.batchCode || '').localeCompare(b.batchCode || '');
+      if (bc !== 0) return bc;
+      return (a.subjectName || '').localeCompare(b.subjectName || '');
+    });
+
+    const summary = {
+      totalBatches: new Set(data.map((r) => r.batchCode)).size,
+      totalSubjects: new Set(data.map((r) => r.subjectId)).size,
+      totalAvailableTests: data.reduce((s, r) => s + r.availableTests, 0),
+      overallCompletionPct: data.length > 0 ? round2(data.reduce((s, r) => s + r.completionPct, 0) / data.length) : 0
+    };
+
+    return res.status(200).json({
+      status: true,
+      summary,
+      count: data.length,
+      data
     });
   } catch (err) {
     return next(err);
@@ -1224,5 +1608,7 @@ export default {
   getBatchInfoReport,
   getSubjectHoursReport,
   getFeedbackReport,
-  getBatchPtmReport
+  getBatchPtmReport,
+  getCgpaReport,
+  getSlashReport
 };

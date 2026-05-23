@@ -19,10 +19,15 @@ routes.post('/batch/batch-info', validatetoken, batchReCtrl.getBatchInfoReport);
 routes.post('/batch/subject-hours', validatetoken, batchReCtrl.getSubjectHoursReport);
 routes.post('/batch/feedback', validatetoken, batchReCtrl.getFeedbackReport);
 routes.post('/batch/ptm', validatetoken, batchReCtrl.getBatchPtmReport);
+routes.post('/batch/cgpa', validatetoken, batchReCtrl.getCgpaReport);
+routes.post('/batch/slash', validatetoken, batchReCtrl.getSlashReport);
 
 routes.post('/student/attendance', validatetoken, studentReCtrl.getStudentAttendanceReport);
 routes.post('/student/remarks', validatetoken, studentReCtrl.getStudentRemarksReport);
 routes.post('/student/late-entries', validatetoken, studentReCtrl.getStudentLateEntryReport);
+routes.post('/student/attendance-bulk', validatetoken, studentReCtrl.getStudentAttendanceBulkReport);
+routes.post('/student/remarks-bulk', validatetoken, studentReCtrl.getStudentRemarksBulkReport);
+routes.post('/student/late-entries-bulk', validatetoken, studentReCtrl.getStudentLateEntriesBulkReport);
 
 routes.post('/teacher/batches', validatetoken, staffReCtrl.getFacultyBatchReport);
 routes.post('/teacher/tasks', validatetoken, staffReCtrl.getTaskReport);
@@ -32,6 +37,7 @@ routes.post('/teacher/assignments', validatetoken, staffReCtrl.getStaffAssignmen
 routes.post('/teacher/attendance', validatetoken, staffReCtrl.getStaffAttendanceReport);
 routes.post('/teacher/feedback', validatetoken, staffReCtrl.getStaffFeedbackReport);
 routes.post('/teacher/exams', validatetoken, staffReCtrl.getStaffExamReport);
+routes.post('/teacher/load', validatetoken, staffReCtrl.getFacultyLoadReport);
 
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Batch routes' }));
 

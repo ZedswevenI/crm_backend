@@ -25,6 +25,8 @@ const resolveStudent = async (tenantId, studentId, admissionNo) => {
   return StudentProfile.findOne(q).lean();
 };
 
+const round2 = (n) => Math.round(Number(n) * 100) / 100;
+
 const getStudentAttendanceReport = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
@@ -371,9 +373,330 @@ const getStudentLateEntryReport = async (req, res, next) => {
   }
 };
 
-// ─── Exports ──────────────────────────────────────────────────────────────────
+const getStudentAttendanceBulkReport = async (req, res, next) => {
+  try {
+    const tenantId = pickTid(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+    const admissionNos = Array.isArray(req.body?.admissionNos) ? req.body.admissionNos.map(safeTrim).filter(Boolean).slice(0, 100) : [];
+    if (!admissionNos.length) {
+      return res.status(400).json({ status: false, message: 'admissionNos[] is required' });
+    }
+    const fromDate = toInt(req.body?.fromDate, 0);
+    const toDate = toInt(req.body?.toDate, 0);
+    const students = await StudentProfile.find(
+      {
+        tenantId,
+        admissionNo: { $in: admissionNos },
+        isdeleted: false
+      },
+      {
+        studentId: 1,
+        admissionNo: 1,
+        batchCode: 1,
+        batchId: 1,
+        'student.name': 1
+      }
+    ).lean();
+    if (!students.length) {
+      return res.status(200).json({ status: true, count: 0, data: [], detail: [] });
+    }
+    const studentMap = new Map(students.map((s) => [s.admissionNo, s]));
+    const batchCodes = [...new Set(students.map((s) => s.batchCode).filter(Boolean))];
+    const attQuery = {
+      tenantId,
+      batchCode: { $in: batchCodes },
+      isdeleted: false
+    };
+    if (fromDate || toDate) {
+      attQuery.date = {};
+      if (fromDate) attQuery.date.$gte = fromDate;
+      if (toDate) attQuery.date.$lte = toDate;
+    }
+    const pipeline = [
+      { $match: attQuery },
+      { $unwind: '$students' },
+      { $match: { 'students.studentId': { $in: students.map((s) => s.studentId) } } },
+      {
+        $addFields: {
+          subjectObjId: {
+            $cond: [{ $eq: [{ $type: '$subjectId' }, 'string'] }, { $toObjectId: '$subjectId' }, '$subjectId']
+          }
+        }
+      },
+      {
+        $lookup: {
+          from: 'subjects',
+          localField: 'subjectObjId',
+          foreignField: '_id',
+          as: 'subject'
+        }
+      },
+      { $unwind: { path: '$subject', preserveNullAndEmptyArrays: true } },
+      {
+        $project: {
+          _id: 0,
+          date: 1,
+          periodNo: 1,
+          batchCode: 1,
+          subjectName: '$subject.subjectName',
+          topicTaught: 1,
+          studentId: '$students.studentId',
+          admissionNo: '$students.admissionNo',
+          status: '$students.status',
+          remarks: '$students.remarks'
+        }
+      },
+      { $sort: { admissionNo: 1, date: -1, periodNo: 1 } }
+    ];
+    const periodRecords = await Attendance.aggregate(pipeline);
+    const periodByStudent = new Map();
+    for (const r of periodRecords) {
+      const key = r.admissionNo || r.studentId;
+      if (!periodByStudent.has(key)) periodByStudent.set(key, []);
+      periodByStudent.get(key).push({
+        date: r.date,
+        dateFormatted: formatDate(r.date),
+        periodNo: r.periodNo,
+        batchCode: r.batchCode,
+        subjectName: r.subjectName || null,
+        topicTaught: r.topicTaught || null,
+        status: r.status,
+        remarks: r.remarks || null
+      });
+    }
+    const summaryData = [];
+    const detailData = [];
+    for (const admNo of admissionNos) {
+      const student = studentMap.get(admNo);
+      if (!student) continue;
+      const periods = periodByStudent.get(admNo) || [];
+      const totalPeriods = periods.length;
+      const present = periods.filter((p) => p.status === 'PRESENT').length;
+      const absent = periods.filter((p) => p.status === 'ABSENT').length;
+      const late = periods.filter((p) => p.status === 'LATE').length;
+      const attended = present + late;
+      const attendancePct = totalPeriods > 0 ? round2((attended / totalPeriods) * 100) : 0;
+      summaryData.push({
+        admissionNo: admNo,
+        studentName: student.student?.name || null,
+        batchCode: student.batchCode || null,
+        totalPeriods,
+        present,
+        absent,
+        late,
+        attendancePct: attendancePct + '%'
+      });
+      for (const p of periods) {
+        detailData.push({
+          admissionNo: admNo,
+          studentName: student.student?.name || null,
+          batchCode: student.batchCode || null,
+          ...p
+        });
+      }
+    }
+    const overallSummary = {
+      totalStudents: summaryData.length,
+      avgAttendancePct: summaryData.length > 0 ? round2(summaryData.reduce((s, r) => s + parseFloat(r.attendancePct), 0) / summaryData.length) : 0
+    };
+    return res.status(200).json({
+      status: true,
+      summary: overallSummary,
+      count: summaryData.length,
+      data: summaryData,
+      detail: detailData
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const getStudentRemarksBulkReport = async (req, res, next) => {
+  try {
+    const tenantId = pickTid(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+    const admissionNos = Array.isArray(req.body?.admissionNos) ? req.body.admissionNos.map(safeTrim).filter(Boolean).slice(0, 100) : [];
+    if (!admissionNos.length) return res.status(400).json({ status: false, message: 'admissionNos[] is required' });
+    const fromDate = toInt(req.body?.fromDate, 0);
+    const toDate = toInt(req.body?.toDate, 0);
+    const filterType = safeTrim(req.body?.type || '');
+    const filterStatus = safeTrim(req.body?.status || '');
+    const students = await StudentProfile.find(
+      {
+        tenantId,
+        admissionNo: { $in: admissionNos },
+        isdeleted: false
+      },
+      { studentId: 1, admissionNo: 1, batchCode: 1, 'student.name': 1 }
+    ).lean();
+    const studentMap = new Map(students.map((s) => [s.admissionNo, s]));
+    const remarkQuery = { tenantId, admissionNo: { $in: admissionNos }, isdeleted: false };
+    if (filterType) remarkQuery.type = filterType;
+    if (filterStatus) remarkQuery.status = filterStatus;
+    if (fromDate || toDate) {
+      remarkQuery.dateOfIncident = {};
+      if (fromDate) remarkQuery.dateOfIncident.$gte = fromDate;
+      if (toDate) remarkQuery.dateOfIncident.$lte = toDate;
+    }
+    const remarks = await StudentRemark.find(remarkQuery).sort({ admissionNo: 1, dateOfIncident: -1 }).lean();
+    const remarksByStudent = new Map();
+    for (const r of remarks) {
+      const key = safeTrim(r.admissionNo);
+      if (!remarksByStudent.has(key)) remarksByStudent.set(key, []);
+      remarksByStudent.get(key).push(r);
+    }
+    const summaryData = [];
+    const detailData = [];
+    for (const admNo of admissionNos) {
+      const student = studentMap.get(admNo);
+      const studentRemarks = remarksByStudent.get(admNo) || [];
+      summaryData.push({
+        admissionNo: admNo,
+        studentName: student?.student?.name || null,
+        batchCode: student?.batchCode || null,
+        totalRemarks: studentRemarks.length
+      });
+      for (const r of studentRemarks) {
+        detailData.push({
+          admissionNo: admNo,
+          studentName: student?.student?.name || null,
+          batchCode: student?.batchCode || null,
+          type: r.type || null,
+          dateFormatted: formatDate(r.dateOfIncident),
+          remark: r.remark || null,
+          status: r.status || null,
+          reportedByParent: r.reportedByParent ? 'Yes' : 'No'
+        });
+      }
+    }
+    const summary = {
+      totalStudents: summaryData.length,
+      totalRemarks: remarks.length
+    };
+    return res.status(200).json({
+      status: true,
+      summary,
+      count: summaryData.length,
+      data: summaryData,
+      detail: detailData
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const getStudentLateEntriesBulkReport = async (req, res, next) => {
+  try {
+    const tenantId = pickTid(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+
+    const admissionNos = Array.isArray(req.body?.admissionNos) ? req.body.admissionNos.map(safeTrim).filter(Boolean).slice(0, 100) : [];
+    if (!admissionNos.length) return res.status(400).json({ status: false, message: 'admissionNos[] is required' });
+
+    const fromDate = toInt(req.body?.fromDate, 0);
+    const toDate = toInt(req.body?.toDate, 0);
+    const filterEntryType = safeTrim(req.body?.entryType || '');
+
+    // Fetch students
+    const students = await StudentProfile.find(
+      {
+        tenantId,
+        admissionNo: { $in: admissionNos },
+        isdeleted: false
+      },
+      { studentId: 1, admissionNo: 1, batchCode: 1, 'student.name': 1 }
+    ).lean();
+
+    const studentMap = new Map(students.map((s) => [s.admissionNo, s]));
+    const studentIds = students.map((s) => s.studentId).filter(Boolean);
+
+    // Fetch all late entries at once
+    const lateQuery = {
+      tenantId,
+      type: 'STUDENT',
+      personId: { $in: studentIds },
+      isdeleted: false
+    };
+    if (filterEntryType) lateQuery.entryType = filterEntryType;
+    if (fromDate || toDate) {
+      lateQuery.date = {};
+      if (fromDate) lateQuery.date.$gte = fromDate;
+      if (toDate) lateQuery.date.$lte = toDate;
+    }
+
+    const entries = await LateEntryLog.find(lateQuery).sort({ personId: 1, date: -1 }).lean();
+
+    // Map studentId → admissionNo
+    const studentIdToAdmNo = new Map(students.map((s) => [s.studentId, s.admissionNo]));
+
+    // Group by admissionNo
+    const entriesByStudent = new Map();
+    for (const e of entries) {
+      const admNo = studentIdToAdmNo.get(safeTrim(e.personId));
+      if (!admNo) continue;
+      if (!entriesByStudent.has(admNo)) entriesByStudent.set(admNo, []);
+      entriesByStudent.get(admNo).push(e);
+    }
+
+    // Build summary and detail
+    const summaryData = [];
+    const detailData = [];
+
+    for (const admNo of admissionNos) {
+      const student = studentMap.get(admNo);
+      const studentEntries = entriesByStudent.get(admNo) || [];
+      const lateCount = studentEntries.filter((e) => e.entryType === 'LATE').length;
+      const earlyCount = studentEntries.filter((e) => e.entryType === 'EARLY_LEAVE').length;
+      const totalDelay = studentEntries.reduce((s, e) => s + (e.delayMinutes || 0), 0);
+
+      summaryData.push({
+        admissionNo: admNo,
+        studentName: student?.student?.name || null,
+        batchCode: student?.batchCode || null,
+        totalEntries: studentEntries.length,
+        lateCount,
+        earlyCount,
+        totalDelayMinutes: totalDelay
+      });
+
+      for (const e of studentEntries) {
+        detailData.push({
+          admissionNo: admNo,
+          studentName: student?.student?.name || null,
+          batchCode: student?.batchCode || null,
+          entryType: e.entryType || null,
+          dateFormatted: formatDate(e.date),
+          periodNo: e.periodNo || null,
+          delayMinutes: e.delayMinutes || null,
+          reason: e.reason || null
+        });
+      }
+    }
+
+    const summary = {
+      totalStudents: summaryData.length,
+      totalEntries: entries.length,
+      totalLate: entries.filter((e) => e.entryType === 'LATE').length,
+      totalEarlyLeave: entries.filter((e) => e.entryType === 'EARLY_LEAVE').length
+    };
+
+    return res.status(200).json({
+      status: true,
+      summary,
+      count: summaryData.length,
+      data: summaryData,
+      detail: detailData
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   getStudentAttendanceReport,
   getStudentRemarksReport,
-  getStudentLateEntryReport
+  getStudentLateEntryReport,
+  getStudentAttendanceBulkReport,
+  getStudentRemarksBulkReport,
+  getStudentLateEntriesBulkReport
 };

@@ -43,17 +43,47 @@ const validateTimeRange = (t) => {
   return { ok: true, startMin, endMin };
 };
 const isPublished = (tt) => tt?.status === 'Active';
+
+// const resolvePhaseForPeriod = async (tenantId, batchCode, phaseId, phaseName) => {
+//   if (!phaseId && !phaseName) return { ok: true, phaseId: null, phaseName: null };
+//   const batch = await Batch.findOne({ tenantId, batchCode, isdeleted: false }).lean();
+//   if (!batch) return { ok: false, msg: `Batch ${batchCode} not found` };
+//   const programId = safeTrim(batch.programId || batch.program || batch.programCode);
+//   if (!programId) return { ok: false, msg: `Batch ${batchCode} has no programId` };
+//   const query = { tenantId, programId, isdeleted: false };
+//   if (phaseId) query.phaseId = phaseId;
+//   else if (phaseName) query.phaseName = new RegExp(`^${escapeRegex(phaseName)}$`, 'i');
+//   const phase = await Phase.findOne(query).lean();
+//   if (!phase) return { ok: false, msg: `Phase "${phaseId || phaseName}" not found for program ${programId}` };
+//   return { ok: true, phaseId: phase.phaseId, phaseName: phase.phaseName };
+// };
+
 const resolvePhaseForPeriod = async (tenantId, batchCode, phaseId, phaseName) => {
   if (!phaseId && !phaseName) return { ok: true, phaseId: null, phaseName: null };
   const batch = await Batch.findOne({ tenantId, batchCode, isdeleted: false }).lean();
   if (!batch) return { ok: false, msg: `Batch ${batchCode} not found` };
   const programId = safeTrim(batch.programId || batch.program || batch.programCode);
+  console.log('resolvePhase input:', { phaseId, phaseName, programId, tenantId });
   if (!programId) return { ok: false, msg: `Batch ${batchCode} has no programId` };
-  const query = { tenantId, programId, isdeleted: false };
-  if (phaseId) query.phaseId = phaseId;
-  else if (phaseName) query.phaseName = new RegExp(`^${escapeRegex(phaseName)}$`, 'i');
-  const phase = await Phase.findOne(query).lean();
-  if (!phase) return { ok: false, msg: `Phase "${phaseId || phaseName}" not found for program ${programId}` };
+  const baseQuery = { tenantId, programId, isdeleted: false };
+  let phase = null;
+  if (phaseId) {
+    phase = await Phase.findOne({ ...baseQuery, phaseId }).lean();
+    console.log('resolvePhase by phaseId result:', phase?.phaseId, phase?.phaseName);
+  }
+  if (!phase && phaseName) {
+    phase = await Phase.findOne({
+      ...baseQuery,
+      phaseName: new RegExp(`^${escapeRegex(phaseName)}$`, 'i')
+    }).lean();
+    console.log('resolvePhase by phaseName result:', phase?.phaseId, phase?.phaseName);
+  }
+  console.log('resolvePhase final:', phase ? 'FOUND' : 'NOT FOUND');
+  if (!phase)
+    return {
+      ok: false,
+      msg: `Phase "${phaseId || phaseName}" not found for program ${programId}`
+    };
   return { ok: true, phaseId: phase.phaseId, phaseName: phase.phaseName };
 };
 
@@ -226,7 +256,7 @@ const checkStaffConflicts = async (tenantId, facultyId, date, day, startMin, end
   return { conflict: false, facultyName: staff?.staffName || staff?.name || null };
 };
 
-const validateStaffSubject = async (tenantId, batchCode, facultyId, subjectId, periodType) => {
+const validateStaffSubject = async (tenantId, batchCode, facultyId, subjectId, periodType, skipBatchMap = false) => {
   const pt = safeTrim(periodType).toUpperCase();
   if (['PT', 'YOGA', 'EXAM'].includes(pt)) return { ok: true };
   if (!subjectId || !facultyId) return { ok: true };
@@ -240,22 +270,23 @@ const validateStaffSubject = async (tenantId, batchCode, facultyId, subjectId, p
     return { ok: false, msg: `${staff.staffName} is not a TEACHING staff` };
   }
   const subjectLabel = subjectDoc ? `"${subjectDoc.subjectName}${subjectDoc.subjectCode ? ' (' + subjectDoc.subjectCode + ')' : ''}"` : `ID: ${subjectId}`;
-
-  const staffMap = Array.isArray(batch?.staffMap) ? batch.staffMap : [];
-  const hasBatchMap = staffMap.length > 0;
-  if (hasBatchMap) {
-    const batchEntry = staffMap.find((s) => safeTrim(s.subjectId) === subjectId);
-    if (!batchEntry) {
-      return {
-        ok: false,
-        msg: `Subject ${subjectLabel} is not mapped to batch ${batchCode}. Add it via batch staff mapping first.`
-      };
-    }
-    if (safeTrim(batchEntry.staffId) !== facultyId) {
-      return {
-        ok: false,
-        msg: `${staff.staffName} is not assigned to ${subjectLabel} in batch ${batchCode}. Mapped staff is ${batchEntry.staffName || batchEntry.staffId}.`
-      };
+  if (!skipBatchMap) {
+    const staffMap = Array.isArray(batch?.staffMap) ? batch.staffMap : [];
+    const hasBatchMap = staffMap.length > 0;
+    if (hasBatchMap) {
+      const batchEntry = staffMap.find((s) => safeTrim(s.subjectId) === subjectId);
+      if (!batchEntry) {
+        return {
+          ok: false,
+          msg: `Subject ${subjectLabel} is not mapped to batch ${batchCode}. Add it via batch staff mapping first.`
+        };
+      }
+      if (safeTrim(batchEntry.staffId) !== facultyId) {
+        return {
+          ok: false,
+          msg: `${staff.staffName} is not assigned to ${subjectLabel} in batch ${batchCode}. Mapped staff is ${batchEntry.staffName || batchEntry.staffId}.`
+        };
+      }
     }
   }
   const rawSubject = staff.subject;
@@ -487,7 +518,7 @@ const editWholeDay = async (req, res, next) => {
         np.period.phaseId = pv.phaseId;
         np.period.phaseName = pv.phaseName;
       }
-      const ssCheck = await validateStaffSubject(tenantId, batchCode, np.period.facultyId, np.period.subjectId, np.period.periodType);
+      const ssCheck = await validateStaffSubject(tenantId, batchCode, np.period.facultyId, np.period.subjectId, np.period.periodType, true);
       if (!ssCheck.ok) {
         return res.status(400).json({
           status: false,
@@ -1725,6 +1756,39 @@ const cloneWeek = async (req, res, next) => {
   }
 };
 
+const uncancelDay = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const timetableId = safeTrim(req.body?.timetableId);
+    const date = toInt(req.body?.date, 0);
+    const userId = safeTrim(req.body?.userId);
+    if (!tenantId || !timetableId || !date) return res.status(400).json({ status: false, message: 'tenantId, timetableId and date required' });
+    const tt = await TimeTable.findOne({ _id: timetableId, tenantId, isdeleted: false });
+    if (!tt) return res.status(404).json({ status: false, message: 'Timetable not found' });
+    const d = new Date(date);
+    const day = DAYS[d.getUTCDay() === 0 ? 6 : d.getUTCDay() - 1];
+    const beforeCount = tt.dayOverrides.length;
+    tt.dayOverrides = tt.dayOverrides.filter((o) => !(toInt(o?.date) === date && normDay(o?.day) === day && safeTrim(o?.action) === 'CANCEL_DAY'));
+    tt.markModified('dayOverrides');
+    if (!isPublished(tt)) {
+      const dayIdx = (tt.week || []).findIndex((wd) => wd.day === day);
+      if (dayIdx >= 0) {
+        tt.week[dayIdx].periods = tt.week[dayIdx].periods.map((p) => ({
+          ...(p.toObject?.() ?? p),
+          isCancelled: false,
+          cancelReason: null
+        }));
+        tt.markModified('week');
+      }
+    }
+    tt.updatedBy = userId || null;
+    await tt.save();
+    return res.json({ status: true, message: 'Holiday removed' });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   createTimeTable,
   publishTimeTable,
@@ -1750,5 +1814,6 @@ export default {
   viewTimeTable,
   listTimeTablesByBatch,
   subjectHoursReport,
-  cloneWeek
+  cloneWeek,
+  uncancelDay
 };
