@@ -11,6 +11,7 @@ import Subject from '../models/subject.model.js';
 import Staff from '../models/staff.model.js';
 import StaffPerformance from '../models/staffperformance.model.js';
 import constants from '../helpers/constants.js';
+import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
 
 const pickTenantId = (req) => String(req?.body?.tenantId || req?.body?.entiId || '').trim();
 

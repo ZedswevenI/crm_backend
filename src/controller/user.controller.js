@@ -1,29 +1,19 @@
-// ── user.controller.js ────────────────────────────────────────────────────────
-// FIX summary:
-//   1. ROLE_MAP updated L1-L7 (was L1-L5)
-//   2. Loginuser now sets lastLoginAt
-//   3. deleteUser guards against L1 deletion + revokes refresh tokens
-//   4. changePassword revokes all refresh tokens after password change
-//   5. importUsers validates roleLevel strictly (no silent L4 fallback)
-//   6. updateUser blocks empCode changes (empCode is immutable after create)
-// ─────────────────────────────────────────────────────────────────────────────
-
 import constants from '../helpers/constants.js';
 import logger from '../helpers/logger.js';
 import { v4 as uuid } from 'uuid';
 import bcrypt from 'bcrypt';
 import dotenv from 'dotenv';
 import { signAccessToken, signRefreshToken, hashToken, verifyRefreshToken } from '../helpers/auth.helper.js';
-import User, { ROLE_MAP } from '../models/users.model.js'; // import shared ROLE_MAP
+import User, { ROLE_MAP } from '../models/users.model.js';
 import Center from '../models/center.model.js';
 import Token from '../models/auth.model.js';
 import Staff from '../models/staff.model.js';
+import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
 
 dotenv.config();
 
 const Rounds = 12;
 const VALID_ROLES = Object.keys(ROLE_MAP); // ['L1','L2','L3','L4','L5','L6','L7']
-
 const pickTenantId = (req) => (req.body?.entiId || req.body?.tenantId || '').toString().trim();
 const safeLower = (v) => (v == null ? '' : String(v)).trim().toLowerCase();
 const safeTrim = (v) => (v == null ? '' : String(v)).trim();

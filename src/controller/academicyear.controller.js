@@ -1,5 +1,6 @@
 import constants from '../helpers/constants.js';
 import AcademicYear from '../models/academicYear.model.js';
+import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
 
 const pickTenantId = (req) => String(req?.body?.tenantId || req?.body?.entiId || '').trim();
 const safeTrim = (v) => (v === undefined || v === null ? '' : String(v).trim());

@@ -10,6 +10,7 @@ import MockExam from '../models/mockExam.model.js';
 import PTM from '../models/ptm.model.js';
 import Subject from '../models/subject.model.js';
 import mongoose from 'mongoose';
+import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const pickTid = (req) => String(req?.body?.entiId || req?.body?.tenantId || '').trim();
