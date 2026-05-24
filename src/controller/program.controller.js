@@ -8,6 +8,7 @@ import PTM from '../models/ptm.model.js';
 import StudentProfile from '../models/studentProfile.model.js';
 import Batch from '../models/batch.model.js';
 import { PRE_PTM_QUESTIONS, POST_PTM_QUESTIONS, getPrePtmQuestions, getPostPtmQuestions, expandQuestionsForBatch } from '../helpers/ptmFbQns.constants.js';
+import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
 
 const pickTenantId = (req) => (req.body?.entiId || req.body?.tenantId || '').toString().trim();
 const safeTrim = (v) => (v === null || v === undefined ? '' : String(v)).trim();

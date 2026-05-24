@@ -18,6 +18,7 @@ import Subject from '../models/subject.model.js';
 import Department from '../models/department.model.js';
 import BankAccount from '../models/insbankAccount.model.js';
 import CenterVenue from '../models/centerVenue.model.js';
+import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
 
 dotenv.config();
 const Rounds = 12;

@@ -6,6 +6,7 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import s3Client from '../middlewares/s3config.js';
 import ExamInstruction from '../models/mockExamInstruction.model.js';
 import ExamPassage from '../models/passage.model.js';
+import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
 
 const safeTrim = (v) => (v == null ? '' : String(v)).trim();
 const pickTid = (req) => safeTrim(req.body?.entiId || req.body?.tenantId);

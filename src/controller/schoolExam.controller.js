@@ -1,6 +1,7 @@
 import SchoolExamLog from '../models/schoolexam.model.js';
 import StudentProfile from '../models/studentProfile.model.js';
 import { syncOnSchoolExamUpload } from '../helpers/performanceSync.helper.js';
+import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
 
 const safeTrim = (v) => (v == null ? '' : String(v)).trim();
 const toNum = (v) => {

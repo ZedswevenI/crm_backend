@@ -4,6 +4,7 @@ import Attendance from '../models/attandence.model.js';
 import TimeTable from '../models/timetable.model.js';
 import StudentProfile from '../models/studentProfile.model.js';
 import LateEntryLog from '../models/lateEntrylog.model.js';
+import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
 
 const pickTenantId = (req) => String(req?.body?.tenantId || req?.body?.entiId || '').trim();
 

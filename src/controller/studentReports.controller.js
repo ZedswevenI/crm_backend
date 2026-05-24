@@ -3,6 +3,7 @@ import SchoolAttendance from '../models/schoolAttendance.model.js';
 import LateEntryLog from '../models/lateEntrylog.model.js';
 import StudentRemark from '../models/studentremark.model.js';
 import StudentProfile from '../models/studentProfile.model.js';
+import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
 
 const pickTid = (req) => String(req?.body?.entiId || req?.body?.tenantId || '').trim();
 const safeTrim = (v) => (v === undefined || v === null ? '' : String(v).trim());

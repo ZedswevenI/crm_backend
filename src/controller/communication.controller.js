@@ -7,6 +7,7 @@ import { buildTemplateDataFromStudent, renderTemplate } from '../services/templa
 import { processCommunicationCampaign } from '../services/communicationProcessor.service.js';
 import CommunicationEventConfig from '../models/communicationeventconfig.model.js';
 import { uploadPublicEmailImageToS3 } from '../middlewares/s3.service.js';
+import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
 
 const pickTenantId = (req) => String(req.body?.entiId || req.body?.tenantId || '').trim();
 const safeTrim = (v) => (v === null || v === undefined ? '' : String(v).trim());
