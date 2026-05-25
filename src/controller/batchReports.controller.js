@@ -11,6 +11,7 @@ import MockExamBatchAssign from '../models/mockExambatchmapping.model.js';
 import MockExam from '../models/mockExam.model.js';
 import Assignment from '../models/assignment.model.js';
 import PTM from '../models/ptm.model.js';
+import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const pickTid = (req) => String(req?.body?.entiId || req?.body?.tenantId || '').trim();

@@ -3,6 +3,7 @@ import constants from '../helpers/constants.js';
 import MockExamBatchAssign from '../models/mockExambatchmapping.model.js';
 import StudentProfile from '../models/studentProfile.model.js';
 import MockExam from '../models/mockExam.model.js';
+import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
 
 const safeTrim = (v) => (v == null ? '' : String(v)).trim();
 const toNum = (v) => {

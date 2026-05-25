@@ -7,6 +7,7 @@ import SubTopic from '../models/subtopic.model.js';
 import ExamCategory from '../models/examcategory.model.js';
 import ExamSubCategory from '../models/examsubcategory.model.js';
 import SchoolExam from '../models/schoolexam.model.js';
+import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
 
 const pickTenantId = (req) => String(req?.body?.tenantId || req?.body?.entiId || '').trim();
 

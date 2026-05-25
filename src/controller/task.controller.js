@@ -2,6 +2,7 @@ import { v4 as uuid } from 'uuid';
 import constants from '../helpers/constants.js';
 import Task from '../models/task.model.js';
 import { uploadFileToS3 } from '../middlewares/s3.service.js';
+import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
 
 const pickTenantId = (req) => String(req?.body?.tenantId || req?.body?.entiId || req?.query?.entiId || '').trim();
 const safeTrim = (v) => (v === undefined || v === null ? '' : String(v).trim());

@@ -9,6 +9,7 @@ import StudentPerformance from '../models/studentperformance.model.js';
 import TimeTable from '../models/timetable.model.js';
 import Attendance from '../models/attandence.model.js';
 import Task from '../models/task.model.js';
+import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
 
 const DAYS = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
 
