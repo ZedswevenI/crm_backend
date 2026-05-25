@@ -8,6 +8,7 @@ import ExamInstruction from '../models/mockExamInstruction.model.js';
 import MockExamBatchAssign from '../models/mockExambatchmapping.model.js';
 import { syncOnMockPublish } from '../helpers/performanceSync.helper.js';
 import StudentProfile from '../models/studentProfile.model.js';
+import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const safeTrim = (v) => (v == null ? '' : String(v)).trim();

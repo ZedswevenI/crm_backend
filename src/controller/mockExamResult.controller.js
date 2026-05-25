@@ -4,6 +4,7 @@ import MockExamQns from '../models/mockExamQns.model.js';
 import MockExam from '../models/mockExam.model.js';
 import MockExamBatchAssign from '../models/mockExambatchmapping.model.js';
 import StudentProfile from '../models/studentProfile.model.js';
+import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
 
 const safeTrim = (v) => (v == null ? '' : String(v)).trim();
 const toNum = (v) => {

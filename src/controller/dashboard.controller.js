@@ -13,6 +13,7 @@ import Staff_model from '../models/staff.model.js';
 import MockExamQns from '../models/mockExamQns.model.js';
 import Attendance from '../models/attandence.model.js';
 import SchoolExamLog from '../models/schoolexam.model.js';
+import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const pickTenantId = (req) => String(req?.body?.tenantId || req?.body?.entiId || '').trim();

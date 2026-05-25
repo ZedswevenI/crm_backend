@@ -14,6 +14,7 @@ import ExamCategory from '../models/examcategory.model.js';
 import ExamSubCategory from '../models/examsubcategory.model.js';
 import Topic from '../models/topic.model.js';
 import SubTopic from '../models/subtopic.model.js';
+import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
 
 const { ObjectId } = mongoose.Types;
 const QUESTION_BUCKET = process.env.AWS_S3_QUESTION_BUCKET;

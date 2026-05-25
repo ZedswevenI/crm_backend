@@ -5,6 +5,7 @@ import StudentProfile from '../models/studentProfile.model.js';
 import Program from '../models/program.model.js';
 import Batch from '../models/batch.model.js';
 import { uploadFileToS3 } from '../middlewares/s3.service.js';
+import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
 
 const pickTenantId = (req) => String(req?.body?.tenantId || req?.body?.entiId || req?.query?.entiId || '').trim();
 const safeTrim = (v) => (v === undefined || v === null ? '' : String(v).trim());

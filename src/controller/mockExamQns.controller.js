@@ -10,6 +10,7 @@ import MockExam from '../models/mockExam.model.js';
 import ExamPassage from '../models/passage.model.js';
 import Counter from '../models/counter.model.js';
 import Subject from '../models/subject.model.js';
+import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
 
 const safeTrim = (v) => (v == null ? '' : String(v)).trim();
 const toNum = (v, def = 0) => {

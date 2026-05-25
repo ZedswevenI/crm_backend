@@ -3,6 +3,7 @@ import StudentBookmark from '../models/studentBookmark.model.js';
 import QuestionReport from '../models/questionReport.model.js';
 import MockExamQns from '../models/mockExamQns.model.js';
 import AssignmentQns from '../models/assingmentQns.model.js';
+import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
 
 const safeTrim = (v) => (v == null ? '' : String(v)).trim();
 const pickTid = (req) => safeTrim(req.body?.entiId || req.body?.tenantId);

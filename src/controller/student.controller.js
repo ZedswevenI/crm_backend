@@ -29,6 +29,7 @@ import StudentRemark from '../models/studentremark.model.js';
 import LateEntryLog from '../models/lateEntrylog.model.js';
 import FeedbackForm from '../models/feedbackForm.model.js';
 import FeedbackResponse from '../models/feedbackResponse.model.js';
+import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
 
 const QUESTION_BUCKET = process.env.AWS_S3_QUESTION_BUCKET;
 const REGION = process.env.AWS_REGION || 'ap-south-1';
