@@ -101,24 +101,10 @@ const MockExamSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// ─── Indexes ──────────────────────────────────────────────────────────────────
-
 MockExamSchema.index({ tenantId: 1, examCode: 1 }, { unique: true, partialFilterExpression: { isdeleted: false }, name: 'uniq_mockexam_code' });
 MockExamSchema.index({ tenantId: 1, examId: 1 }, { unique: true, partialFilterExpression: { isdeleted: false }, name: 'uniq_mockexam_id' });
 MockExamSchema.index({ tenantId: 1, isdeleted: 1, status: 1, startTime: 1 }, { name: 'mockexam_filter_idx' });
 MockExamSchema.index({ tenantId: 1, isdeleted: 1, testType: 1, classNo: 1 }, { name: 'mockexam_type_class_idx' });
-
-MockExamSchema.pre('validate', function (next) {
-  try {
-    const secs = Array.isArray(this.sections) ? this.sections : [];
-    if (secs.length && (!this.totalQuestions || this.totalQuestions === 0)) {
-      this.totalQuestions = secs.reduce((s, sec) => s + (Number(sec.numberOfQuestions) || 0), 0);
-    }
-    return next();
-  } catch (e) {
-    return next(e);
-  }
-});
 
 const MockExam = mongoose.model('mockexam', MockExamSchema);
 export default MockExam;

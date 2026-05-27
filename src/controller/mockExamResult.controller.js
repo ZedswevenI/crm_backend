@@ -6,6 +6,13 @@ import MockExamBatchAssign from '../models/mockExambatchmapping.model.js';
 import StudentProfile from '../models/studentProfile.model.js';
 import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
 
+const sumFromSections = (result, field) => {
+  const secs = result.sectionResults || [];
+  const hasAny = secs.some((s) => s[field] !== null && s[field] !== undefined);
+  if (!hasAny) return null;
+  return secs.reduce((sum, s) => sum + (toNum(s[field]) || 0), 0);
+};
+
 const safeTrim = (v) => (v == null ? '' : String(v)).trim();
 const toNum = (v) => {
   const n = Number(
@@ -43,7 +50,17 @@ const populateStudentNames = async (tenantId, rows) => {
 
 const pickTid = (req) => safeTrim(req.body?.entiId || req.body?.tenantId);
 const round2 = (n) => Math.round(Number(n) * 100) / 100;
-const normArr = (v) => (Array.isArray(v) ? v.map((x) => safeTrim(x)).filter(Boolean) : []);
+// const normArr = (v) => (Array.isArray(v) ? v.map((x) => safeTrim(x)).filter(Boolean) : []);
+const normArr = (v) => {
+  if (!v) return [];
+  if (Array.isArray(v)) return v.map((x) => safeTrim(x)).filter(Boolean);
+  if (typeof v === 'string')
+    return v
+      .split(';')
+      .map((x) => safeTrim(x))
+      .filter(Boolean);
+  return [];
+};
 const sameSet = (a, b) => {
   const A = new Set(normArr(a));
   const B = new Set(normArr(b));
@@ -52,48 +69,138 @@ const sameSet = (a, b) => {
   return true;
 };
 
+// const buildCorrectAnswer = (q) => {
+//   const qt = safeTrim(q?.questionType).toLowerCase();
+//   const opts = Array.isArray(q?.questionOptions) ? q.questionOptions : [];
+//   if (qt === 'mcq_single') {
+//     const one = opts.find((o) => o?.isCorrect === true);
+//     return safeTrim(one?.key || one?.textHtml || '').toUpperCase();
+//   }
+//   if (qt === 'mcq_multi')
+//     return opts
+//       .filter((o) => o?.isCorrect)
+//       .map((o) => safeTrim(o?.key || o?.textHtml || '').toUpperCase())
+//       .filter(Boolean);
+//   return null;
+// };
+
 const buildCorrectAnswer = (q) => {
   const qt = safeTrim(q?.questionType).toLowerCase();
   const opts = Array.isArray(q?.questionOptions) ? q.questionOptions : [];
-  if (qt === 'mcq_single') {
+  if (qt === 'mcq_single' || qt === 'true_false') {
     const one = opts.find((o) => o?.isCorrect === true);
-    return safeTrim(one?.key || one?.textHtml || '').toUpperCase();
+    return one ? safeTrim(one?.key || one?.textHtml || '').toUpperCase() : safeTrim(String(q?.correctAnswer || '')).toUpperCase() || null;
   }
-  if (qt === 'mcq_multi')
-    return opts
+  if (qt === 'mcq_multi') {
+    const fromOpts = opts
       .filter((o) => o?.isCorrect)
       .map((o) => safeTrim(o?.key || o?.textHtml || '').toUpperCase())
       .filter(Boolean);
-  return null;
+    return fromOpts.length ? fromOpts : normArr(q?.correctAnswer).map((x) => x.toUpperCase());
+  }
+  if (qt === 'passage_qns') {
+    const correctOpts = opts.filter((o) => o?.isCorrect === true);
+    if (correctOpts.length === 1) {
+      return safeTrim(correctOpts[0]?.key || correctOpts[0]?.textHtml || '').toUpperCase();
+    }
+    if (correctOpts.length > 1) {
+      return correctOpts.map((o) => safeTrim(o?.key || o?.textHtml || '').toUpperCase()).filter(Boolean);
+    }
+    return null;
+  }
+  return q?.correctAnswer ?? null;
 };
 
+// const parseMatrixAnswer = (str) => {
+//   const map = new Map();
+//   if (!str) return map;
+//   const pairs = String(str).split(';');
+//   for (const pair of pairs) {
+//     const [key, val] = pair.split(':').map((s) => safeTrim(s));
+//     if (key && val) map.set(key.toUpperCase(), val.toUpperCase());
+//   }
+//   return map;
+// };
+
 const parseMatrixAnswer = (str) => {
+  // Returns Map { leftKey → string[] } — array of right keys student selected
+  // Handles:
+  //   "A:P;B:QR"  — A matched to P, B matched to Q and R
+  //   "A:P;B:Q"   — single match per left key
   const map = new Map();
   if (!str) return map;
-  const pairs = String(str).split(';');
-  for (const pair of pairs) {
-    const [key, val] = pair.split(':').map((s) => safeTrim(s));
-    if (key && val) map.set(key.toUpperCase(), val.toUpperCase());
-  }
+
+  String(str)
+    .split(';')
+    .forEach((pair) => {
+      const [rawKey, rawVal] = pair.split(':').map((s) => safeTrim(s));
+      if (rawKey && rawVal) {
+        const lKey = rawKey.toUpperCase();
+        // Each char of rawVal is a right key e.g. "PQ" → ["P","Q"]
+        const rKeys = rawVal.toUpperCase().split('').filter(Boolean);
+        map.set(lKey, rKeys);
+      }
+    });
+
   return map;
 };
 
+// const parseMatrixCorrect = (str) => {
+//   const map = new Map();
+//   if (!str) return map;
+//   const pairs = String(str).split(';');
+//   for (const pair of pairs) {
+//     const match = pair.match(/^([^:]+):([^(]+)\(([^)]+)\)$/);
+//     if (match) {
+//       const key = safeTrim(match[1]).toUpperCase();
+//       const value = safeTrim(match[2]).toUpperCase();
+//       const marks = toNum(match[3]);
+//       map.set(key, { value, marks });
+//     } else {
+//       const [key, val] = pair.split(':').map((s) => safeTrim(s));
+//       if (key && val) map.set(key.toUpperCase(), { value: val.toUpperCase(), marks: 0 });
+//     }
+//   }
+//   return map;
+// };
+
 const parseMatrixCorrect = (str) => {
+  // Returns Map { leftKey → [{ value, marks }, ...] }
+  // Handles both:
+  //   "A:P(2);A:Q(2);B:R(2)"  — one pair per entry (new format)
+  //   "A:PQ;B:R"               — concatenated right keys (old format)
   const map = new Map();
   if (!str) return map;
-  const pairs = String(str).split(';');
-  for (const pair of pairs) {
-    const match = pair.match(/^([^:]+):([^(]+)\(([^)]+)\)$/);
-    if (match) {
-      const key = safeTrim(match[1]).toUpperCase();
-      const value = safeTrim(match[2]).toUpperCase();
-      const marks = toNum(match[3]);
-      map.set(key, { value, marks });
-    } else {
-      const [key, val] = pair.split(':').map((s) => safeTrim(s));
-      if (key && val) map.set(key.toUpperCase(), { value: val.toUpperCase(), marks: 0 });
-    }
-  }
+
+  String(str)
+    .split(';')
+    .forEach((pair) => {
+      // Try new format: A:P(2)
+      const matchWithMarks = pair.match(/^([^:]+):([^(]+)\(([^)]+)\)$/);
+      if (matchWithMarks) {
+        const lKey = safeTrim(matchWithMarks[1]).toUpperCase();
+        const rKeys = safeTrim(matchWithMarks[2]).toUpperCase(); // could be "P" or "PQ"
+        const marks = toNum(matchWithMarks[3]);
+        if (!map.has(lKey)) map.set(lKey, []);
+        // Split concatenated right keys e.g. "PQ" → ["P","Q"]
+        for (const rKey of rKeys.split('').filter(Boolean)) {
+          map.get(lKey).push({ value: rKey, marks });
+        }
+        return;
+      }
+
+      // Fallback: A:PQ or A:P
+      const [rawKey, rawVal] = pair.split(':').map((s) => safeTrim(s));
+      if (rawKey && rawVal) {
+        const lKey = rawKey.toUpperCase();
+        if (!map.has(lKey)) map.set(lKey, []);
+        // Each char of rawVal is a separate right key
+        for (const rKey of rawVal.toUpperCase().split('').filter(Boolean)) {
+          map.get(lKey).push({ value: rKey, marks: 0 });
+        }
+      }
+    });
+
   return map;
 };
 
@@ -107,292 +214,545 @@ const parseRange = (str) => {
   return { min, max };
 };
 
+// const evalAnswer = (q, answerRaw) => {
+//   const qt = safeTrim(q?.questionType).toLowerCase();
+//   const correct = buildCorrectAnswer(q);
+//   const pos = toNum(q?.positiveMarks);
+//   const neg = toNum(q?.negativeMarks);
+//   if (answerRaw === null || answerRaw === undefined) {
+//     return { isCorrect: null, correctAnswerRaw: correct || q?.correctAnswer || null, marksAwarded: 0 };
+//   }
+//   if (qt === 'mcq_single') {
+//     const a = safeTrim(answerRaw).toUpperCase();
+//     if (!a) return { isCorrect: null, correctAnswerRaw: correct, marksAwarded: 0 };
+//     const ok = a === safeTrim(correct).toUpperCase();
+//     let marks = ok ? pos : neg ? -Math.abs(neg) : 0;
+//     if (!ok && q?.hasPartialMarking) {
+//       const opt = (q.questionOptions || []).find((o) => safeTrim(o?.key) === a || safeTrim(o?.textHtml) === a);
+//       if (opt && toNum(opt.partialMark) > 0) marks = toNum(opt.partialMark);
+//     }
+//     return { isCorrect: ok, correctAnswerRaw: correct, marksAwarded: marks };
+//   }
+//   if (qt === 'true_false') {
+//     const normalize = (val) => {
+//       if (val === true) return 'true';
+
+//       if (val === false) return 'false';
+
+//       const v = String(val ?? '')
+//         .trim()
+//         .toLowerCase();
+
+//       if (['true', 't', '1', 'yes', 'y'].includes(v)) return 'true';
+
+//       if (['false', 'f', '0', 'no', 'n'].includes(v)) return 'false';
+
+//       return null;
+//     };
+
+//     const answer = normalize(answerRaw);
+//     const correctAnswer = normalize(q?.correctAnswer);
+
+//     if (answer === null || correctAnswer === null) {
+//       return {
+//         isCorrect: null,
+//         correctAnswerRaw: q?.correctAnswer || null,
+//         marksAwarded: 0
+//       };
+//     }
+//     const ok = answer === correctAnswer;
+//     return {
+//       isCorrect: ok,
+//       correctAnswerRaw: q?.correctAnswer || null,
+//       marksAwarded: ok ? pos : neg ? -Math.abs(neg) : 0
+//     };
+//   }
+//   if (qt === 'mcq_multi') {
+//     const normArr = (val) => {
+//       if (!val) return [];
+
+//       if (typeof val === 'string') {
+//         return val
+//           .split(';')
+//           .map((v) => safeTrim(v).toUpperCase())
+//           .filter(Boolean);
+//       }
+
+//       if (Array.isArray(val)) {
+//         return val.map((v) => safeTrim(v).toUpperCase()).filter(Boolean);
+//       }
+//       return [];
+//     };
+
+//     const a = normArr(answerRaw); // user answer
+//     const c = normArr(correct);
+
+//     // 🛑 If no answer
+//     if (!a.length) {
+//       return {
+//         isCorrect: null,
+//         correctAnswerRaw: correct,
+//         marksAwarded: 0
+//       };
+//     }
+
+//     const sameSet = (arr1, arr2) => {
+//       if (arr1.length !== arr2.length) return false;
+//       const set1 = new Set(arr1);
+//       const set2 = new Set(arr2);
+//       if (set1.size !== set2.size) return false;
+//       for (const v of set1) {
+//         if (!set2.has(v)) return false;
+//       }
+//       return true;
+//     };
+//     const ok = sameSet(a, c);
+//     // ✅ FULL CORRECT
+//     if (ok) {
+//       console.log('Full correct match ✅');
+//       return {
+//         isCorrect: true,
+//         correctAnswerRaw: correct,
+//         marksAwarded: pos
+//       };
+//     }
+//     const optMap = new Map((q.questionOptions || []).map((o) => [safeTrim(o?.key || o?.textHtml).toUpperCase(), o]));
+
+//     let marks = 0;
+//     let hasCorrect = false;
+//     for (const key of a) {
+//       const opt = optMap.get(key);
+//       if (!opt) {
+//         continue;
+//       }
+//       if (opt.isCorrect) {
+//         hasCorrect = true;
+
+//         const mark = toNum(opt.partialMark || pos / c.length);
+//         marks += mark;
+//       } else {
+//         const penalty = Math.abs(neg || 0);
+//         marks -= penalty;
+//       }
+//     }
+
+//     // ❗ Prevent negative overflow
+//     marks = Math.max(0, marks);
+//     if (hasCorrect) {
+//       console.log('Partial correct ⚠️');
+//       return {
+//         isCorrect: null,
+//         correctAnswerRaw: correct,
+//         marksAwarded: marks
+//       };
+//     }
+//     return {
+//       isCorrect: false,
+//       correctAnswerRaw: correct,
+//       marksAwarded: neg ? -Math.abs(neg) : 0
+//     };
+//   }
+//   if (qt === 'passage_qns') {
+//     const correctOpts = (q.questionOptions || []).filter((o) => o?.isCorrect === true);
+//     if (correctOpts.length <= 1) {
+//       const a = safeTrim(answerRaw);
+//       if (!a) return { isCorrect: null, correctAnswerRaw: correct, marksAwarded: 0 };
+//       const ok = a === safeTrim(correct);
+//       let marks = ok ? pos : neg ? -Math.abs(neg) : 0;
+//       if (!ok && q?.hasPartialMarking) {
+//         const opt = (q.questionOptions || []).find((o) => safeTrim(o?.key) === a || safeTrim(o?.textHtml) === a);
+//         if (opt && toNum(opt.partialMark) > 0) marks = toNum(opt.partialMark);
+//       }
+//       return { isCorrect: ok, correctAnswerRaw: correct, marksAwarded: marks };
+//     } else {
+//       const a = normArr(answerRaw);
+//       const ok = sameSet(a, correct);
+//       if (ok) return { isCorrect: true, correctAnswerRaw: correct, marksAwarded: pos };
+//       if (q?.hasPartialMarking) {
+//         const opts = q.questionOptions || [];
+//         let partial = 0;
+//         for (const key of a) {
+//           const opt = opts.find((o) => safeTrim(o?.key) === key || safeTrim(o?.textHtml) === key);
+//           if (opt?.isCorrect && toNum(opt.partialMark) > 0) partial += toNum(opt.partialMark);
+//           else if (!opt?.isCorrect) {
+//             partial = 0;
+//             break;
+//           }
+//         }
+//         if (partial > 0) return { isCorrect: null, correctAnswerRaw: correct, marksAwarded: partial };
+//       }
+//       return { isCorrect: false, correctAnswerRaw: correct, marksAwarded: neg ? -Math.abs(neg) : 0 };
+//     }
+//   }
+//   if (qt === 'numeric') {
+//     const val = Number(String(answerRaw).trim());
+//     if (!Number.isFinite(val)) {
+//       return { isCorrect: false, correctAnswerRaw: q?.correctAnswer || null, marksAwarded: neg ? -Math.abs(neg) : 0 };
+//     }
+//     const mn = q?.numericMin != null ? toNum(q.numericMin) : null;
+//     const mx = q?.numericMax != null ? toNum(q.numericMax) : null;
+//     const ok = mn !== null && mx !== null ? val >= mn && val <= mx : safeTrim(String(answerRaw)) === safeTrim(String(q?.correctAnswer || ''));
+//     return {
+//       isCorrect: ok,
+//       correctAnswerRaw: q?.correctAnswer || null,
+//       marksAwarded: ok ? pos : neg ? -Math.abs(neg) : 0
+//     };
+//   }
+//   if (qt === 'integer') {
+//     const val = parseInt(String(answerRaw).trim(), 10);
+//     if (!Number.isFinite(val)) {
+//       return { isCorrect: false, correctAnswerRaw: q?.correctAnswer || null, marksAwarded: neg ? -Math.abs(neg) : 0 };
+//     }
+//     const correctVal = parseInt(String(q?.correctAnswer || '').trim(), 10);
+//     const ok = Number.isFinite(correctVal) && val === correctVal;
+//     return {
+//       isCorrect: ok,
+//       correctAnswerRaw: q?.correctAnswer || null,
+//       marksAwarded: ok ? pos : neg ? -Math.abs(neg) : 0
+//     };
+//   }
+//   if (qt === 'short_answer' || qt === 'subjective') {
+//     const studentAns = safeTrim(String(answerRaw)).toLowerCase();
+//     const correctAns = safeTrim(String(q?.correctAnswer || '')).toLowerCase();
+//     if (!studentAns) {
+//       return { isCorrect: null, correctAnswerRaw: q?.correctAnswer || null, marksAwarded: 0 };
+//     }
+//     const range = parseRange(correctAns);
+//     if (range) {
+//       const val = Number(studentAns);
+//       if (!Number.isFinite(val)) {
+//         return {
+//           isCorrect: false,
+//           correctAnswerRaw: q?.correctAnswer || null,
+//           marksAwarded: neg ? -Math.abs(neg) : 0
+//         };
+//       }
+//       const ok = val >= range.min && val <= range.max;
+//       return {
+//         isCorrect: ok,
+//         correctAnswerRaw: q?.correctAnswer || null,
+//         marksAwarded: ok ? pos : neg ? -Math.abs(neg) : 0
+//       };
+//     }
+//     const ok = studentAns === correctAns;
+//     return {
+//       isCorrect: ok,
+//       correctAnswerRaw: q?.correctAnswer || null,
+//       marksAwarded: ok ? pos : neg ? -Math.abs(neg) : 0
+//     };
+//   }
+//   if (qt === 'matrix') {
+//     const studentMap = parseMatrixAnswer(String(answerRaw || ''));
+//     const correctMap = parseMatrixCorrect(String(q?.correctAnswer || ''));
+//     if (!correctMap.size || !studentMap.size) {
+//       return {
+//         isCorrect: false,
+//         correctAnswerRaw: q?.correctAnswer || null,
+//         marksAwarded: neg ? -Math.abs(neg) : 0
+//       };
+//     }
+//     let correctPairs = 0;
+//     let totalPairs = correctMap.size;
+//     let partialMarks = 0;
+//     for (const [key, { value, marks }] of correctMap.entries()) {
+//       const studentVal = studentMap.get(key);
+//       if (studentVal === value) {
+//         correctPairs++;
+//         partialMarks += marks;
+//       }
+//     }
+//     if (correctPairs === totalPairs) {
+//       return {
+//         isCorrect: true,
+//         correctAnswerRaw: q?.correctAnswer || null,
+//         marksAwarded: pos
+//       };
+//     }
+//     if (correctPairs === 0) {
+//       return {
+//         isCorrect: false,
+//         correctAnswerRaw: q?.correctAnswer || null,
+//         marksAwarded: neg ? -Math.abs(neg) : 0
+//       };
+//     }
+//     if (q?.hasPartialMarking && partialMarks > 0) {
+//       return {
+//         isCorrect: null,
+//         correctAnswerRaw: q?.correctAnswer || null,
+//         marksAwarded: partialMarks
+//       };
+//     }
+//     return {
+//       isCorrect: false,
+//       correctAnswerRaw: q?.correctAnswer || null,
+//       marksAwarded: neg ? -Math.abs(neg) : 0
+//     };
+//   }
+//   return {
+//     isCorrect: null,
+//     correctAnswerRaw: q?.correctAnswer || null,
+//     marksAwarded: 0
+//   };
+// };
+
 const evalAnswer = (q, answerRaw) => {
   const qt = safeTrim(q?.questionType).toLowerCase();
   const correct = buildCorrectAnswer(q);
   const pos = toNum(q?.positiveMarks);
   const neg = toNum(q?.negativeMarks);
+
+  // No answer provided — skipped
   if (answerRaw === null || answerRaw === undefined) {
-    return { isCorrect: null, correctAnswerRaw: correct || q?.correctAnswer || null, marksAwarded: 0 };
+    return { isCorrect: null, correctAnswerRaw: correct ?? q?.correctAnswer ?? null, marksAwarded: 0 };
   }
+
+  // ── mcq_single ───────────────────────────────────────────────────────────
   if (qt === 'mcq_single') {
     const a = safeTrim(answerRaw).toUpperCase();
     if (!a) return { isCorrect: null, correctAnswerRaw: correct, marksAwarded: 0 };
     const ok = a === safeTrim(correct).toUpperCase();
     let marks = ok ? pos : neg ? -Math.abs(neg) : 0;
+    // partial marking not applicable for mcq_single but guard anyway
     if (!ok && q?.hasPartialMarking) {
-      const opt = (q.questionOptions || []).find((o) => safeTrim(o?.key) === a || safeTrim(o?.textHtml) === a);
+      const opt = (q.questionOptions || []).find((o) => safeTrim(o?.key).toUpperCase() === a || safeTrim(o?.textHtml).toUpperCase() === a);
       if (opt && toNum(opt.partialMark) > 0) marks = toNum(opt.partialMark);
     }
     return { isCorrect: ok, correctAnswerRaw: correct, marksAwarded: marks };
   }
+
+  // ── true_false ────────────────────────────────────────────────────────────
   if (qt === 'true_false') {
     const normalize = (val) => {
       if (val === true) return 'true';
-
       if (val === false) return 'false';
-
       const v = String(val ?? '')
         .trim()
         .toLowerCase();
-
       if (['true', 't', '1', 'yes', 'y'].includes(v)) return 'true';
-
       if (['false', 'f', '0', 'no', 'n'].includes(v)) return 'false';
-
       return null;
     };
-
     const answer = normalize(answerRaw);
-    const correctAnswer = normalize(q?.correctAnswer);
-
-    if (answer === null || correctAnswer === null) {
-      return {
-        isCorrect: null,
-        correctAnswerRaw: q?.correctAnswer || null,
-        marksAwarded: 0
-      };
+    const correctNorm = normalize(q?.correctAnswer);
+    if (answer === null || correctNorm === null) {
+      return { isCorrect: null, correctAnswerRaw: q?.correctAnswer ?? null, marksAwarded: 0 };
     }
-    const ok = answer === correctAnswer;
-    return {
-      isCorrect: ok,
-      correctAnswerRaw: q?.correctAnswer || null,
-      marksAwarded: ok ? pos : neg ? -Math.abs(neg) : 0
-    };
+    const ok = answer === correctNorm;
+    return { isCorrect: ok, correctAnswerRaw: q?.correctAnswer ?? null, marksAwarded: ok ? pos : neg ? -Math.abs(neg) : 0 };
   }
+
+  // ── mcq_multi ─────────────────────────────────────────────────────────────
+  // NTA pattern:
+  //   All correct selected           → +positiveMarks
+  //   Any wrong selected             → -negativeMarks (full penalty)
+  //   Subset correct, no wrong       → sum of partialMark per correct chosen
+  //   No answer                      → 0
   if (qt === 'mcq_multi') {
-    const normArr = (val) => {
-      if (!val) return [];
+    // normalize student answer — accept both string "A;B" and array ["A","B"]
+    const a = normArr(answerRaw).map((x) => x.toUpperCase());
+    if (!a.length) return { isCorrect: null, correctAnswerRaw: correct, marksAwarded: 0 };
 
-      if (typeof val === 'string') {
-        return val
-          .split(';')
-          .map((v) => safeTrim(v).toUpperCase())
-          .filter(Boolean);
-      }
+    const c = Array.isArray(correct) ? correct.map((x) => x.toUpperCase()) : [];
+    const opts = q.questionOptions || [];
 
-      if (Array.isArray(val)) {
-        return val.map((v) => safeTrim(v).toUpperCase()).filter(Boolean);
-      }
-      return [];
-    };
-
-    const a = normArr(answerRaw); // user answer
-    const c = normArr(correct);
-
-    // 🛑 If no answer
-    if (!a.length) {
-      return {
-        isCorrect: null,
-        correctAnswerRaw: correct,
-        marksAwarded: 0
-      };
-    }
-
-    const sameSet = (arr1, arr2) => {
-      if (arr1.length !== arr2.length) return false;
-      const set1 = new Set(arr1);
-      const set2 = new Set(arr2);
-      if (set1.size !== set2.size) return false;
-      for (const v of set1) {
-        if (!set2.has(v)) return false;
-      }
-      return true;
-    };
+    // Full correct check
     const ok = sameSet(a, c);
-    // ✅ FULL CORRECT
-    if (ok) {
-      console.log('Full correct match ✅');
-      return {
-        isCorrect: true,
-        correctAnswerRaw: correct,
-        marksAwarded: pos
-      };
-    }
-    const optMap = new Map((q.questionOptions || []).map((o) => [safeTrim(o?.key || o?.textHtml).toUpperCase(), o]));
+    if (ok) return { isCorrect: true, correctAnswerRaw: correct, marksAwarded: pos };
 
-    let marks = 0;
-    let hasCorrect = false;
-    for (const key of a) {
-      const opt = optMap.get(key);
-      if (!opt) {
-        continue;
+    // Check if any wrong option selected
+    const hasWrong = a.some((key) => {
+      const opt = opts.find((o) => safeTrim(o?.key).toUpperCase() === key);
+      return opt && !opt.isCorrect;
+    });
+
+    if (hasWrong) {
+      // NTA: full negative penalty for any wrong selection
+      return { isCorrect: false, correctAnswerRaw: correct, marksAwarded: neg ? -Math.abs(neg) : 0 };
+    }
+
+    // No wrong — subset of correct options selected
+    if (q?.hasPartialMarking) {
+      let partial = 0;
+      for (const key of a) {
+        const opt = opts.find((o) => safeTrim(o?.key).toUpperCase() === key);
+        if (opt?.isCorrect && toNum(opt.partialMark) > 0) partial += toNum(opt.partialMark);
       }
-      if (opt.isCorrect) {
-        hasCorrect = true;
-
-        const mark = toNum(opt.partialMark || pos / c.length);
-        marks += mark;
-      } else {
-        const penalty = Math.abs(neg || 0);
-        marks -= penalty;
-      }
+      if (partial > 0) return { isCorrect: null, correctAnswerRaw: correct, marksAwarded: partial };
     }
 
-    // ❗ Prevent negative overflow
-    marks = Math.max(0, marks);
-    if (hasCorrect) {
-      console.log('Partial correct ⚠️');
-      return {
-        isCorrect: null,
-        correctAnswerRaw: correct,
-        marksAwarded: marks
-      };
-    }
-    return {
-      isCorrect: false,
-      correctAnswerRaw: correct,
-      marksAwarded: neg ? -Math.abs(neg) : 0
-    };
+    // Subset correct but no partial marking configured
+    return { isCorrect: false, correctAnswerRaw: correct, marksAwarded: neg ? -Math.abs(neg) : 0 };
   }
+
+  // ── passage_qns ───────────────────────────────────────────────────────────
+  // Passage questions are MCQ under a passage
+  // Route to single or multi based on correct options count
   if (qt === 'passage_qns') {
     const correctOpts = (q.questionOptions || []).filter((o) => o?.isCorrect === true);
+
     if (correctOpts.length <= 1) {
-      const a = safeTrim(answerRaw);
+      // Treat as mcq_single
+      const a = safeTrim(answerRaw).toUpperCase();
       if (!a) return { isCorrect: null, correctAnswerRaw: correct, marksAwarded: 0 };
-      const ok = a === safeTrim(correct);
+      const ok = a === safeTrim(Array.isArray(correct) ? correct[0] : correct).toUpperCase();
       let marks = ok ? pos : neg ? -Math.abs(neg) : 0;
       if (!ok && q?.hasPartialMarking) {
-        const opt = (q.questionOptions || []).find((o) => safeTrim(o?.key) === a || safeTrim(o?.textHtml) === a);
+        const opt = (q.questionOptions || []).find((o) => safeTrim(o?.key).toUpperCase() === a || safeTrim(o?.textHtml).toUpperCase() === a);
         if (opt && toNum(opt.partialMark) > 0) marks = toNum(opt.partialMark);
       }
       return { isCorrect: ok, correctAnswerRaw: correct, marksAwarded: marks };
     } else {
-      const a = normArr(answerRaw);
-      const ok = sameSet(a, correct);
+      // Treat as mcq_multi — same NTA logic
+      const a = normArr(answerRaw).map((x) => x.toUpperCase());
+      if (!a.length) return { isCorrect: null, correctAnswerRaw: correct, marksAwarded: 0 };
+      const c = Array.isArray(correct) ? correct.map((x) => x.toUpperCase()) : [];
+      const opts = q.questionOptions || [];
+
+      const ok = sameSet(a, c);
       if (ok) return { isCorrect: true, correctAnswerRaw: correct, marksAwarded: pos };
+
+      const hasWrong = a.some((key) => {
+        const opt = opts.find((o) => safeTrim(o?.key).toUpperCase() === key);
+        return opt && !opt.isCorrect;
+      });
+
+      if (hasWrong) {
+        return { isCorrect: false, correctAnswerRaw: correct, marksAwarded: neg ? -Math.abs(neg) : 0 };
+      }
+
       if (q?.hasPartialMarking) {
-        const opts = q.questionOptions || [];
         let partial = 0;
         for (const key of a) {
-          const opt = opts.find((o) => safeTrim(o?.key) === key || safeTrim(o?.textHtml) === key);
+          const opt = opts.find((o) => safeTrim(o?.key).toUpperCase() === key);
           if (opt?.isCorrect && toNum(opt.partialMark) > 0) partial += toNum(opt.partialMark);
-          else if (!opt?.isCorrect) {
-            partial = 0;
-            break;
-          }
         }
         if (partial > 0) return { isCorrect: null, correctAnswerRaw: correct, marksAwarded: partial };
       }
+
       return { isCorrect: false, correctAnswerRaw: correct, marksAwarded: neg ? -Math.abs(neg) : 0 };
     }
   }
+
+  // ── numeric ───────────────────────────────────────────────────────────────
   if (qt === 'numeric') {
     const val = Number(String(answerRaw).trim());
     if (!Number.isFinite(val)) {
-      return { isCorrect: false, correctAnswerRaw: q?.correctAnswer || null, marksAwarded: neg ? -Math.abs(neg) : 0 };
+      return { isCorrect: false, correctAnswerRaw: q?.correctAnswer ?? null, marksAwarded: neg ? -Math.abs(neg) : 0 };
     }
     const mn = q?.numericMin != null ? toNum(q.numericMin) : null;
     const mx = q?.numericMax != null ? toNum(q.numericMax) : null;
     const ok = mn !== null && mx !== null ? val >= mn && val <= mx : safeTrim(String(answerRaw)) === safeTrim(String(q?.correctAnswer || ''));
     return {
       isCorrect: ok,
-      correctAnswerRaw: q?.correctAnswer || null,
+      correctAnswerRaw: q?.correctAnswer ?? null,
       marksAwarded: ok ? pos : neg ? -Math.abs(neg) : 0
     };
   }
+
+  // ── integer ───────────────────────────────────────────────────────────────
   if (qt === 'integer') {
     const val = parseInt(String(answerRaw).trim(), 10);
     if (!Number.isFinite(val)) {
-      return { isCorrect: false, correctAnswerRaw: q?.correctAnswer || null, marksAwarded: neg ? -Math.abs(neg) : 0 };
+      return { isCorrect: false, correctAnswerRaw: q?.correctAnswer ?? null, marksAwarded: neg ? -Math.abs(neg) : 0 };
     }
     const correctVal = parseInt(String(q?.correctAnswer || '').trim(), 10);
     const ok = Number.isFinite(correctVal) && val === correctVal;
     return {
       isCorrect: ok,
-      correctAnswerRaw: q?.correctAnswer || null,
+      correctAnswerRaw: q?.correctAnswer ?? null,
       marksAwarded: ok ? pos : neg ? -Math.abs(neg) : 0
     };
   }
+  // ── short_answer / subjective ─────────────────────────────────────────────
   if (qt === 'short_answer' || qt === 'subjective') {
     const studentAns = safeTrim(String(answerRaw)).toLowerCase();
     const correctAns = safeTrim(String(q?.correctAnswer || '')).toLowerCase();
     if (!studentAns) {
-      return { isCorrect: null, correctAnswerRaw: q?.correctAnswer || null, marksAwarded: 0 };
+      return { isCorrect: null, correctAnswerRaw: q?.correctAnswer ?? null, marksAwarded: 0 };
     }
+    // Range check — "42.5-45.5"
     const range = parseRange(correctAns);
     if (range) {
       const val = Number(studentAns);
       if (!Number.isFinite(val)) {
-        return {
-          isCorrect: false,
-          correctAnswerRaw: q?.correctAnswer || null,
-          marksAwarded: neg ? -Math.abs(neg) : 0
-        };
+        return { isCorrect: false, correctAnswerRaw: q?.correctAnswer ?? null, marksAwarded: neg ? -Math.abs(neg) : 0 };
       }
       const ok = val >= range.min && val <= range.max;
       return {
         isCorrect: ok,
-        correctAnswerRaw: q?.correctAnswer || null,
+        correctAnswerRaw: q?.correctAnswer ?? null,
         marksAwarded: ok ? pos : neg ? -Math.abs(neg) : 0
       };
     }
+    // Exact string match (case-insensitive)
     const ok = studentAns === correctAns;
     return {
       isCorrect: ok,
-      correctAnswerRaw: q?.correctAnswer || null,
+      correctAnswerRaw: q?.correctAnswer ?? null,
       marksAwarded: ok ? pos : neg ? -Math.abs(neg) : 0
     };
   }
+  // ── matrix ────────────────────────────────────────────────────────────────
+  // correctAnswer format: "A:P(2);A:Q(2);B:R(2)" or "A:PQ(2);B:R(2)"
+  // studentAnswer format: "A:PQ;B:R" or "A:P;A:Q;B:R"
+  // correctMap: Map { leftKey → [{value, marks},...] }
+  // studentMap: Map { leftKey → [rightKey,...] }
   if (qt === 'matrix') {
     const studentMap = parseMatrixAnswer(String(answerRaw || ''));
     const correctMap = parseMatrixCorrect(String(q?.correctAnswer || ''));
     if (!correctMap.size || !studentMap.size) {
-      return {
-        isCorrect: false,
-        correctAnswerRaw: q?.correctAnswer || null,
-        marksAwarded: neg ? -Math.abs(neg) : 0
-      };
+      return { isCorrect: false, correctAnswerRaw: q?.correctAnswer ?? null, marksAwarded: neg ? -Math.abs(neg) : 0 };
     }
     let correctPairs = 0;
-    let totalPairs = correctMap.size;
+    let totalPairs = 0;
     let partialMarks = 0;
-    for (const [key, { value, marks }] of correctMap.entries()) {
-      const studentVal = studentMap.get(key);
-      if (studentVal === value) {
-        correctPairs++;
-        partialMarks += marks;
+    for (const [lKey, correctEntries] of correctMap.entries()) {
+      const studentRightKeys = studentMap.get(lKey) || [];
+      for (const { value, marks } of correctEntries) {
+        totalPairs++;
+        // student selected this right key for this left key
+        if (studentRightKeys.includes(value)) {
+          correctPairs++;
+          partialMarks += marks;
+        }
       }
     }
+    // Full match
     if (correctPairs === totalPairs) {
-      return {
-        isCorrect: true,
-        correctAnswerRaw: q?.correctAnswer || null,
-        marksAwarded: pos
-      };
+      return { isCorrect: true, correctAnswerRaw: q?.correctAnswer ?? null, marksAwarded: pos };
     }
+    // No match at all
     if (correctPairs === 0) {
-      return {
-        isCorrect: false,
-        correctAnswerRaw: q?.correctAnswer || null,
-        marksAwarded: neg ? -Math.abs(neg) : 0
-      };
+      return { isCorrect: false, correctAnswerRaw: q?.correctAnswer ?? null, marksAwarded: neg ? -Math.abs(neg) : 0 };
     }
+    // Partial match
     if (q?.hasPartialMarking && partialMarks > 0) {
-      return {
-        isCorrect: null,
-        correctAnswerRaw: q?.correctAnswer || null,
-        marksAwarded: partialMarks
-      };
+      return { isCorrect: null, correctAnswerRaw: q?.correctAnswer ?? null, marksAwarded: partialMarks };
     }
-    return {
-      isCorrect: false,
-      correctAnswerRaw: q?.correctAnswer || null,
-      marksAwarded: neg ? -Math.abs(neg) : 0
-    };
+    // Partial but no partial marking — treat as wrong
+    return { isCorrect: false, correctAnswerRaw: q?.correctAnswer ?? null, marksAwarded: neg ? -Math.abs(neg) : 0 };
   }
-  return {
-    isCorrect: null,
-    correctAnswerRaw: q?.correctAnswer || null,
-    marksAwarded: 0
-  };
+  // ── default fallback ──────────────────────────────────────────────────────
+  return { isCorrect: null, correctAnswerRaw: q?.correctAnswer ?? null, marksAwarded: 0 };
 };
 
 const buildSectionResults = (answers, sections, sectionTimings = {}) => {
   const secMap = new Map((sections || []).map((s) => [safeTrim(s.sectionId), s]));
   const buckets = new Map();
   for (const [sid, sec] of secMap.entries()) {
-    buckets.set(sid, { sectionId: sid, subjectId: sec.subjectId || null, totalQuestions: 0, answeredCount: 0, correctCount: 0, wrongCount: 0, skippedCount: 0, totalMarks: 0, obtainedMarks: 0, timeTaken: toNum(sectionTimings[sid]) });
+    // buckets.set(sid, { sectionId: sid, subjectId: sec.subjectId || null, totalQuestions: 0, answeredCount: 0, correctCount: 0, wrongCount: 0, skippedCount: 0, totalMarks: 0, obtainedMarks: 0, timeTaken: toNum(sectionTimings[sid]) });
+    buckets.set(sid, {
+      sectionId: sid,
+      subjectId: sec.subjectId || null,
+      totalQuestions: 0,
+      answeredCount: 0,
+      correctCount: 0,
+      wrongCount: 0,
+      skippedCount: 0,
+      totalMarks: toNum(sec.totalMarks) || 0,
+      obtainedMarks: 0,
+      timeTaken: toNum(sectionTimings[sid])
+    });
   }
   for (const a of answers) {
     const b = buckets.get(safeTrim(a.sectionId));
@@ -732,7 +1092,6 @@ const getMyResultWithAnswers = async (req, res, next) => {
     }
     const result = await MockExamResult.findOne({ tenantId, examId, admissionNo, isdeleted: false }).populate('sectionResults.subjectId', 'subjectName').lean();
     if (!result) return res.status(404).json({ status: false, message: 'Result not found for this student' });
-
     const studentProfile = await StudentProfile.findOne(
       {
         tenantId,
@@ -777,7 +1136,8 @@ const getMyResultWithAnswers = async (req, res, next) => {
         questionId: a.questionId,
         sectionId: a.sectionId,
         answerRaw: a.answerRaw,
-        correctAnswer: q?.correctAnswer ?? null,
+        // correctAnswer: q?.correctAnswer ?? null,
+        correctAnswer: q ? (buildCorrectAnswer(q) ?? q.correctAnswer ?? null) : null,
         isCorrect: a.isCorrect,
         isSkipped: a.isSkipped,
         marksAwarded: a.marksAwarded,
@@ -789,7 +1149,8 @@ const getMyResultWithAnswers = async (req, res, next) => {
         difficulty: q?.difficulty || null,
         questionHtml: q?.questionHtml || null,
         questionOptions: q?.questionOptions || [],
-        solutionHtml: q?.enableSolution ? q?.solutionHtml || null : null,
+        // solutionHtml: q?.enableSolution ? q?.solutionHtml || null : null,
+        solutionHtml: q?.enableSolution || !!q?.solutionHtml ? q?.solutionHtml || null : null,
         numericMin: q?.numericMin ?? null,
         numericMax: q?.numericMax ?? null,
         topicId: q?.topicId || null,
@@ -1234,6 +1595,35 @@ const compareWithTopper = async (req, res, next) => {
         examId,
         batchId: batchId || null,
         totalMarks,
+        // student: {
+        //   admissionNo: admissionNo,
+        //   studentName: studentProfile?.student?.name || null,
+        //   obtainedMarks: studentScore,
+        //   totalMarks,
+        //   scorePct: studentPct,
+        //   rank: studentResult.rank,
+        //   percentile: studentResult.percentile,
+        //   timeTaken: studentResult.timeTaken,
+        //   isLate: studentResult.isLate,
+        //   totalQuestions: studentResult.totalQuestions,
+        //   correct: studentResult.correctCount,
+        //   wrong: studentResult.wrongCount,
+        //   skipped: studentResult.skippedCount
+        // },
+        // topper: {
+        //   admissionNo: topperResult.admissionNo,
+        //   studentName: topperProfile?.student?.name || null,
+        //   obtainedMarks: topperScore,
+        //   totalMarks,
+        //   scorePct: topperPct,
+        //   rank: 1,
+        //   percentile: topperResult.percentile,
+        //   timeTaken: topperResult.timeTaken,
+        //   totalQuestions: topperResult.totalQuestions,
+        //   correct: topperResult.correctCount,
+        //   wrong: topperResult.wrongCount,
+        //   skipped: topperResult.skippedCount
+        // },
         student: {
           admissionNo: admissionNo,
           studentName: studentProfile?.student?.name || null,
@@ -1245,9 +1635,9 @@ const compareWithTopper = async (req, res, next) => {
           timeTaken: studentResult.timeTaken,
           isLate: studentResult.isLate,
           totalQuestions: studentResult.totalQuestions,
-          correct: studentResult.correctCount,
-          wrong: studentResult.wrongCount,
-          skipped: studentResult.skippedCount
+          correct: studentResult.correctCount ?? sumFromSections(studentResult, 'correctCount'),
+          wrong: studentResult.wrongCount ?? sumFromSections(studentResult, 'wrongCount'),
+          skipped: studentResult.skippedCount ?? sumFromSections(studentResult, 'skippedCount')
         },
         topper: {
           admissionNo: topperResult.admissionNo,
@@ -1259,9 +1649,9 @@ const compareWithTopper = async (req, res, next) => {
           percentile: topperResult.percentile,
           timeTaken: topperResult.timeTaken,
           totalQuestions: topperResult.totalQuestions,
-          correct: topperResult.correctCount,
-          wrong: topperResult.wrongCount,
-          skipped: topperResult.skippedCount
+          correct: topperResult.correctCount ?? sumFromSections(topperResult, 'correctCount'),
+          wrong: topperResult.wrongCount ?? sumFromSections(topperResult, 'wrongCount'),
+          skipped: topperResult.skippedCount ?? sumFromSections(topperResult, 'skippedCount')
         },
         overall: {
           gap: overallGap,
@@ -1372,6 +1762,8 @@ const getExamParticipantsReport = async (req, res, next) => {
     return next(err);
   }
 };
+
+export { evalAnswer };
 
 export default {
   submitResult,
