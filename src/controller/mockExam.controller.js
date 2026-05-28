@@ -9,6 +9,7 @@ import MockExamBatchAssign from '../models/mockExambatchmapping.model.js';
 import { syncOnMockPublish } from '../helpers/performanceSync.helper.js';
 import StudentProfile from '../models/studentProfile.model.js';
 import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
+import { evalAnswer } from './mockExamResult.controller.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const safeTrim = (v) => (v == null ? '' : String(v)).trim();
@@ -136,15 +137,15 @@ const _evalAnswers = (answers, qMap, qGraceMap) =>
     const grace = qGraceMap.get(safeTrim(a.questionId)) || null;
     let marks = 0;
     let graceMks = 0;
+    let isCorrect = a.isCorrect;
     if (q) {
-      const pos = toNum(q.positiveMarks);
-      const neg = toNum(q.negativeMarks);
       if (a.isSkipped) {
         marks = 0;
-      } else if (a.isCorrect === true) {
-        marks = pos;
-      } else if (a.isCorrect === false) {
-        marks = neg ? -Math.abs(neg) : 0;
+        isCorrect = null;
+      } else {
+        const ev = evalAnswer(q, a.answerRaw);
+        marks = ev.marksAwarded;
+        isCorrect = ev.isCorrect;
       }
       if (grace) {
         const gm = toNum(grace.graceMarks);
@@ -159,6 +160,7 @@ const _evalAnswers = (answers, qMap, qGraceMap) =>
     }
     return {
       ...a,
+      isCorrect,
       positiveMarks: q ? toNum(q.positiveMarks) : a.positiveMarks,
       negativeMarks: q ? toNum(q.negativeMarks) : a.negativeMarks,
       marksAwarded: marks,
@@ -170,7 +172,19 @@ const _buildSectionResults = (answers, sections) => {
   const secMap = new Map((sections || []).map((s) => [safeTrim(s.sectionId), s]));
   const buckets = new Map();
   for (const [sid, sec] of secMap.entries()) {
-    buckets.set(sid, { sectionId: sid, subjectId: sec.subjectId || null, totalQuestions: 0, answeredCount: 0, correctCount: 0, wrongCount: 0, skippedCount: 0, totalMarks: 0, obtainedMarks: 0, timeTaken: 0 });
+    // buckets.set(sid, { sectionId: sid, subjectId: sec.subjectId || null, totalQuestions: 0, answeredCount: 0, correctCount: 0, wrongCount: 0, skippedCount: 0, totalMarks: 0, obtainedMarks: 0, timeTaken: 0 });
+    buckets.set(sid, {
+      sectionId: sid,
+      subjectId: sec.subjectId || null,
+      totalQuestions: 0,
+      answeredCount: 0,
+      correctCount: 0,
+      wrongCount: 0,
+      skippedCount: 0,
+      totalMarks: toNum(sec.totalMarks) || 0,
+      obtainedMarks: 0,
+      timeTaken: 0
+    });
   }
   for (const a of answers) {
     const b = buckets.get(safeTrim(a.sectionId));
@@ -347,7 +361,15 @@ const listExams = async (req, res, next) => {
       [rows, count] = await Promise.all([MockExam.find(query, proj).sort(sort).skip(skip).limit(limit).lean(), MockExam.countDocuments(query)]);
     }
     const now = Date.now();
-    rows = rows.map((r) => ({ ...r, isLive: !!(r.startTime && r.endTime && now >= r.startTime && now <= r.endTime) }));
+    // rows = rows.map((r) => ({ ...r, isLive: !!(r.startTime && r.endTime && now >= r.startTime && now <= r.endTime) }));
+    const examIds = rows.map((r) => r.examId);
+    const actualCounts = await MockExamQns.aggregate([{ $match: { tenantId, examId: { $in: examIds }, isdeleted: false } }, { $group: { _id: '$examId', actualCount: { $sum: 1 } } }]);
+    const actualCountMap = new Map(actualCounts.map((a) => [a._id, a.actualCount]));
+    rows = rows.map((r) => ({
+      ...r,
+      isLive: !!(r.startTime && r.endTime && now >= r.startTime && now <= r.endTime),
+      actualQuestionCount: actualCountMap.get(r.examId) || 0
+    }));
     return res.status(200).json({ status: true, message: 'Exams retrieved successfully', data: rows, count, ...(listAll ? {} : { page, limit }) });
   } catch (err) {
     return next(err);
@@ -447,11 +469,22 @@ const checkAndAutoPublish = async (req, res, next) => {
       isdeleted: false,
       status: { $nin: ['result_published'] },
       autoPublishAt: { $ne: null, $lte: now }
-    }).lean();
+    });
+    // if (!exams.length) return res.status(200).json({ status: true, message: 'No exams pending auto-publish', count: 0 });
+    // const examIds = exams.map((e) => e.examId);
+    // await MockExam.updateMany({ tenantId, examId: { $in: examIds }, isdeleted: false }, { $set: { status: 'result_published', resultPublishedAt: now } });
+    // await MockExamResult.updateMany({ tenantId, examId: { $in: examIds }, isdeleted: false }, { $set: { status: 'result_published', isResultVisible: true } });
+    // return res.status(200).json({ status: true, message: 'Auto-published results', count: examIds.length, examIds });
     if (!exams.length) return res.status(200).json({ status: true, message: 'No exams pending auto-publish', count: 0 });
+    for (const exam of exams) {
+      try {
+        await _recomputeResults(tenantId, exam.examId, exam, null, 'auto_publish', now, 'Auto published', true);
+        await MockExam.findOneAndUpdate({ tenantId, examId: exam.examId, isdeleted: false }, { $set: { status: 'result_published', resultPublishedAt: now } });
+      } catch (e) {
+        console.error(`Auto-publish failed for examId ${exam.examId}:`, e.message);
+      }
+    }
     const examIds = exams.map((e) => e.examId);
-    await MockExam.updateMany({ tenantId, examId: { $in: examIds }, isdeleted: false }, { $set: { status: 'result_published', resultPublishedAt: now } });
-    await MockExamResult.updateMany({ tenantId, examId: { $in: examIds }, isdeleted: false }, { $set: { status: 'result_published', isResultVisible: true } });
     return res.status(200).json({ status: true, message: 'Auto-published results', count: examIds.length, examIds });
   } catch (err) {
     return next(err);
