@@ -891,17 +891,300 @@ const getStaffExamReport = async (req, res, next) => {
   }
 };
 
+// const getFacultyLoadReport = async (req, res, next) => {
+//   try {
+//     const tenantId = pickTid(req);
+//     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+//     const fromDate = toInt(req.body?.fromDate, 0);
+//     const toDate = toInt(req.body?.toDate, 0);
+//     const filterStaffId = safeTrim(req.body?.staffId || '');
+//     const filterBatchIds = Array.isArray(req.body?.batchIds) ? req.body.batchIds.filter(Boolean) : [];
+//     const filterCenterIds = Array.isArray(req.body?.centerIds) ? req.body.centerIds.filter(Boolean) : [];
+//     const staffQuery = { tenantId, isdeleted: false, status: { $in: ['ACTIVE', 'active', 'Active'] } };
+//     if (filterStaffId) staffQuery.staffId = filterStaffId;
+//     const allStaff = await Staff.find(staffQuery, {
+//       staffId: 1,
+//       staffName: 1,
+//       staffCode: 1,
+//       centerId: 1,
+//       centerName: 1
+//     }).lean();
+//     if (!allStaff.length) {
+//       return res.status(200).json({ status: true, count: 0, data: [], detail: [] });
+//     }
+//     const staffMap = new Map(allStaff.map((s) => [s.staffId, s]));
+//     const allStaffIds = allStaff.map((s) => s.staffId);
+//     const ttQuery = { tenantId, isdeleted: false, status: 'Active' };
+//     // if (filterBatchIds.length) ttQuery.batchId = { $in: filterBatchIds };
+//     if (filterBatchIds.length) {
+//       const filterBatches = await Batch.find({ tenantId, batchId: { $in: filterBatchIds }, isdeleted: false }, { batchCode: 1 }).lean();
+//       const filterBatchCodeList = filterBatches.map((b) => b.batchCode).filter(Boolean);
+//       if (filterBatchCodeList.length) ttQuery.batchCode = { $in: filterBatchCodeList };
+//     }
+//     if (fromDate) ttQuery.wkStartOn = { $gte: getPreviousMonday1(fromDate) };
+//     if (toDate) ttQuery.wkStartOn = { ...ttQuery.wkStartOn, $lte: getPreviousMonday1(toDate) };
+//     const timetables = await TimeTable.find(ttQuery).lean();
+//     if (!timetables.length) {
+//       return res.status(200).json({ status: true, count: 0, data: [], detail: [] });
+//     }
+//     const batchCodes = [...new Set(timetables.map((tt) => tt.batchCode).filter(Boolean))];
+//     const batches = await Batch.find({ tenantId, batchCode: { $in: batchCodes }, isdeleted: false }, { batchCode: 1, batchId: 1, batchName: 1, centerId: 1, centerName: 1 }).lean();
+//     const batchInfoMap = new Map(batches.map((b) => [b.batchCode, b]));
+//     const subjectIds = new Set();
+//     for (const tt of timetables) {
+//       for (const day of tt.week || []) {
+//         for (const p of day.periods || []) {
+//           if (p.subjectId) subjectIds.add(String(p.subjectId));
+//         }
+//       }
+//     }
+//     const subjectDocs = await Subject.find(
+//       {
+//         _id: {
+//           $in: Array.from(subjectIds)
+//             .map((id) => {
+//               try {
+//                 return new mongoose.Types.ObjectId(id);
+//               } catch {
+//                 return null;
+//               }
+//             })
+//             .filter(Boolean)
+//         }
+//       },
+//       { subjectName: 1, subjectCode: 1 }
+//     ).lean();
+//     const subjectNameMap = new Map(subjectDocs.map((s) => [String(s._id), s.subjectName]));
+//     const detailMap = new Map();
+//     const ensureKey = (staffId, batchCode, subjectId) => {
+//       const key = `${staffId}::${batchCode}::${subjectId}`;
+//       if (!detailMap.has(key)) {
+//         const staff = staffMap.get(staffId) || {};
+//         const batchInfo = batchInfoMap.get(batchCode) || {};
+//         detailMap.set(key, {
+//           staffId,
+//           staffName: staff.staffName || staffId,
+//           staffCode: staff.staffCode || null,
+//           batchCode,
+//           batchName: batchInfo.batchName || null,
+//           centerId: batchInfo.centerId || null,
+//           centerName: batchInfo.centerName || null,
+//           subjectId,
+//           subjectName: subjectNameMap.get(subjectId) || subjectId,
+//           scheduledCount: 0,
+//           scheduledMins: 0,
+//           cancelledCount: 0,
+//           replacedCount: 0,
+//           replacedMins: 0
+//         });
+//       }
+//       return detailMap.get(key);
+//     };
+//     const DAYS = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
+//     for (const tt of timetables) {
+//       const batchCode = tt.batchCode;
+//       const batchInfo = batchInfoMap.get(batchCode) || {};
+//       if (filterCenterIds.length && !filterCenterIds.includes(batchInfo.centerId)) continue;
+//       const ttStart = toInt(tt.wkStartOn, 0);
+//       if (!ttStart) continue;
+//       const rangeStart = fromDate ? Math.max(ttStart, getPreviousMonday1(fromDate)) : ttStart;
+//       const rangeEnd = toDate ? Math.min(toDate, ttStart + 6 * 86400000) : ttStart + 6 * 86400000;
+//       for (let dayMs = rangeStart; dayMs <= rangeEnd; dayMs += 86400000) {
+//         const dayIdx = new Date(dayMs).getUTCDay();
+//         const dayStr = DAYS[dayIdx];
+//         const dayOv = (tt.dayOverrides || []).find((ov) => {
+//           const od = new Date(Number(ov.date));
+//           const ovUTC = Date.UTC(od.getUTCFullYear(), od.getUTCMonth(), od.getUTCDate());
+//           return ovUTC === dayMs;
+//         });
+//         if (dayOv?.action === 'CANCEL_DAY') {
+//           const baseDay = (tt.week || []).find((w) => String(w.day).toUpperCase() === dayStr);
+//           for (const p of baseDay?.periods || []) {
+//             const sid = String(p.subjectId || '');
+//             const fid = safeTrim(p.facultyId || '');
+//             if (!fid || !allStaffIds.includes(fid)) continue;
+//             if (filterStaffId && fid !== filterStaffId) continue;
+//             const grp = ensureKey(fid, batchCode, sid);
+//             grp.cancelledCount++;
+//           }
+//           continue;
+//         }
+//         let basePeriods = [];
+//         if (dayOv?.action === 'REPLACE_DAY') {
+//           basePeriods = dayOv.periods || [];
+//         } else {
+//           const baseDay = (tt.week || []).find((w) => String(w.day).toUpperCase() === dayStr);
+//           basePeriods = baseDay?.periods ? JSON.parse(JSON.stringify(baseDay.periods)) : [];
+//         }
+//         const periodMap = new Map();
+//         basePeriods.forEach((p) => {
+//           if (p.periodNo != null) periodMap.set(Number(p.periodNo), { ...p, _cancelled: false });
+//         });
+//         const periodOvs = (tt.periodOverrides || []).filter((ov) => {
+//           const od = new Date(Number(ov.date));
+//           const ovUTC = Date.UTC(od.getUTCFullYear(), od.getUTCMonth(), od.getUTCDate());
+//           return ovUTC === dayMs;
+//         });
+//         for (const ov of periodOvs) {
+//           const pNo = Number(ov.periodNo);
+//           if (!pNo) continue;
+//           if (ov.action === 'CANCEL_PERIOD') {
+//             const base = periodMap.get(pNo);
+//             if (base) periodMap.set(pNo, { ...base, _cancelled: true });
+//           } else if ((ov.action === 'REPLACE_PERIOD' || ov.action === 'ADD_PERIOD') && ov.period) {
+//             periodMap.set(pNo, { ...ov.period, periodNo: pNo, _cancelled: false });
+//           }
+//         }
+//         for (const [, p] of periodMap.entries()) {
+//           const sid = String(p.subjectId || '');
+//           const startMin = toInt(p.time?.startMin, -1);
+//           const endMin = toInt(p.time?.endMin, -1);
+//           const mins = startMin >= 0 && endMin > startMin ? endMin - startMin : 0;
+//           const fid = safeTrim(p.facultyId || '');
+//           if (fid && allStaffIds.includes(fid)) {
+//             if (!filterStaffId || fid === filterStaffId) {
+//               const grp = ensureKey(fid, batchCode, sid);
+//               if (p._cancelled) {
+//                 grp.cancelledCount++;
+//               } else {
+//                 grp.scheduledCount++;
+//                 grp.scheduledMins += mins;
+//               }
+//             }
+//           }
+//           const rfid = safeTrim(p.replacementFacultyId || '');
+//           if (!p._cancelled && rfid && rfid !== fid && allStaffIds.includes(rfid)) {
+//             if (!filterStaffId || rfid === filterStaffId) {
+//               const grp = ensureKey(rfid, batchCode, sid);
+//               grp.replacedCount++;
+//               grp.replacedMins += mins;
+//             }
+//           }
+//         }
+//       }
+//     }
+//     const detail = Array.from(detailMap.values()).map((d) => ({
+//       ...d,
+//       scheduledHours: round2(d.scheduledMins / 60),
+//       scheduledHoursFormatted: formatHours(d.scheduledMins),
+//       replacedHoursFormatted: formatHours(d.replacedMins)
+//     }));
+//     detail.sort((a, b) => {
+//       const s = (a.staffName || '').localeCompare(b.staffName || '');
+//       if (s !== 0) return s;
+//       const bc = (a.batchCode || '').localeCompare(b.batchCode || '');
+//       if (bc !== 0) return bc;
+//       return (a.subjectName || '').localeCompare(b.subjectName || '');
+//     });
+//     // const summaryKeyMap = new Map();
+//     // for (const d of detail) {
+//     //   const key = `${d.staffId}::${d.subjectId}`;
+//     //   if (!summaryKeyMap.has(key)) {
+//     //     summaryKeyMap.set(key, {
+//     //       staffId: d.staffId,
+//     //       staffName: d.staffName,
+//     //       staffCode: d.staffCode,
+//     //       subjectId: d.subjectId,
+//     //       subjectName: d.subjectName,
+//     //       batches: new Set(),
+//     //       scheduledCount: 0,
+//     //       scheduledMins: 0,
+//     //       cancelledCount: 0,
+//     //       replacedCount: 0,
+//     //       replacedMins: 0
+//     //     });
+//     //   }
+//     //   const s = summaryKeyMap.get(key);
+//     //   s.batches.add(d.batchCode);
+//     //   s.scheduledCount += d.scheduledCount;
+//     //   s.scheduledMins += d.scheduledMins;
+//     //   s.cancelledCount += d.cancelledCount;
+//     //   s.replacedCount += d.replacedCount;
+//     //   s.replacedMins += d.replacedMins;
+//     // }
+//     // const summaryData = Array.from(summaryKeyMap.values()).map((s) => ({
+//     //   staffId: s.staffId,
+//     //   staffName: s.staffName,
+//     //   staffCode: s.staffCode,
+//     //   subjectId: s.subjectId,
+//     //   subjectName: s.subjectName,
+//     //   totalBatches: s.batches.size,
+//     //   scheduledCount: s.scheduledCount,
+//     //   scheduledHoursFormatted: formatHours(s.scheduledMins),
+//     //   cancelledCount: s.cancelledCount,
+//     //   replacedCount: s.replacedCount,
+//     //   replacedHoursFormatted: formatHours(s.replacedMins)
+//     // }));
+//     // summaryData.sort((a, b) => {
+//     //   const s = (a.staffName || '').localeCompare(b.staffName || '');
+//     //   if (s !== 0) return s;
+//     //   return (a.subjectName || '').localeCompare(b.subjectName || '');
+//     // });
+//     // const summary = {
+//     //   totalStaff: summaryData.length,
+//     //   totalScheduledPeriods: summaryData.reduce((s, r) => s + r.scheduledCount, 0),
+//     //   totalCancelledPeriods: summaryData.reduce((s, r) => s + r.cancelledCount, 0)
+//     // };
+//     // return res.status(200).json({
+//     //   status: true,
+//     //   summary,
+//     //   count: summaryData.length,
+//     //   data: summaryData,
+//     //   detail
+//     // });
+//     // data = detail rows directly (staff + subject + batch level)
+//     const summaryData = detail.map((d) => ({
+//       staffId: d.staffId,
+//       staffName: d.staffName,
+//       staffCode: d.staffCode,
+//       subjectId: d.subjectId,
+//       subjectName: d.subjectName,
+//       batchCode: d.batchCode,
+//       batchName: d.batchName,
+//       centerName: d.centerName,
+//       scheduledCount: d.scheduledCount,
+//       scheduledHoursFormatted: d.scheduledHoursFormatted,
+//       cancelledCount: d.cancelledCount,
+//       replacedCount: d.replacedCount,
+//       replacedHoursFormatted: d.replacedHoursFormatted
+//     }));
+//     const summary = {
+//       totalStaff: new Set(detail.map((d) => d.staffId)).size,
+//       totalScheduledPeriods: detail.reduce((s, r) => s + r.scheduledCount, 0),
+//       totalCancelledPeriods: detail.reduce((s, r) => s + r.cancelledCount, 0)
+//     };
+//     return res.status(200).json({
+//       status: true,
+//       summary,
+//       count: summaryData.length,
+//       data: summaryData,
+//       detail
+//     });
+//   } catch (err) {
+//     return next(err);
+//   }
+// };
+
 const getFacultyLoadReport = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+
     const fromDate = toInt(req.body?.fromDate, 0);
     const toDate = toInt(req.body?.toDate, 0);
-    const filterStaffId = safeTrim(req.body?.staffId || '');
-    const filterBatchIds = Array.isArray(req.body?.batchIds) ? req.body.batchIds.filter(Boolean) : [];
     const filterCenterIds = Array.isArray(req.body?.centerIds) ? req.body.centerIds.filter(Boolean) : [];
-    const staffQuery = { tenantId, isdeleted: false, status: { $in: ['ACTIVE', 'active', 'Active'] } };
-    if (filterStaffId) staffQuery.staffId = filterStaffId;
+
+    // Staff filter — single or multi
+    const filterStaffIds = Array.isArray(req.body?.staffIds) ? req.body.staffIds.map(safeTrim).filter(Boolean) : req.body?.staffId ? [safeTrim(req.body.staffId)] : [];
+
+    // ── Fetch staff ──
+    const staffQuery = {
+      tenantId,
+      isdeleted: false,
+      status: { $in: ['ACTIVE', 'active', 'Active'] }
+    };
+    if (filterStaffIds.length) staffQuery.staffId = { $in: filterStaffIds };
+
     const allStaff = await Staff.find(staffQuery, {
       staffId: 1,
       staffName: 1,
@@ -909,39 +1192,42 @@ const getFacultyLoadReport = async (req, res, next) => {
       centerId: 1,
       centerName: 1
     }).lean();
-    if (!allStaff.length) {
-      return res.status(200).json({ status: true, count: 0, data: [], detail: [] });
-    }
+
+    if (!allStaff.length) return res.status(200).json({ status: true, count: 0, data: [] });
+
     const staffMap = new Map(allStaff.map((s) => [s.staffId, s]));
-    const allStaffIds = allStaff.map((s) => s.staffId);
+    const allStaffIdSet = new Set(allStaff.map((s) => safeTrim(s.staffId)));
+
+    // ── Fetch timetables ──
     const ttQuery = { tenantId, isdeleted: false, status: 'Active' };
-    // if (filterBatchIds.length) ttQuery.batchId = { $in: filterBatchIds };
-    if (filterBatchIds.length) {
-      const filterBatches = await Batch.find({ tenantId, batchId: { $in: filterBatchIds }, isdeleted: false }, { batchCode: 1 }).lean();
-      const filterBatchCodeList = filterBatches.map((b) => b.batchCode).filter(Boolean);
-      if (filterBatchCodeList.length) ttQuery.batchCode = { $in: filterBatchCodeList };
+    if (fromDate || toDate) {
+      ttQuery.wkStartOn = {};
+      if (fromDate) ttQuery.wkStartOn.$gte = getPreviousMonday1(fromDate);
+      if (toDate) ttQuery.wkStartOn.$lte = getPreviousMonday1(toDate);
     }
-    if (fromDate) ttQuery.wkStartOn = { $gte: getPreviousMonday1(fromDate) };
-    if (toDate) ttQuery.wkStartOn = { ...ttQuery.wkStartOn, $lte: getPreviousMonday1(toDate) };
+
     const timetables = await TimeTable.find(ttQuery).lean();
-    if (!timetables.length) {
-      return res.status(200).json({ status: true, count: 0, data: [], detail: [] });
-    }
+
+    if (!timetables.length) return res.status(200).json({ status: true, count: 0, data: [] });
+
+    // Filter by center if provided
     const batchCodes = [...new Set(timetables.map((tt) => tt.batchCode).filter(Boolean))];
     const batches = await Batch.find({ tenantId, batchCode: { $in: batchCodes }, isdeleted: false }, { batchCode: 1, batchId: 1, batchName: 1, centerId: 1, centerName: 1 }).lean();
     const batchInfoMap = new Map(batches.map((b) => [b.batchCode, b]));
-    const subjectIds = new Set();
+
+    // ── Fetch subject names ──
+    const subjectIdSet = new Set();
     for (const tt of timetables) {
       for (const day of tt.week || []) {
         for (const p of day.periods || []) {
-          if (p.subjectId) subjectIds.add(String(p.subjectId));
+          if (p.subjectId) subjectIdSet.add(String(p.subjectId));
         }
       }
     }
     const subjectDocs = await Subject.find(
       {
         _id: {
-          $in: Array.from(subjectIds)
+          $in: Array.from(subjectIdSet)
             .map((id) => {
               try {
                 return new mongoose.Types.ObjectId(id);
@@ -955,60 +1241,129 @@ const getFacultyLoadReport = async (req, res, next) => {
       { subjectName: 1, subjectCode: 1 }
     ).lean();
     const subjectNameMap = new Map(subjectDocs.map((s) => [String(s._id), s.subjectName]));
-    const detailMap = new Map();
-    const ensureKey = (staffId, batchCode, subjectId) => {
-      const key = `${staffId}::${batchCode}::${subjectId}`;
-      if (!detailMap.has(key)) {
-        const staff = staffMap.get(staffId) || {};
-        const batchInfo = batchInfoMap.get(batchCode) || {};
-        detailMap.set(key, {
+
+    // ── Helper: format time from minutes ──
+    const formatTime = (mins) => {
+      if (mins === null || mins === undefined || mins < 0) return '-';
+      const h = Math.floor(mins / 60);
+      const m = mins % 60;
+      const ampm = h < 12 ? 'AM' : 'PM';
+      const hh = h % 12 === 0 ? 12 : h % 12;
+      return `${String(hh).padStart(2, '0')}:${String(m).padStart(2, '0')} ${ampm}`;
+    };
+
+    const formatHoursFromMins = (mins) => {
+      if (!mins || mins <= 0) return '-';
+      const h = Math.floor(mins / 60);
+      const m = mins % 60;
+      if (h === 0) return `${String(m).padStart(2, '0')} min`;
+      if (m === 0) return `${String(h).padStart(2, '0')} hr`;
+      return `${String(h).padStart(2, '0')} hr ${String(m).padStart(2, '0')} min`;
+    };
+
+    const formatDateStr = (ms) => {
+      if (!ms) return '-';
+      const d = new Date(ms);
+      return `${d.getUTCDate().toString().padStart(2, '0')}/${(d.getUTCMonth() + 1).toString().padStart(2, '0')}/${d.getUTCFullYear()}`;
+    };
+
+    // ── Determine date range to iterate ──
+    // If no date range, derive from timetable wkStartOn range
+    let rangeStart = fromDate;
+    let rangeEnd = toDate;
+
+    if (!rangeStart || !rangeEnd) {
+      const wkStarts = timetables.map((tt) => toInt(tt.wkStartOn, 0)).filter(Boolean);
+      if (!rangeStart && wkStarts.length) rangeStart = Math.min(...wkStarts);
+      if (!rangeEnd && wkStarts.length) rangeEnd = Math.max(...wkStarts) + 6 * 86400000; // end of last week
+    }
+
+    if (!rangeStart || !rangeEnd) return res.status(200).json({ status: true, count: 0, data: [] });
+
+    // ── Build timetable lookup: wkStartOn → batchCode → timetable ──
+    const ttByWeekBatch = new Map();
+    for (const tt of timetables) {
+      const wk = toInt(tt.wkStartOn, 0);
+      if (!wk) continue;
+      const key = `${wk}::${tt.batchCode}`;
+      // Keep latest if multiple (by _id descending)
+      if (!ttByWeekBatch.has(key)) ttByWeekBatch.set(key, tt);
+    }
+
+    // ── Collect all unique batchCodes from filtered timetables ──
+    const activeBatchCodes = [...new Set(timetables.map((tt) => tt.batchCode).filter(Boolean))];
+
+    // ── key: `${staffId}::${subjectId}` → { staffId, subjectId, scheduledPeriods[], cancelledPeriods[], replacedPeriods[] } ──
+    const staffSubjectMap = new Map();
+
+    const ensureEntry = (staffId, subjectId) => {
+      const key = `${staffId}::${subjectId}`;
+      if (!staffSubjectMap.has(key)) {
+        staffSubjectMap.set(key, {
           staffId,
-          staffName: staff.staffName || staffId,
-          staffCode: staff.staffCode || null,
-          batchCode,
-          batchName: batchInfo.batchName || null,
-          centerId: batchInfo.centerId || null,
-          centerName: batchInfo.centerName || null,
           subjectId,
-          subjectName: subjectNameMap.get(subjectId) || subjectId,
-          scheduledCount: 0,
-          scheduledMins: 0,
-          cancelledCount: 0,
-          replacedCount: 0,
-          replacedMins: 0
+          scheduledPeriods: [],
+          cancelledPeriods: [],
+          replacedPeriods: []
         });
       }
-      return detailMap.get(key);
+      return staffSubjectMap.get(key);
     };
-    const DAYS = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
-    for (const tt of timetables) {
-      const batchCode = tt.batchCode;
-      const batchInfo = batchInfoMap.get(batchCode) || {};
-      if (filterCenterIds.length && !filterCenterIds.includes(batchInfo.centerId)) continue;
-      const ttStart = toInt(tt.wkStartOn, 0);
-      if (!ttStart) continue;
-      const rangeStart = fromDate ? Math.max(ttStart, getPreviousMonday1(fromDate)) : ttStart;
-      const rangeEnd = toDate ? Math.min(toDate, ttStart + 6 * 86400000) : ttStart + 6 * 86400000;
-      for (let dayMs = rangeStart; dayMs <= rangeEnd; dayMs += 86400000) {
-        const dayIdx = new Date(dayMs).getUTCDay();
-        const dayStr = DAYS[dayIdx];
-        const dayOv = (tt.dayOverrides || []).find((ov) => {
-          const od = new Date(Number(ov.date));
-          const ovUTC = Date.UTC(od.getUTCFullYear(), od.getUTCMonth(), od.getUTCDate());
-          return ovUTC === dayMs;
-        });
+
+    const msPerDay = 86400000;
+    const DAYS_ARR = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
+
+    // ── Iterate each day in range ──
+    for (let dayMs = rangeStart; dayMs <= rangeEnd; dayMs += msPerDay) {
+      const wkStart = getPreviousMonday1(dayMs);
+      const dayIdx = new Date(dayMs).getUTCDay();
+      const dayStr = DAYS_ARR[dayIdx];
+      const targetUTC = dayMs; // already midnight UTC from getPreviousMonday or fromDate
+
+      const matchesDate = (oMs) => {
+        const od = new Date(Number(oMs));
+        return Date.UTC(od.getUTCFullYear(), od.getUTCMonth(), od.getUTCDate()) === targetUTC;
+      };
+
+      for (const bc of activeBatchCodes) {
+        const batchInfo = batchInfoMap.get(bc) || {};
+
+        // Skip if center filter applied and doesn't match
+        if (filterCenterIds.length && !filterCenterIds.includes(batchInfo.centerId)) continue;
+
+        const ttKey = `${wkStart}::${bc}`;
+        const tt = ttByWeekBatch.get(ttKey);
+        if (!tt) continue;
+
+        // Check day overrides
+        const dayOv = (tt.dayOverrides || []).find((ov) => matchesDate(ov.date));
+
+        // ── CANCEL_DAY — all base periods cancelled ──
         if (dayOv?.action === 'CANCEL_DAY') {
           const baseDay = (tt.week || []).find((w) => String(w.day).toUpperCase() === dayStr);
           for (const p of baseDay?.periods || []) {
-            const sid = String(p.subjectId || '');
             const fid = safeTrim(p.facultyId || '');
-            if (!fid || !allStaffIds.includes(fid)) continue;
-            if (filterStaffId && fid !== filterStaffId) continue;
-            const grp = ensureKey(fid, batchCode, sid);
-            grp.cancelledCount++;
+            if (!fid || !allStaffIdSet.has(fid)) continue;
+            const sid = String(p.subjectId || '');
+            const startMin = toInt(p.time?.startMin, -1);
+            const endMin = toInt(p.time?.endMin, -1);
+            const mins = startMin >= 0 && endMin > startMin ? endMin - startMin : 0;
+            const entry = ensureEntry(fid, sid);
+            entry.cancelledPeriods.push({
+              date: dayMs,
+              dateFormatted: formatDateStr(dayMs),
+              batchCode: bc,
+              batchName: batchInfo.batchName || null,
+              fromTime: formatTime(startMin),
+              endTime: formatTime(endMin),
+              hours: formatHoursFromMins(mins),
+              mins
+            });
           }
           continue;
         }
+
+        // ── Base periods for this day ──
         let basePeriods = [];
         if (dayOv?.action === 'REPLACE_DAY') {
           basePeriods = dayOv.periods || [];
@@ -1016,15 +1371,15 @@ const getFacultyLoadReport = async (req, res, next) => {
           const baseDay = (tt.week || []).find((w) => String(w.day).toUpperCase() === dayStr);
           basePeriods = baseDay?.periods ? JSON.parse(JSON.stringify(baseDay.periods)) : [];
         }
+
+        // Build period map
         const periodMap = new Map();
         basePeriods.forEach((p) => {
-          if (p.periodNo != null) periodMap.set(Number(p.periodNo), { ...p, _cancelled: false });
+          if (p.periodNo != null) periodMap.set(Number(p.periodNo), { ...p, _cancelled: false, _replaced: false });
         });
-        const periodOvs = (tt.periodOverrides || []).filter((ov) => {
-          const od = new Date(Number(ov.date));
-          const ovUTC = Date.UTC(od.getUTCFullYear(), od.getUTCMonth(), od.getUTCDate());
-          return ovUTC === dayMs;
-        });
+
+        // Apply period overrides
+        const periodOvs = (tt.periodOverrides || []).filter((ov) => matchesDate(ov.date));
         for (const ov of periodOvs) {
           const pNo = Number(ov.periodNo);
           if (!pNo) continue;
@@ -1032,133 +1387,117 @@ const getFacultyLoadReport = async (req, res, next) => {
             const base = periodMap.get(pNo);
             if (base) periodMap.set(pNo, { ...base, _cancelled: true });
           } else if ((ov.action === 'REPLACE_PERIOD' || ov.action === 'ADD_PERIOD') && ov.period) {
-            periodMap.set(pNo, { ...ov.period, periodNo: pNo, _cancelled: false });
+            const existing = periodMap.get(pNo);
+            periodMap.set(pNo, {
+              ...ov.period,
+              periodNo: pNo,
+              _cancelled: false,
+              _replaced: true,
+              _originalFacultyId: existing?.facultyId || null
+            });
           }
         }
+
+        // ── Process each period ──
         for (const [, p] of periodMap.entries()) {
+          const fid = safeTrim(p.facultyId || '');
+          const rfid = safeTrim(p.replacementFacultyId || '');
           const sid = String(p.subjectId || '');
           const startMin = toInt(p.time?.startMin, -1);
           const endMin = toInt(p.time?.endMin, -1);
           const mins = startMin >= 0 && endMin > startMin ? endMin - startMin : 0;
-          const fid = safeTrim(p.facultyId || '');
-          if (fid && allStaffIds.includes(fid)) {
-            if (!filterStaffId || fid === filterStaffId) {
-              const grp = ensureKey(fid, batchCode, sid);
-              if (p._cancelled) {
-                grp.cancelledCount++;
-              } else {
-                grp.scheduledCount++;
-                grp.scheduledMins += mins;
-              }
+
+          const periodRow = {
+            date: dayMs,
+            dateFormatted: formatDateStr(dayMs),
+            batchCode: bc,
+            batchName: batchInfo.batchName || null,
+            fromTime: formatTime(startMin),
+            endTime: formatTime(endMin),
+            hours: formatHoursFromMins(mins),
+            mins
+          };
+
+          if (p._cancelled) {
+            // Cancelled — add to original faculty's cancelled section
+            if (fid && allStaffIdSet.has(fid)) {
+              ensureEntry(fid, sid).cancelledPeriods.push({ ...periodRow });
             }
-          }
-          const rfid = safeTrim(p.replacementFacultyId || '');
-          if (!p._cancelled && rfid && rfid !== fid && allStaffIds.includes(rfid)) {
-            if (!filterStaffId || rfid === filterStaffId) {
-              const grp = ensureKey(rfid, batchCode, sid);
-              grp.replacedCount++;
-              grp.replacedMins += mins;
+          } else if (rfid && rfid !== fid && allStaffIdSet.has(rfid)) {
+            // Replaced — original faculty loses period, replacement faculty gains
+            if (fid && allStaffIdSet.has(fid)) {
+              // Original faculty — period was replaced (show in cancelled/replaced section)
+              ensureEntry(fid, sid).cancelledPeriods.push({
+                ...periodRow,
+                note: `Replaced by ${staffMap.get(rfid)?.staffName || rfid}`
+              });
             }
+            // Replacement faculty — show in replaced section
+            ensureEntry(rfid, sid).replacedPeriods.push({ ...periodRow });
+          } else if (fid && allStaffIdSet.has(fid)) {
+            // Normal scheduled period
+            ensureEntry(fid, sid).scheduledPeriods.push({ ...periodRow });
           }
         }
       }
     }
-    const detail = Array.from(detailMap.values()).map((d) => ({
-      ...d,
-      scheduledHours: round2(d.scheduledMins / 60),
-      scheduledHoursFormatted: formatHours(d.scheduledMins),
-      replacedHoursFormatted: formatHours(d.replacedMins)
-    }));
-    detail.sort((a, b) => {
-      const s = (a.staffName || '').localeCompare(b.staffName || '');
-      if (s !== 0) return s;
-      const bc = (a.batchCode || '').localeCompare(b.batchCode || '');
-      if (bc !== 0) return bc;
-      return (a.subjectName || '').localeCompare(b.subjectName || '');
-    });
-    // const summaryKeyMap = new Map();
-    // for (const d of detail) {
-    //   const key = `${d.staffId}::${d.subjectId}`;
-    //   if (!summaryKeyMap.has(key)) {
-    //     summaryKeyMap.set(key, {
-    //       staffId: d.staffId,
-    //       staffName: d.staffName,
-    //       staffCode: d.staffCode,
-    //       subjectId: d.subjectId,
-    //       subjectName: d.subjectName,
-    //       batches: new Set(),
-    //       scheduledCount: 0,
-    //       scheduledMins: 0,
-    //       cancelledCount: 0,
-    //       replacedCount: 0,
-    //       replacedMins: 0
-    //     });
-    //   }
-    //   const s = summaryKeyMap.get(key);
-    //   s.batches.add(d.batchCode);
-    //   s.scheduledCount += d.scheduledCount;
-    //   s.scheduledMins += d.scheduledMins;
-    //   s.cancelledCount += d.cancelledCount;
-    //   s.replacedCount += d.replacedCount;
-    //   s.replacedMins += d.replacedMins;
-    // }
-    // const summaryData = Array.from(summaryKeyMap.values()).map((s) => ({
-    //   staffId: s.staffId,
-    //   staffName: s.staffName,
-    //   staffCode: s.staffCode,
-    //   subjectId: s.subjectId,
-    //   subjectName: s.subjectName,
-    //   totalBatches: s.batches.size,
-    //   scheduledCount: s.scheduledCount,
-    //   scheduledHoursFormatted: formatHours(s.scheduledMins),
-    //   cancelledCount: s.cancelledCount,
-    //   replacedCount: s.replacedCount,
-    //   replacedHoursFormatted: formatHours(s.replacedMins)
-    // }));
-    // summaryData.sort((a, b) => {
-    //   const s = (a.staffName || '').localeCompare(b.staffName || '');
-    //   if (s !== 0) return s;
-    //   return (a.subjectName || '').localeCompare(b.subjectName || '');
-    // });
-    // const summary = {
-    //   totalStaff: summaryData.length,
-    //   totalScheduledPeriods: summaryData.reduce((s, r) => s + r.scheduledCount, 0),
-    //   totalCancelledPeriods: summaryData.reduce((s, r) => s + r.cancelledCount, 0)
-    // };
-    // return res.status(200).json({
-    //   status: true,
-    //   summary,
-    //   count: summaryData.length,
-    //   data: summaryData,
-    //   detail
-    // });
-    // data = detail rows directly (staff + subject + batch level)
-    const summaryData = detail.map((d) => ({
-      staffId: d.staffId,
-      staffName: d.staffName,
-      staffCode: d.staffCode,
-      subjectId: d.subjectId,
-      subjectName: d.subjectName,
-      batchCode: d.batchCode,
-      batchName: d.batchName,
-      centerName: d.centerName,
-      scheduledCount: d.scheduledCount,
-      scheduledHoursFormatted: d.scheduledHoursFormatted,
-      cancelledCount: d.cancelledCount,
-      replacedCount: d.replacedCount,
-      replacedHoursFormatted: d.replacedHoursFormatted
-    }));
-    const summary = {
-      totalStaff: new Set(detail.map((d) => d.staffId)).size,
-      totalScheduledPeriods: detail.reduce((s, r) => s + r.scheduledCount, 0),
-      totalCancelledPeriods: detail.reduce((s, r) => s + r.cancelledCount, 0)
-    };
+
+    // ── Build response — group by staffId ──
+    const staffResults = [];
+
+    for (const staff of allStaff) {
+      const sid = safeTrim(staff.staffId);
+      // Find all subject entries for this staff
+      const subjectEntries = Array.from(staffSubjectMap.entries())
+        .filter(([key]) => key.startsWith(`${sid}::`))
+        .map(([, entry]) => entry);
+
+      if (!subjectEntries.length) continue;
+
+      // Sort by subject name
+      subjectEntries.sort((a, b) => (subjectNameMap.get(a.subjectId) || '').localeCompare(subjectNameMap.get(b.subjectId) || ''));
+
+      const subjects = subjectEntries.map((entry) => {
+        const subjectName = subjectNameMap.get(entry.subjectId) || entry.subjectId;
+
+        // Sort periods by date then fromTime
+        const sortPeriods = (arr) =>
+          arr.sort((a, b) => {
+            if (a.date !== b.date) return a.date - b.date;
+            return (a.fromTime || '').localeCompare(b.fromTime || '');
+          });
+
+        return {
+          subjectId: entry.subjectId,
+          subjectName,
+          totalScheduledMins: entry.scheduledPeriods.reduce((s, p) => s + p.mins, 0),
+          totalScheduledHours: formatHoursFromMins(entry.scheduledPeriods.reduce((s, p) => s + p.mins, 0)),
+          totalCancelledMins: entry.cancelledPeriods.reduce((s, p) => s + p.mins, 0),
+          totalReplacedMins: entry.replacedPeriods.reduce((s, p) => s + p.mins, 0),
+          scheduledPeriods: sortPeriods(entry.scheduledPeriods),
+          cancelledPeriods: sortPeriods(entry.cancelledPeriods),
+          replacedPeriods: sortPeriods(entry.replacedPeriods)
+        };
+      });
+
+      staffResults.push({
+        staffId: sid,
+        staffName: staff.staffName,
+        staffCode: staff.staffCode || null,
+        centerName: staff.centerName || null,
+        subjects
+      });
+    }
+
+    // Sort by staff name
+    staffResults.sort((a, b) => (a.staffName || '').localeCompare(b.staffName || ''));
+
     return res.status(200).json({
       status: true,
-      summary,
-      count: summaryData.length,
-      data: summaryData,
-      detail
+      count: staffResults.length,
+      fromDate: fromDate || null,
+      toDate: toDate || null,
+      data: staffResults
     });
   } catch (err) {
     return next(err);
@@ -1174,6 +1513,640 @@ const formatHours = (mins) => {
   return `${hrs} hr ${m} min`;
 };
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// FACULTY REPORT
+// POST /teacher/faculty-report
+// Body: { entiId, staffIds[]?, fromDate?, toDate?, sections[] }
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const getFacultyReport = async (req, res, next) => {
+  try {
+    const tenantId = pickTid(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+
+    const sections = Array.isArray(req.body?.sections) ? req.body.sections.map(safeTrim).filter(Boolean) : [];
+    if (!sections.length) return res.status(400).json({ status: false, message: 'At least one section must be selected' });
+
+    const fromDate = toInt(req.body?.fromDate, 0);
+    const toDate = toInt(req.body?.toDate, 0);
+
+    const filterStaffIds = Array.isArray(req.body?.staffIds) ? req.body.staffIds.map(safeTrim).filter(Boolean) : [];
+
+    // ── Fetch staff ──
+    const staffQuery = {
+      tenantId,
+      isdeleted: false,
+      status: { $in: ['ACTIVE', 'active', 'Active'] }
+    };
+    if (filterStaffIds.length) staffQuery.staffId = { $in: filterStaffIds };
+
+    const allStaff = await Staff.find(staffQuery, {
+      staffId: 1,
+      staffName: 1,
+      staffCode: 1,
+      centerId: 1,
+      centerName: 1
+    })
+      .sort({ staffName: 1 })
+      .lean();
+
+    if (!allStaff.length) return res.status(200).json({ status: true, count: 0, data: [] });
+
+    const allStaffIdSet = new Set(allStaff.map((s) => safeTrim(s.staffId)));
+    const allStaffIds = Array.from(allStaffIdSet);
+
+    // ── Helpers ──
+    const formatTime = (mins) => {
+      if (mins === null || mins === undefined || mins < 0) return '-';
+      const h = Math.floor(mins / 60);
+      const m = mins % 60;
+      const ampm = h < 12 ? 'AM' : 'PM';
+      const hh = h % 12 === 0 ? 12 : h % 12;
+      return `${String(hh).padStart(2, '0')}:${String(m).padStart(2, '0')} ${ampm}`;
+    };
+
+    const formatHoursFromMins = (mins) => {
+      if (!mins || mins <= 0) return '-';
+      const h = Math.floor(mins / 60);
+      const m = mins % 60;
+      if (h === 0) return `${String(m).padStart(2, '0')} min`;
+      if (m === 0) return `${String(h).padStart(2, '0')} hr`;
+      return `${String(h).padStart(2, '0')} hr ${String(m).padStart(2, '0')} min`;
+    };
+
+    const formatDateStr = (ms) => {
+      if (!ms) return '-';
+      const d = new Date(ms);
+      return `${d.getUTCDate().toString().padStart(2, '0')}/${(d.getUTCMonth() + 1).toString().padStart(2, '0')}/${d.getUTCFullYear()}`;
+    };
+
+    const needsTimetable = sections.some((s) => ['teaching', 'cancelled', 'replaced', 'attendanceMarked', 'attendanceNotMarked'].includes(s));
+    const needsTasks = sections.includes('tasks');
+    const needsLateEarly = sections.some((s) => ['lateEntry', 'earlyLeaving'].includes(s));
+    const needsAttendance = sections.some((s) => ['attendanceMarked', 'attendanceNotMarked'].includes(s));
+    const needsAssignments = sections.includes('assignments');
+
+    // ── Fetch timetables ──
+    let timetables = [];
+    let batchInfoMap = new Map();
+    let subjectNameMap = new Map();
+
+    if (needsTimetable) {
+      const ttQuery = { tenantId, isdeleted: false, status: 'Active' };
+      if (fromDate || toDate) {
+        ttQuery.wkStartOn = {};
+        if (fromDate) ttQuery.wkStartOn.$gte = getPreviousMonday1(fromDate);
+        if (toDate) ttQuery.wkStartOn.$lte = getPreviousMonday1(toDate);
+      }
+      timetables = await TimeTable.find(ttQuery).lean();
+
+      const batchCodes = [...new Set(timetables.map((tt) => tt.batchCode).filter(Boolean))];
+      const batches = await Batch.find({ tenantId, batchCode: { $in: batchCodes }, isdeleted: false }, { batchCode: 1, batchId: 1, batchName: 1, centerId: 1, centerName: 1 }).lean();
+      batchInfoMap = new Map(batches.map((b) => [b.batchCode, b]));
+
+      // Collect subject IDs from timetable periods
+      const subjectIdSet = new Set();
+      for (const tt of timetables) {
+        for (const day of tt.week || []) {
+          for (const p of day.periods || []) {
+            if (p.subjectId) subjectIdSet.add(String(p.subjectId));
+          }
+        }
+      }
+      const subjectDocs = await Subject.find(
+        {
+          _id: {
+            $in: Array.from(subjectIdSet)
+              .map((id) => {
+                try {
+                  return new mongoose.Types.ObjectId(id);
+                } catch {
+                  return null;
+                }
+              })
+              .filter(Boolean)
+          }
+        },
+        { subjectName: 1 }
+      ).lean();
+      subjectNameMap = new Map(subjectDocs.map((s) => [String(s._id), s.subjectName]));
+    }
+
+    // ── Fetch tasks ──
+    let tasksByStaff = new Map(); // staffId → tasks[]
+    if (needsTasks) {
+      const taskQuery = {
+        tenantId,
+        staffId: { $in: allStaffIds },
+        isdeleted: false
+      };
+      if (fromDate || toDate) {
+        taskQuery.dueDate = {};
+        if (fromDate) taskQuery.dueDate.$gte = fromDate;
+        if (toDate) taskQuery.dueDate.$lte = toDate;
+      }
+      const tasks = await Task.find(taskQuery).sort({ dueDate: 1 }).lean();
+      const now = Date.now();
+      for (const t of tasks) {
+        const sid = safeTrim(t.staffId);
+        if (!tasksByStaff.has(sid)) tasksByStaff.set(sid, []);
+        const isDelayed = t.dueDate < now && !['COMPLETED'].includes(t.status);
+        const daysOverdue = isDelayed ? Math.floor((now - t.dueDate) / 86400000) : 0;
+        tasksByStaff.get(sid).push({
+          taskName: t.taskName || null,
+          dueDate: t.dueDate,
+          dueDateFormatted: formatDateStr(t.dueDate),
+          status: t.status || null,
+          isDelayed,
+          daysOverdue,
+          remarks: t.remarks || null
+        });
+      }
+    }
+
+    // ── Fetch late entries ──
+    let lateEntryByStaff = new Map();
+    let earlyLeavingByStaff = new Map();
+    if (needsLateEarly) {
+      const lateQuery = {
+        tenantId,
+        type: 'STAFF',
+        personId: { $in: allStaffIds },
+        isdeleted: false
+      };
+      if (fromDate || toDate) {
+        lateQuery.date = {};
+        if (fromDate) lateQuery.date.$gte = fromDate;
+        if (toDate) lateQuery.date.$lte = toDate;
+      }
+      const lateEntries = await LateEntryLog.find(lateQuery).sort({ date: 1 }).lean();
+      for (const e of lateEntries) {
+        const sid = safeTrim(e.personId);
+        const row = {
+          date: e.date,
+          dateFormatted: formatDateStr(e.date),
+          batchCode: e.batchCode || null,
+          periodNo: e.periodNo || null,
+          delayMinutes: e.delayMinutes || 0,
+          reason: e.reason || null
+        };
+        if (e.entryType === 'LATE') {
+          if (!lateEntryByStaff.has(sid)) lateEntryByStaff.set(sid, []);
+          lateEntryByStaff.get(sid).push(row);
+        } else if (e.entryType === 'EARLY_LEAVE') {
+          if (!earlyLeavingByStaff.has(sid)) earlyLeavingByStaff.set(sid, []);
+          earlyLeavingByStaff.get(sid).push({ ...row, earlyByMinutes: e.delayMinutes || 0 });
+        }
+      }
+    }
+
+    // ── Fetch attendance records ──
+    let attendanceRecords = [];
+    if (needsAttendance) {
+      const attQuery = {
+        tenantId,
+        facultyId: { $in: allStaffIds },
+        isdeleted: false
+      };
+      if (fromDate || toDate) {
+        attQuery.date = {};
+        if (fromDate) attQuery.date.$gte = fromDate;
+        if (toDate) attQuery.date.$lte = toDate;
+      }
+      attendanceRecords = await Attendance.find(attQuery, { facultyId: 1, date: 1, batchCode: 1, periodNo: 1, subjectId: 1, students: 1 }).lean();
+    }
+
+    // ── Fetch assignments ──
+    let assignmentsByBatchStaff = new Map(); // staffId → rows[]
+    if (needsAssignments) {
+      // Get batches where staff teaches
+      const allBatches = await Batch.find({ tenantId, isdeleted: false, 'staffMap.staffId': { $in: allStaffIds } }, { batchId: 1, batchCode: 1, batchName: 1, staffMap: 1 }).lean();
+
+      const batchIdsByStaff = new Map(); // staffId → batchIds[]
+      for (const batch of allBatches) {
+        for (const sm of batch.staffMap || []) {
+          const sid = safeTrim(sm.staffId);
+          if (!allStaffIdSet.has(sid)) continue;
+          if (!batchIdsByStaff.has(sid)) batchIdsByStaff.set(sid, []);
+          batchIdsByStaff.get(sid).push({ batchId: batch.batchId, batchCode: batch.batchCode, batchName: batch.batchName, subjectId: sm.subjectId });
+        }
+      }
+
+      // Get all batchIds across all staff
+      const allBatchIds = [...new Set(allBatches.map((b) => b.batchId))];
+      const enableQuery = { tenantId, isdeleted: false, status: 'enabled', batchId: { $in: allBatchIds } };
+      const enabledTests = await BatchAssignEnable.find(enableQuery).lean();
+
+      // Fetch subject names for assignments
+      const asgSubjectIds = [...new Set(enabledTests.map((t) => safeTrim(t.subjectId)).filter(Boolean))];
+      const asgSubjectDocs = await Subject.find(
+        {
+          _id: {
+            $in: asgSubjectIds
+              .map((id) => {
+                try {
+                  return new mongoose.Types.ObjectId(id);
+                } catch {
+                  return null;
+                }
+              })
+              .filter(Boolean)
+          }
+        },
+        { subjectName: 1 }
+      ).lean();
+      const asgSubjectMap = new Map(asgSubjectDocs.map((s) => [String(s._id), s.subjectName]));
+
+      // Group enabled tests by batchId
+      const testsByBatch = new Map();
+      for (const t of enabledTests) {
+        const bid = safeTrim(t.batchId);
+        if (!testsByBatch.has(bid)) testsByBatch.set(bid, []);
+        testsByBatch.get(bid).push(t);
+      }
+
+      // Build per staff assignment rows
+      for (const [sid, batchInfoList] of batchIdsByStaff.entries()) {
+        if (!assignmentsByBatchStaff.has(sid)) assignmentsByBatchStaff.set(sid, []);
+        for (const bi of batchInfoList) {
+          const tests = testsByBatch.get(bi.batchId) || [];
+          // Filter tests for this staff's subject
+          const staffTests = tests.filter((t) => safeTrim(t.subjectId) === safeTrim(bi.subjectId));
+          for (const t of staffTests) {
+            const students = Array.isArray(t.students) ? t.students : [];
+            const total = students.length;
+            const completed = students.filter((s) => s.status === 'COMPLETED').length;
+            const completionPct = total > 0 ? round2((completed / total) * 100) : 0;
+            assignmentsByBatchStaff.get(sid).push({
+              batchCode: bi.batchCode,
+              batchName: bi.batchName || null,
+              subjectName: asgSubjectMap.get(safeTrim(t.subjectId)) || null,
+              testId: t.testId,
+              testNo: t.testNo || null,
+              enabledAt: t.enabledAt,
+              enabledAtFormatted: formatDateStr(t.enabledAt),
+              totalStudents: total,
+              completed,
+              completionPct
+            });
+          }
+        }
+        // Sort by batchCode then enabledAt
+        if (assignmentsByBatchStaff.has(sid)) {
+          assignmentsByBatchStaff.get(sid).sort((a, b) => {
+            const bc = (a.batchCode || '').localeCompare(b.batchCode || '');
+            if (bc !== 0) return bc;
+            return (a.enabledAt || 0) - (b.enabledAt || 0);
+          });
+        }
+      }
+    }
+
+    // ── Process timetable — teaching, cancelled, replaced ──
+    // staffId → section → periods[]
+    const timetableData = new Map(); // staffId → { teaching:[], cancelled:[], replaced:[] }
+
+    const ensureTTEntry = (staffId) => {
+      if (!timetableData.has(staffId)) {
+        timetableData.set(staffId, { teaching: [], cancelled: [], replaced: [] });
+      }
+      return timetableData.get(staffId);
+    };
+
+    if (needsTimetable && timetables.length) {
+      // Determine date range
+      let rangeStart = fromDate;
+      let rangeEnd = toDate;
+      if (!rangeStart || !rangeEnd) {
+        const wkStarts = timetables.map((tt) => toInt(tt.wkStartOn, 0)).filter(Boolean);
+        if (!rangeStart && wkStarts.length) rangeStart = Math.min(...wkStarts);
+        if (!rangeEnd && wkStarts.length) rangeEnd = Math.max(...wkStarts) + 6 * 86400000;
+      }
+
+      if (rangeStart && rangeEnd) {
+        const ttByWeekBatch = new Map();
+        for (const tt of timetables) {
+          const wk = toInt(tt.wkStartOn, 0);
+          if (!wk) continue;
+          ttByWeekBatch.set(`${wk}::${tt.batchCode}`, tt);
+        }
+
+        const activeBatchCodes = [...new Set(timetables.map((tt) => tt.batchCode).filter(Boolean))];
+        const msPerDay = 86400000;
+        const DAYS_ARR = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
+
+        for (let dayMs = rangeStart; dayMs <= rangeEnd; dayMs += msPerDay) {
+          const wkStart = getPreviousMonday1(dayMs);
+          const dayStr = DAYS_ARR[new Date(dayMs).getUTCDay()];
+
+          const matchesDate = (oMs) => {
+            const od = new Date(Number(oMs));
+            return Date.UTC(od.getUTCFullYear(), od.getUTCMonth(), od.getUTCDate()) === dayMs;
+          };
+
+          for (const bc of activeBatchCodes) {
+            const batchInfo = batchInfoMap.get(bc) || {};
+            const tt = ttByWeekBatch.get(`${wkStart}::${bc}`);
+            if (!tt) continue;
+
+            const dayOv = (tt.dayOverrides || []).find((ov) => matchesDate(ov.date));
+
+            // CANCEL_DAY
+            if (dayOv?.action === 'CANCEL_DAY') {
+              if (sections.includes('cancelled')) {
+                const baseDay = (tt.week || []).find((w) => String(w.day).toUpperCase() === dayStr);
+                for (const p of baseDay?.periods || []) {
+                  const fid = safeTrim(p.facultyId || '');
+                  if (!fid || !allStaffIdSet.has(fid)) continue;
+                  const startMin = toInt(p.time?.startMin, -1);
+                  const endMin = toInt(p.time?.endMin, -1);
+                  const mins = startMin >= 0 && endMin > startMin ? endMin - startMin : 0;
+                  ensureTTEntry(fid).cancelled.push({
+                    date: dayMs,
+                    dateFormatted: formatDateStr(dayMs),
+                    batchCode: bc,
+                    batchName: batchInfo.batchName || null,
+                    subject: subjectNameMap.get(String(p.subjectId || '')) || null,
+                    fromTime: formatTime(startMin),
+                    endTime: formatTime(endMin),
+                    hours: formatHoursFromMins(mins),
+                    mins,
+                    note: 'Day Cancelled'
+                  });
+                }
+              }
+              continue;
+            }
+
+            // Base periods
+            let basePeriods = [];
+            if (dayOv?.action === 'REPLACE_DAY') {
+              basePeriods = dayOv.periods || [];
+            } else {
+              const baseDay = (tt.week || []).find((w) => String(w.day).toUpperCase() === dayStr);
+              basePeriods = baseDay?.periods ? JSON.parse(JSON.stringify(baseDay.periods)) : [];
+            }
+
+            const periodMap = new Map();
+            basePeriods.forEach((p) => {
+              if (p.periodNo != null) periodMap.set(Number(p.periodNo), { ...p, _cancelled: false, _replaced: false });
+            });
+
+            const periodOvs = (tt.periodOverrides || []).filter((ov) => matchesDate(ov.date));
+            for (const ov of periodOvs) {
+              const pNo = Number(ov.periodNo);
+              if (!pNo) continue;
+              if (ov.action === 'CANCEL_PERIOD') {
+                const base = periodMap.get(pNo);
+                if (base) periodMap.set(pNo, { ...base, _cancelled: true });
+              } else if ((ov.action === 'REPLACE_PERIOD' || ov.action === 'ADD_PERIOD') && ov.period) {
+                const existing = periodMap.get(pNo);
+                periodMap.set(pNo, {
+                  ...ov.period,
+                  periodNo: pNo,
+                  _cancelled: false,
+                  _replaced: true,
+                  _originalFacultyId: existing?.facultyId || null
+                });
+              }
+            }
+
+            for (const [, p] of periodMap.entries()) {
+              const fid = safeTrim(p.facultyId || '');
+              const rfid = safeTrim(p.replacementFacultyId || '');
+              const subjectName = subjectNameMap.get(String(p.subjectId || '')) || null;
+              const startMin = toInt(p.time?.startMin, -1);
+              const endMin = toInt(p.time?.endMin, -1);
+              const mins = startMin >= 0 && endMin > startMin ? endMin - startMin : 0;
+
+              const periodRow = {
+                date: dayMs,
+                dateFormatted: formatDateStr(dayMs),
+                batchCode: bc,
+                batchName: batchInfo.batchName || null,
+                subject: subjectName,
+                fromTime: formatTime(startMin),
+                endTime: formatTime(endMin),
+                hours: formatHoursFromMins(mins),
+                mins
+              };
+
+              if (p._cancelled) {
+                if (sections.includes('cancelled') && fid && allStaffIdSet.has(fid)) {
+                  ensureTTEntry(fid).cancelled.push({ ...periodRow, note: 'Period Cancelled' });
+                }
+              } else if (rfid && rfid !== fid && allStaffIdSet.has(rfid)) {
+                // Original faculty loses period
+                if (sections.includes('cancelled') && fid && allStaffIdSet.has(fid)) {
+                  const staffMap2 = new Map(allStaff.map((s) => [s.staffId, s]));
+                  ensureTTEntry(fid).cancelled.push({
+                    ...periodRow,
+                    note: `Replaced by ${staffMap2.get(rfid)?.staffName || rfid}`
+                  });
+                }
+                // Replacement faculty gains period
+                if (sections.includes('replaced')) {
+                  ensureTTEntry(rfid).replaced.push({ ...periodRow });
+                }
+              } else if (fid && allStaffIdSet.has(fid)) {
+                if (sections.includes('teaching')) {
+                  ensureTTEntry(fid).teaching.push({ ...periodRow });
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // ── Build attendance marked/not-marked ──
+    const attMarkedByStaff = new Map();
+    const attNotMarkedByStaff = new Map();
+
+    if (needsAttendance && timetables.length) {
+      // Build attendance lookup: `${batchCode}_${date}_${periodNo}` → record
+      const attLookup = new Map();
+      for (const rec of attendanceRecords) {
+        const key = `${rec.batchCode}_${rec.date}_${rec.periodNo}`;
+        attLookup.set(key, rec);
+      }
+
+      // Re-use timetable iteration for attendance
+      let rangeStart = fromDate;
+      let rangeEnd = toDate;
+      if (!rangeStart || !rangeEnd) {
+        const wkStarts = timetables.map((tt) => toInt(tt.wkStartOn, 0)).filter(Boolean);
+        if (!rangeStart && wkStarts.length) rangeStart = Math.min(...wkStarts);
+        if (!rangeEnd && wkStarts.length) rangeEnd = Math.max(...wkStarts) + 6 * 86400000;
+      }
+
+      if (rangeStart && rangeEnd) {
+        const ttByWeekBatch = new Map();
+        for (const tt of timetables) {
+          const wk = toInt(tt.wkStartOn, 0);
+          if (!wk) continue;
+          ttByWeekBatch.set(`${wk}::${tt.batchCode}`, tt);
+        }
+
+        const activeBatchCodes = [...new Set(timetables.map((tt) => tt.batchCode).filter(Boolean))];
+        const msPerDay = 86400000;
+        const DAYS_ARR = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
+
+        for (let dayMs = rangeStart; dayMs <= rangeEnd; dayMs += msPerDay) {
+          const wkStart = getPreviousMonday1(dayMs);
+          const dayStr = DAYS_ARR[new Date(dayMs).getUTCDay()];
+
+          const matchesDate = (oMs) => {
+            const od = new Date(Number(oMs));
+            return Date.UTC(od.getUTCFullYear(), od.getUTCMonth(), od.getUTCDate()) === dayMs;
+          };
+
+          for (const bc of activeBatchCodes) {
+            const tt = ttByWeekBatch.get(`${wkStart}::${bc}`);
+            if (!tt) continue;
+
+            // Use getEffectivePeriods logic
+            const dayOv = (tt.dayOverrides || []).find((ov) => matchesDate(ov.date));
+            if (dayOv?.action === 'CANCEL_DAY') continue;
+
+            let basePeriods = [];
+            if (dayOv?.action === 'REPLACE_DAY') {
+              basePeriods = dayOv.periods || [];
+            } else {
+              const baseDay = (tt.week || []).find((w) => String(w.day).toUpperCase() === dayStr);
+              basePeriods = baseDay?.periods ? JSON.parse(JSON.stringify(baseDay.periods)) : [];
+            }
+
+            const periodMap = new Map();
+            basePeriods.forEach((p) => {
+              if (p.periodNo != null) periodMap.set(Number(p.periodNo), p);
+            });
+
+            for (const [, p] of periodMap.entries()) {
+              const fid = safeTrim(p.replacementFacultyId || p.facultyId || '');
+              if (!fid || !allStaffIdSet.has(fid)) continue;
+
+              const subjectName = subjectNameMap.get(String(p.subjectId || '')) || null;
+              const attKey = `${bc}_${dayMs}_${p.periodNo}`;
+              const attRec = attLookup.get(attKey);
+              const isMarked = !!(attRec && safeTrim(attRec.facultyId) === fid);
+
+              const row = {
+                date: dayMs,
+                dateFormatted: formatDateStr(dayMs),
+                batchCode: bc,
+                periodNo: p.periodNo,
+                subject: subjectName
+              };
+
+              if (isMarked && sections.includes('attendanceMarked')) {
+                const students = Array.isArray(attRec.students) ? attRec.students : [];
+                const presentCount = students.filter((s) => s.status === 'PRESENT').length;
+                const absentCount = students.filter((s) => s.status === 'ABSENT').length;
+                const lateCount = students.filter((s) => s.status === 'LATE').length;
+                if (!attMarkedByStaff.has(fid)) attMarkedByStaff.set(fid, []);
+                attMarkedByStaff.get(fid).push({
+                  ...row,
+                  presentCount,
+                  absentCount,
+                  lateCount,
+                  total: students.length
+                });
+              } else if (!isMarked && sections.includes('attendanceNotMarked')) {
+                if (!attNotMarkedByStaff.has(fid)) attNotMarkedByStaff.set(fid, []);
+                attNotMarkedByStaff.get(fid).push(row);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // ── Build final response ──
+    const data = [];
+
+    for (const staff of allStaff) {
+      const sid = safeTrim(staff.staffId);
+      const ttEntry = timetableData.get(sid) || { teaching: [], cancelled: [], replaced: [] };
+
+      const sortByDate = (arr) =>
+        [...arr].sort((a, b) => {
+          if (a.date !== b.date) return a.date - b.date;
+          return (a.fromTime || a.dateFormatted || '').localeCompare(b.fromTime || b.dateFormatted || '');
+        });
+
+      const staffData = {
+        staffId: sid,
+        staffName: staff.staffName,
+        staffCode: staff.staffCode || null,
+        centerName: staff.centerName || null
+      };
+
+      if (sections.includes('teaching')) {
+        const periods = sortByDate(ttEntry.teaching);
+        staffData.teaching = {
+          count: periods.length,
+          totalHours: formatHoursFromMins(periods.reduce((s, p) => s + p.mins, 0)),
+          periods
+        };
+      }
+      if (sections.includes('cancelled')) {
+        const periods = sortByDate(ttEntry.cancelled);
+        staffData.cancelled = {
+          count: periods.length,
+          totalHours: formatHoursFromMins(periods.reduce((s, p) => s + p.mins, 0)),
+          periods
+        };
+      }
+      if (sections.includes('replaced')) {
+        const periods = sortByDate(ttEntry.replaced);
+        staffData.replaced = {
+          count: periods.length,
+          totalHours: formatHoursFromMins(periods.reduce((s, p) => s + p.mins, 0)),
+          periods
+        };
+      }
+      if (sections.includes('tasks')) {
+        const tasks = tasksByStaff.get(sid) || [];
+        staffData.tasks = { count: tasks.length, tasks };
+      }
+      if (sections.includes('lateEntry')) {
+        const entries = lateEntryByStaff.get(sid) || [];
+        staffData.lateEntry = { count: entries.length, entries };
+      }
+      if (sections.includes('earlyLeaving')) {
+        const entries = earlyLeavingByStaff.get(sid) || [];
+        staffData.earlyLeaving = { count: entries.length, entries };
+      }
+      if (sections.includes('attendanceMarked')) {
+        const periods = (attMarkedByStaff.get(sid) || []).sort((a, b) => a.date - b.date);
+        staffData.attendanceMarked = { count: periods.length, periods };
+      }
+      if (sections.includes('attendanceNotMarked')) {
+        const periods = (attNotMarkedByStaff.get(sid) || []).sort((a, b) => a.date - b.date);
+        staffData.attendanceNotMarked = { count: periods.length, periods };
+      }
+      if (sections.includes('assignments')) {
+        const rows = assignmentsByBatchStaff.get(sid) || [];
+        staffData.assignments = { count: rows.length, rows };
+      }
+
+      data.push(staffData);
+    }
+
+    return res.status(200).json({
+      status: true,
+      count: data.length,
+      sections,
+      fromDate: fromDate || null,
+      toDate: toDate || null,
+      data
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   getFacultyBatchReport,
   getTaskReport,
@@ -1183,5 +2156,6 @@ export default {
   getStaffAttendanceReport,
   getStaffFeedbackReport,
   getStaffExamReport,
-  getFacultyLoadReport
+  getFacultyLoadReport,
+  getFacultyReport
 };
