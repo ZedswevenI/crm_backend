@@ -735,60 +735,157 @@ const listActivities = async (req, res, next) => {
   }
 };
 
+// const bulkUploadActivities = async (req, res, next) => {
+//   try {
+//     const tenantId = pickTenantId(req);
+//     const userId = safeTrim(req.body?.userId);
+//     const rows = req.body?.rows;
+//     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+//     if (!Array.isArray(rows) || rows.length === 0) {
+//       return res.status(400).json({ status: false, message: 'rows array is required and cannot be empty' });
+//     }
+//     const report = { successCount: 0, failedCount: 0, errors: [] };
+//     const bulkOps = [];
+//     for (let i = 0; i < rows.length; i++) {
+//       const r = rows[i];
+//       const bCode = safeTrim(r.BatchCode);
+//       const actName = safeTrim(r.Activity);
+//       const startMs = parseDateToEpoch(r.StartDate);
+//       const endMs = parseDateToEpoch(r.EndDate);
+//       if (!bCode || !actName || !startMs || !endMs) {
+//         report.failedCount++;
+//         report.errors.push({ row: i + 1, BatchCode: bCode, reason: 'Missing mandatory fields (BatchCode, Activity, StartDate, EndDate)' });
+//         continue;
+//       }
+//       bulkOps.push({
+//         updateOne: {
+//           filter: {
+//             tenantId,
+//             batchCode: bCode,
+//             activityName: actName,
+//             startDate: startMs,
+//             isdeleted: false
+//           },
+//           update: {
+//             $setOnInsert: {
+//               activityId: uuid(),
+//               createdBy: userId,
+//               status: 'PLANNED'
+//             },
+//             $set: {
+//               centerCode: safeTrim(r.CentCode) || null,
+//               sno: r.sno ? Number(r.sno) : null,
+//               endDate: endMs,
+//               remarks: safeTrim(r.Remarks) !== 'NULL' ? safeTrim(r.Remarks) : null,
+//               actualStartDate: parseDateToEpoch(r.ActualStartDate),
+//               actualEndDate: parseDateToEpoch(r.ActualEndDate),
+//               updatedBy: userId
+//             }
+//           },
+//           upsert: true
+//         }
+//       });
+//       report.successCount++;
+//     }
+//     if (bulkOps.length > 0) {
+//       const bulkResult = await Activity.bulkWrite(bulkOps, { ordered: false });
+//       console.log('bulkResult ', bulkResult);
+//       report.successCount = (bulkResult.upsertedCount || 0) + (bulkResult.modifiedCount || 0);
+//     }
+//     return res.status(200).json({
+//       status: true,
+//       message: `Bulk upload processed. Success: ${report.successCount}, Failed: ${report.failedCount}`,
+//       data: report
+//     });
+//   } catch (err) {
+//     console.log(err);
+//     return next(err);
+//   }
+// };
+
 const bulkUploadActivities = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     const userId = safeTrim(req.body?.userId);
     const rows = req.body?.rows;
+
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
     if (!Array.isArray(rows) || rows.length === 0) {
       return res.status(400).json({ status: false, message: 'rows array is required and cannot be empty' });
     }
+
     const report = { successCount: 0, failedCount: 0, errors: [] };
-    const bulkOps = [];
+    const docsToInsert = [];
+
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i];
       const bCode = safeTrim(r.BatchCode);
       const actName = safeTrim(r.Activity);
       const startMs = parseDateToEpoch(r.StartDate);
       const endMs = parseDateToEpoch(r.EndDate);
+
       if (!bCode || !actName || !startMs || !endMs) {
         report.failedCount++;
-        report.errors.push({ row: i + 1, BatchCode: bCode, reason: 'Missing mandatory fields (BatchCode, Activity, StartDate, EndDate)' });
+        report.errors.push({
+          row: i + 1,
+          BatchCode: bCode,
+          reason: 'Missing mandatory fields (BatchCode, Activity, StartDate, EndDate)'
+        });
         continue;
       }
-      bulkOps.push({
-        updateOne: {
-          filter: {
-            tenantId,
-            batchCode: bCode,
-            activityName: actName,
-            startDate: startMs,
-            isdeleted: false
-          },
-          update: {
-            $setOnInsert: {
-              activityId: uuid(),
-              createdBy: userId
-            },
-            $set: {
-              centerCode: safeTrim(r.CentCode) || null,
-              sno: r.sno ? Number(r.sno) : null,
-              endDate: endMs,
-              remarks: safeTrim(r.Remarks) !== 'NULL' ? safeTrim(r.Remarks) : null,
-              actualStartDate: parseDateToEpoch(r.ActualStartDate),
-              actualEndDate: parseDateToEpoch(r.ActualEndDate),
-              updatedBy: userId
-            }
-          },
-          upsert: true
-        }
+
+      // Safe sno parsing to prevent CastError "NaN"
+      const parsedSno = r.sno !== null && r.sno !== undefined && r.sno.toString().trim() !== '' && !isNaN(Number(r.sno)) ? Number(r.sno) : null;
+
+      // Build the raw document
+      docsToInsert.push({
+        tenantId,
+        activityId: uuid(), // Generates your unique string ID
+        batchCode: bCode,
+        activityName: actName,
+        startDate: startMs,
+        endDate: endMs,
+        createdBy: userId,
+        updatedBy: userId,
+        centerCode: safeTrim(r.CentCode) || null,
+        sno: parsedSno,
+        remarks: safeTrim(r.Remarks) !== 'NULL' ? safeTrim(r.Remarks) : null,
+        actualStartDate: parseDateToEpoch(r.ActualStartDate),
+        actualEndDate: parseDateToEpoch(r.ActualEndDate),
+        status: 'PLANNED',
+        isdeleted: false
       });
-      report.successCount++;
     }
-    if (bulkOps.length > 0) {
-      await Activity.bulkWrite(bulkOps, { ordered: false });
+
+    if (docsToInsert.length > 0) {
+      try {
+        // ordered: false skips duplicates/errors but successfully inserts the rest
+        const result = await Activity.insertMany(docsToInsert, { ordered: false });
+        report.successCount = result.length;
+      } catch (error) {
+        // If ordered: false hits a constraint (like Duplicate Key), it throws a MongoBulkWriteError
+        if (error.name === 'MongoBulkWriteError' || error.code === 11000) {
+          // Track how many actually succeeded
+          report.successCount = error.insertedDocs ? error.insertedDocs.length : 0;
+
+          // Track the ones that failed
+          const writeErrors = error.writeErrors || [];
+          report.failedCount += writeErrors.length;
+
+          // Add them to the error report
+          writeErrors.forEach((err) => {
+            report.errors.push({
+              reason: 'Database rejection (likely duplicate or constraint)',
+              details: err.errmsg
+            });
+          });
+        } else {
+          // If it's a completely different error, throw it to the main catch block
+          throw error;
+        }
+      }
     }
+
     return res.status(200).json({
       status: true,
       message: `Bulk upload processed. Success: ${report.successCount}, Failed: ${report.failedCount}`,
