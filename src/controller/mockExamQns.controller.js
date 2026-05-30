@@ -166,10 +166,41 @@ const createQuestion = async (req, res, next) => {
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
     if (!examId) return res.status(400).json({ status: false, message: 'examId is required' });
     if (!sectionId) return res.status(400).json({ status: false, message: 'sectionId is required' });
-    const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }, { 'sections.sectionId': 1, 'sections.subjectId': 1 }).lean();
+    // const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }, { 'sections.sectionId': 1, 'sections.subjectId': 1 }).lean();
+    const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }, { 'sections.sectionId': 1, 'sections.subjectId': 1, 'sections.numberOfQuestions': 1, 'sections.sectionName': 1, totalQuestions: 1 }).lean();
     if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
     const section = (exam.sections || []).find((s) => safeTrim(s.sectionId) === sectionId);
     if (!section) return res.status(400).json({ status: false, message: 'sectionId not found in this exam' });
+    const sectionLimit = toNum(section.numberOfQuestions);
+    if (sectionLimit > 0) {
+      const currentSectionCount = await MockExamQns.countDocuments({
+        tenantId,
+        examId,
+        sectionId,
+        isdeleted: false
+      });
+      if (currentSectionCount >= sectionLimit) {
+        return res.status(400).json({
+          status: false,
+          message: `Section "${section.sectionName}" is already at its question limit (${sectionLimit})`
+        });
+      }
+    }
+    const examData = await MockExam.findOne({ tenantId, examId, isdeleted: false }, { totalQuestions: 1 }).lean();
+    const examLimit = toNum(examData?.totalQuestions);
+    if (examLimit > 0) {
+      const currentTotalCount = await MockExamQns.countDocuments({
+        tenantId,
+        examId,
+        isdeleted: false
+      });
+      if (currentTotalCount >= examLimit) {
+        return res.status(400).json({
+          status: false,
+          message: `Exam is already at its total question limit (${examLimit})`
+        });
+      }
+    }
     const subjectIdRaw = req.body?.subjectId || section.subjectId;
     if (!subjectIdRaw || !mustObjId(subjectIdRaw)) return res.status(400).json({ status: false, message: 'subjectId is required' });
     if (req.body?.passageId && !mustObjId(req.body.passageId)) return res.status(400).json({ status: false, message: 'Invalid passageId' });
@@ -274,8 +305,8 @@ const createQuestionsBulk = async (req, res, next) => {
         enableInstruction: q?.enableInstruction === true,
         enableSolution: q?.enableSolution === true,
         questionOptions: normalizeOptions(q?.questionOptions),
-        leftColumn: normalizeColumns(q?.leftColumn),
-        rightColumn: normalizeColumns(q?.rightColumn),
+        leftColumn: normalizeColumns(q.leftColumn || []),
+        rightColumn: normalizeColumns(q.rightColumn || []),
         correctAnswer: String(q?.correctAnswer || ''),
         tags: Array.isArray(q?.tags) ? q.tags.map(safeTrim).filter(Boolean) : [],
         sortOrder: toNum(q?.sortOrder, idx),
@@ -666,6 +697,8 @@ const createQuestionsBulkInBank = async (req, res, next) => {
         questionHtml: q.questionHtml || '',
         passageId: q.passageId || null,
         passageHtml: q.passageId ? '' : q.passageHtml || '',
+        leftColumn: normalizeColumns(q.leftColumn || []),
+        rightColumn: normalizeColumns(q.rightColumn || []),
         instructionHtml: q.instructionHtml || '',
         solutionHtml: q.solutionHtml || '',
         enablePassage: !!q.enablePassage,
@@ -735,7 +768,7 @@ const mapQuestionToExam = async (req, res, next) => {
     if (!recId) return res.status(400).json({ status: false, message: 'recId (_id) is required' });
     if (!examId) return res.status(400).json({ status: false, message: 'examId is required' });
     if (!sectionId) return res.status(400).json({ status: false, message: 'sectionId is required' });
-    const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false });
+    const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }).lean();
     if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
     const section = (exam.sections || []).find((s) => safeTrim(s.sectionId) === sectionId);
     if (!section) {
@@ -765,6 +798,35 @@ const mapQuestionToExam = async (req, res, next) => {
         message: 'This question is already mapped to this exam section'
       });
     }
+    const sectionLimit = toNum(section.numberOfQuestions);
+    if (sectionLimit > 0) {
+      const currentSectionCount = await MockExamQns.countDocuments({
+        tenantId,
+        examId,
+        sectionId,
+        isdeleted: false
+      });
+      if (currentSectionCount >= sectionLimit) {
+        return res.status(400).json({
+          status: false,
+          message: `Section "${section.sectionName}" is already at its question limit (${sectionLimit})`
+        });
+      }
+    }
+    const examLimit = toNum(exam.totalQuestions);
+    if (examLimit > 0) {
+      const currentTotalCount = await MockExamQns.countDocuments({
+        tenantId,
+        examId,
+        isdeleted: false
+      });
+      if (currentTotalCount >= examLimit) {
+        return res.status(400).json({
+          status: false,
+          message: `Exam is already at its total question limit (${examLimit})`
+        });
+      }
+    }
     const resolvedSubjectId = question.subjectId || (section.subjectId ? new mongoose.Types.ObjectId(String(section.subjectId)) : null);
     const questionNo = await generateQuestionNo(tenantId, resolvedSubjectId);
     const raw = { ...question };
@@ -784,22 +846,15 @@ const mapQuestionToExam = async (req, res, next) => {
       updatedBy: userId || null,
       isdeleted: false
     });
-    const secIdx = (exam.sections || []).findIndex((s) => safeTrim(s.sectionId) === sectionId);
-    if (secIdx >= 0) {
-      exam.sections[secIdx].numberOfQuestions = (exam.sections[secIdx].numberOfQuestions || 0) + 1;
-      exam.markModified('sections');
-    }
-    exam.totalQuestions = (toNum(exam.totalQuestions) || 0) + 1;
-    exam.totalMarks = (toNum(exam.totalMarks) || 0) + toNum(question.positiveMarks);
-    exam.updatedBy = userId || null;
-    await exam.save();
+    const actualTotal = await MockExamQns.countDocuments({ tenantId, examId, isdeleted: false });
+    const actualSection = await MockExamQns.countDocuments({ tenantId, examId, sectionId, isdeleted: false });
     return res.status(200).json({
       status: true,
       message: 'Question mapped to exam successfully',
       data: {
         ...copy.toObject(),
-        examTotalQuestions: exam.totalQuestions,
-        examTotalMarks: exam.totalMarks
+        examTotalQuestions: actualTotal,
+        sectionQuestionCount: actualSection
       }
     });
   } catch (err) {
@@ -825,25 +880,17 @@ const unmapQuestionFromExam = async (req, res, next) => {
       });
     }
     await MockExamQns.findOneAndUpdate({ _id: recId, tenantId, isdeleted: false }, { $set: { isdeleted: true, status: 'inactive', updatedBy: userId || null } });
-    const exam = await MockExam.findOne({ tenantId, examId: question.examId, isdeleted: false });
-    if (exam) {
-      const secIdx = (exam.sections || []).findIndex((s) => safeTrim(s.sectionId) === safeTrim(question.sectionId));
-      if (secIdx >= 0) {
-        exam.sections[secIdx].numberOfQuestions = Math.max(0, (exam.sections[secIdx].numberOfQuestions || 0) - 1);
-        exam.markModified('sections');
-      }
-      exam.totalQuestions = Math.max(0, (toNum(exam.totalQuestions) || 0) - 1);
-      exam.totalMarks = Math.max(0, (toNum(exam.totalMarks) || 0) - toNum(question.positiveMarks));
-      exam.updatedBy = userId || null;
-      await exam.save();
-    }
+    const actualTotal = await MockExamQns.countDocuments({
+      tenantId,
+      examId: question.examId,
+      isdeleted: false
+    });
     return res.status(200).json({
       status: true,
       message: 'Question removed from exam. Bank question untouched.',
       data: {
         removedQuestionId: question.questionId,
-        examTotalQuestions: exam?.totalQuestions ?? null,
-        examTotalMarks: exam?.totalMarks ?? null
+        examTotalQuestions: actualTotal
       }
     });
   } catch (err) {
@@ -863,11 +910,24 @@ const bulkMapQuestionsToExam = async (req, res, next) => {
     if (!examId) return res.status(400).json({ status: false, message: 'examId is required' });
     if (!sectionId) return res.status(400).json({ status: false, message: 'sectionId is required' });
     if (!recIds.length) return res.status(400).json({ status: false, message: 'recIds[] is required' });
-    const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false });
+    const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }).lean();
     if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
     const section = (exam.sections || []).find((s) => safeTrim(s.sectionId) === sectionId);
     if (!section) {
       return res.status(400).json({ status: false, message: `Section ${sectionId} not found in exam` });
+    }
+    const currentTotalCount = await MockExamQns.countDocuments({ tenantId, examId, isdeleted: false });
+    const currentSectionCount = await MockExamQns.countDocuments({ tenantId, examId, sectionId, isdeleted: false });
+    const sectionLimit = toNum(section.numberOfQuestions);
+    const examLimit = toNum(exam.totalQuestions);
+    const sectionSlots = sectionLimit > 0 ? sectionLimit - currentSectionCount : Infinity;
+    const examSlots = examLimit > 0 ? examLimit - currentTotalCount : Infinity;
+    const canAdd = Math.min(sectionSlots, examSlots);
+    if (canAdd <= 0) {
+      return res.status(400).json({
+        status: false,
+        message: sectionSlots <= 0 ? `Section "${section.sectionName}" is already at its question limit (${sectionLimit})` : `Exam is already at its total question limit (${examLimit})`
+      });
     }
     const questions = await MockExamQns.find({ _id: { $in: recIds }, tenantId, isdeleted: false }).lean();
     if (!questions.length) {
@@ -907,6 +967,15 @@ const bulkMapQuestionsToExam = async (req, res, next) => {
           });
           continue;
         }
+        // inside the for loop, before pushing to newDocs:
+        if (newDocs.length >= canAdd) {
+          results.skipped++;
+          results.errors.push({
+            recId: String(question._id),
+            message: `Limit reached — only ${canAdd} question(s) could be added`
+          });
+          continue;
+        }
         const resolvedSubjectId = question.subjectId || (section.subjectId ? new mongoose.Types.ObjectId(String(section.subjectId)) : null);
         const questionNo = await generateQuestionNo(tenantId, resolvedSubjectId);
         const raw = { ...question };
@@ -936,24 +1005,15 @@ const bulkMapQuestionsToExam = async (req, res, next) => {
     if (newDocs.length) {
       await MockExamQns.insertMany(newDocs, { ordered: false });
     }
-    if (totalQuestionsAdded > 0) {
-      const secIdx = (exam.sections || []).findIndex((s) => safeTrim(s.sectionId) === sectionId);
-      if (secIdx >= 0) {
-        exam.sections[secIdx].numberOfQuestions = (exam.sections[secIdx].numberOfQuestions || 0) + totalQuestionsAdded;
-        exam.markModified('sections');
-      }
-      exam.totalQuestions = (toNum(exam.totalQuestions) || 0) + totalQuestionsAdded;
-      exam.totalMarks = (toNum(exam.totalMarks) || 0) + totalMarksAdded;
-      exam.updatedBy = userId || null;
-      await exam.save();
-    }
+    const actualTotal = await MockExamQns.countDocuments({ tenantId, examId, isdeleted: false });
+    const actualSection = await MockExamQns.countDocuments({ tenantId, examId, sectionId, isdeleted: false });
     return res.status(200).json({
       status: true,
       message: `Bulk map complete — ${results.mapped} mapped, ${results.skipped} skipped`,
       data: {
         ...results,
-        examTotalQuestions: exam.totalQuestions,
-        examTotalMarks: exam.totalMarks
+        examTotalQuestions: actualTotal,
+        sectionQuestionCount: actualSection
       }
     });
   } catch (err) {
@@ -1068,6 +1128,38 @@ const bulkUploadAnswers = async (req, res, next) => {
   }
 };
 
+const previewNextQuestionNo = async (req, res, next) => {
+  try {
+    const tenantId = pickTid(req);
+    const subjectId = safeTrim(req.body?.subjectId);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+    if (!subjectId) return res.status(400).json({ status: false, message: 'subjectId is required' });
+
+    // Get subject prefix — same logic as generateQuestionNo
+    let subjectPrefix = 'GEN';
+    const subjectDoc = await Subject.findOne({ _id: subjectId, isdeleted: false }, { subjectCode: 1 }).lean();
+    if (subjectDoc?.subjectCode) {
+      subjectPrefix = safeTrim(subjectDoc.subjectCode)
+        .toUpperCase()
+        .replace(/[^A-Z0-9]/g, '')
+        .substring(0, 3)
+        .padEnd(3, 'X');
+    }
+
+    // READ current counter value — no increment
+    const counterKey = `questionNo_${subjectPrefix}`;
+    const doc = await Counter.findOne({ tenantId, key: counterKey }).lean();
+    const nextSeq = (doc?.seq ?? 0) + 1;
+
+    return res.status(200).json({
+      status: true,
+      questionNo: `Q${subjectPrefix}${String(nextSeq).padStart(5, '0')}`
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   uploadImage,
   getImage,
@@ -1087,5 +1179,6 @@ export default {
   mapQuestionToExam,
   unmapQuestionFromExam,
   bulkMapQuestionsToExam,
-  bulkUploadAnswers
+  bulkUploadAnswers,
+  previewNextQuestionNo
 };

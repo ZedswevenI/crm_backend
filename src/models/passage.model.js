@@ -6,6 +6,8 @@ const ExamPassageSchema = new mongoose.Schema(
     passageId: { type: String, required: true, trim: true },
     title: { type: String, required: true, trim: true },
     passageHtml: { type: String, default: '', trim: false },
+    subjectId: { type: mongoose.Schema.Types.ObjectId, ref: 'subject', default: null },
+    classNo: { type: Number, default: null, min: 6, max: 13 },
     language: {
       type: String,
       default: 'en',

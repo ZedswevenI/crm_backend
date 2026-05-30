@@ -52,6 +52,7 @@ routes.post('/questions/sort-order', validatetoken, mockExamQnsController.update
 routes.post('/questions/upload-image', validatetoken, uploadQuestionImage, mockExamQnsController.uploadImage);
 routes.post('/questions/image/download', mockExamQnsController.getImage);
 routes.post('/questions/bulk-upload-answers', validatetoken, mockExamQnsController.bulkUploadAnswers);
+routes.post('/questions/preview-question-no', validatetoken, mockExamQnsController.previewNextQuestionNo);
 
 // QUestion Bank Routes
 routes.post('/questions/bank/create', validatetoken, mockExamQnsController.createQuestionInBank);

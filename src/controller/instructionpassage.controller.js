@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import path from 'path';
 import logger from '../helpers/logger.js';
+import mongoose from 'mongoose';
 import { PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import s3Client from '../middlewares/s3config.js';
@@ -23,6 +24,13 @@ function buildImageKeypass(name) {
     .replace(/[^a-zA-Z0-9_\-]/g, '');
   return `mockexam/questions/${base}-${Date.now()}-${crypto.randomBytes(8).toString('hex')}${ext}`;
 }
+
+const toNum = (v) => {
+  const n = Number(String(v ?? '').trim());
+  return Number.isFinite(n) ? n : 0;
+};
+
+const mustObjId = (id) => mongoose.Types.ObjectId.isValid(String(id || ''));
 
 function buildImageKeyInst(name) {
   const ext = path.extname(name) || '';
@@ -180,10 +188,6 @@ const deleteInstruction = async (req, res, next) => {
   }
 };
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// EXAM PASSAGE CRUD
-// ═══════════════════════════════════════════════════════════════════════════════
-
 const createPassage = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
@@ -192,11 +196,16 @@ const createPassage = async (req, res, next) => {
     const passageHtml = req.body?.passageHtml ?? '';
     const language = safeTrim(req.body?.language) || 'en';
     const tags = Array.isArray(req.body?.tags) ? req.body.tags.map(safeTrim).filter(Boolean) : [];
-
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
     if (!title) return res.status(400).json({ status: false, message: 'title is required' });
     if (!passageHtml) return res.status(400).json({ status: false, message: 'passageHtml is required' });
-
+    const toNum = (v) => {
+      const n = Number(String(v ?? '').trim());
+      return Number.isFinite(n) ? n : 0;
+    };
+    const mustObjId = (id) => mongoose.Types.ObjectId.isValid(String(id || ''));
+    const subjectId = req.body?.subjectId && mustObjId(req.body.subjectId) ? new mongoose.Types.ObjectId(String(req.body.subjectId)) : null;
+    const classNo = req.body?.classNo ? toNum(req.body.classNo) : null;
     const doc = await ExamPassage.create({
       tenantId,
       passageId: uuid(),
@@ -204,12 +213,13 @@ const createPassage = async (req, res, next) => {
       passageHtml,
       language,
       tags,
+      subjectId,
+      classNo,
       status: 'active',
       createdBy: userId || null,
       updatedBy: null,
       isdeleted: false
     });
-
     return res.status(201).json({ status: true, message: 'Passage created successfully', data: doc });
   } catch (err) {
     if (err?.code === 11000) return res.status(409).json({ status: false, message: 'Duplicate passageId' });
@@ -222,10 +232,8 @@ const updatePassage = async (req, res, next) => {
     const tenantId = pickTid(req);
     const userId = pickUid(req);
     const recId = safeTrim(req.body?.recId);
-
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
     if (!recId) return res.status(400).json({ status: false, message: 'recId is required' });
-
     const set = {};
     if (req.body?.title !== undefined) {
       const v = safeTrim(req.body.title);
@@ -241,13 +249,16 @@ const updatePassage = async (req, res, next) => {
       if (v) set.status = v;
     }
     if (Array.isArray(req.body?.tags)) set.tags = req.body.tags.map(safeTrim).filter(Boolean);
-
+    if (req.body?.subjectId !== undefined) {
+      set.subjectId = req.body.subjectId && mustObjId(req.body.subjectId) ? new mongoose.Types.ObjectId(String(req.body.subjectId)) : null;
+    }
+    if (req.body?.classNo !== undefined) {
+      set.classNo = req.body.classNo ? toNum(req.body.classNo) : null;
+    }
     if (!Object.keys(set).length) return res.status(400).json({ status: false, message: 'No fields to update' });
     set.updatedBy = userId || null;
-
     const updated = await ExamPassage.findOneAndUpdate({ _id: recId, tenantId, isdeleted: false }, { $set: set }, { new: true }).lean();
     if (!updated) return res.status(404).json({ status: false, message: 'Passage not found' });
-
     return res.status(200).json({ status: true, message: 'Passage updated successfully', data: updated });
   } catch (err) {
     return next(err);
@@ -258,12 +269,10 @@ const listPassages = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 10));
     const skip = (page - 1) * limit;
     const listAll = String(req.query.list || '').toLowerCase() === 'full';
-
     const query = { tenantId, isdeleted: false };
     if (req.query.status) query.status = safeTrim(req.query.status);
     if (req.query.language) query.language = safeTrim(req.query.language);
@@ -271,15 +280,19 @@ const listPassages = async (req, res, next) => {
     if (req.query.search) {
       query.title = { $regex: safeTrim(req.query.search), $options: 'i' };
     }
-
+    if (req.query.subjectId && mustObjId(req.query.subjectId)) {
+      query.subjectId = new mongoose.Types.ObjectId(String(req.query.subjectId));
+    }
+    if (req.query.classNo) {
+      query.classNo = toNum(req.query.classNo);
+    }
     let rows, count;
     if (listAll) {
-      rows = await ExamPassage.find(query).sort('-createdAt').lean();
+      rows = await ExamPassage.find(query).populate('subjectId', 'subjectName subjectCode').sort('-createdAt').lean();
       count = rows.length;
     } else {
-      [rows, count] = await Promise.all([ExamPassage.find(query).sort('-createdAt').skip(skip).limit(limit).lean(), ExamPassage.countDocuments(query)]);
+      [rows, count] = await Promise.all([ExamPassage.find(query).sort('-createdAt').skip(skip).limit(limit).populate('subjectId', 'subjectName subjectCode').lean(), ExamPassage.countDocuments(query)]);
     }
-
     return res.status(200).json({ status: true, message: 'Passages loaded', data: rows, count, ...(listAll ? {} : { page, limit }) });
   } catch (err) {
     return next(err);
@@ -291,13 +304,10 @@ const deletePassage = async (req, res, next) => {
     const tenantId = pickTid(req);
     const userId = pickUid(req);
     const recId = safeTrim(req.body?.recId);
-
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
     if (!recId) return res.status(400).json({ status: false, message: 'recId is required' });
-
     const doc = await ExamPassage.findOneAndUpdate({ _id: recId, tenantId, isdeleted: false }, { $set: { isdeleted: true, updatedBy: userId || null } }, { new: true }).lean();
     if (!doc) return res.status(404).json({ status: false, message: 'Passage not found or already deleted' });
-
     return res.status(200).json({ status: true, message: 'Passage deleted successfully' });
   } catch (err) {
     return next(err);

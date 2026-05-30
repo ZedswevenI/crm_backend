@@ -21,6 +21,9 @@ routes.post('/batch/feedback', validatetoken, batchReCtrl.getFeedbackReport);
 routes.post('/batch/ptm', validatetoken, batchReCtrl.getBatchPtmReport);
 routes.post('/batch/cgpa', validatetoken, batchReCtrl.getCgpaReport);
 routes.post('/batch/slash', validatetoken, batchReCtrl.getSlashReport);
+routes.post('/batch/subjects-by-batch', validatetoken, batchReCtrl.getSubjectsByBatch);
+routes.post('/batch/assignment-report', validatetoken, batchReCtrl.getAssignmentReport);
+routes.post('/batch/slash-detail', validatetoken, batchReCtrl.getSlashDetailReport);
 
 routes.post('/student/attendance', validatetoken, studentReCtrl.getStudentAttendanceReport);
 routes.post('/student/remarks', validatetoken, studentReCtrl.getStudentRemarksReport);
@@ -38,6 +41,7 @@ routes.post('/teacher/attendance', validatetoken, staffReCtrl.getStaffAttendance
 routes.post('/teacher/feedback', validatetoken, staffReCtrl.getStaffFeedbackReport);
 routes.post('/teacher/exams', validatetoken, staffReCtrl.getStaffExamReport);
 routes.post('/teacher/load', validatetoken, staffReCtrl.getFacultyLoadReport);
+routes.post('/teacher/faculty-report', validatetoken, staffReCtrl.getFacultyReport);
 
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Batch routes' }));
 
