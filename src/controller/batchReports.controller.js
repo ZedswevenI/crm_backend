@@ -11,6 +11,10 @@ import MockExamBatchAssign from '../models/mockExambatchmapping.model.js';
 import MockExam from '../models/mockExam.model.js';
 import Assignment from '../models/assignment.model.js';
 import PTM from '../models/ptm.model.js';
+import ExamCategory from '../models/examcategory.model.js';
+import ExamSubCategory from '../models/examsubcategory.model.js';
+import Topic from '../models/topic.model.js';
+import SubTopic from '../models/subtopic.model.js';
 import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -98,7 +102,6 @@ const getEffectivePeriods = (tt, dateMs) => {
   return Array.from(baseMap.values()).sort((a, b) => (a.periodNo || 0) - (b.periodNo || 0));
 };
 
-// ─── Helpers: resolve single or multiple batch ───────────────────────────────
 const resolveBatch = async (tenantId, batchId, batchCode) => {
   const q = { tenantId, isdeleted: false };
   if (batchId) q.batchId = safeTrim(batchId);
@@ -127,19 +130,13 @@ const applyBatchCodeFilter = (query, batchCodes) => {
   else if (batchCodes.length > 1) query.batchCode = { $in: batchCodes };
 };
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// REPORT 1 — Student List with Profile
-// POST /batch/reports/students
-// ═══════════════════════════════════════════════════════════════════════════════
 const getStudentListReport = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     const batchIds = pickBatchIds(req);
     const search = safeTrim(req.body?.search || '');
     const status = safeTrim(req.body?.status || 'ACTIVE');
-
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-
     const query = { tenantId, isdeleted: false };
     applyBatchIdFilter(query, batchIds);
     if (status && status !== 'ALL') query.status = status;
@@ -147,9 +144,7 @@ const getStudentListReport = async (req, res, next) => {
       const rx = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
       query.$or = [{ admissionNo: rx }, { 'student.name': rx }, { 'student.phone': rx }, { registrationNumber: rx }];
     }
-
     const students = await StudentProfile.find(query).sort({ 'student.name': 1 }).lean();
-
     const data = students.map((s, idx) => ({
       slNo: idx + 1,
       studentId: s.studentId,
@@ -171,32 +166,23 @@ const getStudentListReport = async (req, res, next) => {
       yearNo: s.yearNo || null,
       status: s.status
     }));
-
     return res.status(200).json({ status: true, count: data.length, data });
   } catch (err) {
     return next(err);
   }
 };
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// REPORT 2 — Staff List with Details
-// POST /batch/reports/staff
-// ═══════════════════════════════════════════════════════════════════════════════
 const getStaffListReport = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     const stBatchIds = pickBatchIds(req);
-
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-
     const batchQuery = { tenantId, isdeleted: false };
     if (stBatchIds.length) batchQuery.batchId = { $in: stBatchIds };
     const batches = await Batch.find(batchQuery).lean();
-
     const allStaffIds = [...new Set(batches.flatMap((b) => (b.staffMap || []).map((s) => safeTrim(s.staffId)).filter(Boolean)))];
     const staffDocs = allStaffIds.length ? await Staff.find({ tenantId, staffId: { $in: allStaffIds }, isdeleted: false }).lean() : [];
     const staffDocMap = new Map(staffDocs.map((s) => [s.staffId, s]));
-
     let slNo = 0;
     const currentStaff = batches.flatMap((b) =>
       (b.staffMap || []).map((entry) => {
@@ -218,45 +204,34 @@ const getStaffListReport = async (req, res, next) => {
         };
       })
     );
-
     return res.status(200).json({ status: true, currentStaffCount: currentStaff.length, currentStaff });
   } catch (err) {
     return next(err);
   }
 };
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// REPORT 3 — Late Entry Report
-// POST /batch/reports/late-entries
-// ═══════════════════════════════════════════════════════════════════════════════
 const getLateEntryReport = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     const batchCode = safeTrim(req.body?.batchCode || '');
     const fromDate = toInt(req.body?.fromDate, 0);
     const toDate = toInt(req.body?.toDate, 0);
-    const type = safeTrim(req.body?.type || ''); // STAFF | STUDENT | ''
-    const entryType = safeTrim(req.body?.entryType || ''); // LATE | EARLY_LEAVE | ''
-
+    const type = safeTrim(req.body?.type || '');
+    const entryType = safeTrim(req.body?.entryType || '');
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-
     if (!fromDate) return res.status(400).json({ status: false, message: 'fromDate is required' });
     if (!toDate) return res.status(400).json({ status: false, message: 'toDate is required' });
-
     const batchCodes = pickBatchCodes(req);
     const query = { tenantId, isdeleted: false, date: { $gte: fromDate, $lte: toDate } };
     applyBatchCodeFilter(query, batchCodes);
     if (type && ['STAFF', 'STUDENT'].includes(type.toUpperCase())) query.type = type.toUpperCase();
     if (entryType && ['LATE', 'EARLY_LEAVE'].includes(entryType.toUpperCase())) query.entryType = entryType.toUpperCase();
-
     const entries = await LateEntryLog.find(query).sort({ date: 1, periodNo: 1 }).lean();
-
     const formatDate = (ms) => {
       if (!ms) return null;
       const d = new Date(ms);
       return `${d.getUTCDate().toString().padStart(2, '0')}/${(d.getUTCMonth() + 1).toString().padStart(2, '0')}/${d.getUTCFullYear()}`;
     };
-
     const data = entries.map((e, idx) => ({
       slNo: idx + 1,
       logId: e.logId,
@@ -271,14 +246,10 @@ const getLateEntryReport = async (req, res, next) => {
       delayMinutes: e.delayMinutes,
       reason: e.reason || null
     }));
-
-    // Summary
     const studentCount = data.filter((e) => e.type === 'STUDENT').length;
     const staffCount = data.filter((e) => e.type === 'STAFF').length;
     const lateCount = data.filter((e) => e.entryType === 'LATE').length;
     const earlyLeaveCount = data.filter((e) => e.entryType === 'EARLY_LEAVE').length;
-
-    // Group by person
     const byPerson = new Map();
     for (const e of data) {
       const key = e.personId;
@@ -286,7 +257,6 @@ const getLateEntryReport = async (req, res, next) => {
       byPerson.get(key).count++;
     }
     const personSummary = Array.from(byPerson.values()).sort((a, b) => b.count - a.count);
-
     return res.status(200).json({
       status: true,
       batchCode,
@@ -386,23 +356,293 @@ const getTimetableReport = async (req, res, next) => {
   }
 };
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// REPORT 5 — Phase Plan Allotment
-// POST /batch/reports/phase-allotment
-// ═══════════════════════════════════════════════════════════════════════════════
+// const getPhaseAllotmentReport = async (req, res, next) => {
+//   try {
+//     const tenantId = pickTid(req);
+//     const batchId = safeTrim(req.body?.batchId || '');
+//     const batchCode = safeTrim(req.body?.batchCode || '');
+//     const subjectId = safeTrim(req.body?.subjectId || '');
+//     const programIds = Array.isArray(req.body?.programIds) ? req.body.programIds.filter(Boolean) : [];
+//     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+//     const batch = batchId || batchCode ? await resolveBatch(tenantId, batchId, batchCode) : null;
+//     if ((batchId || batchCode) && !batch) return res.status(404).json({ status: false, message: 'Batch not found' });
+//     const paBatchIds = pickBatchIds(req);
+//     const paBatches = paBatchIds.length ? await Batch.find({ tenantId, batchId: { $in: paBatchIds }, isdeleted: false }).lean() : batch ? [batch] : null;
+//     const ttFilter = { tenantId, isdeleted: false, status: 'Active' };
+//     if (paBatches)
+//       applyBatchCodeFilter(
+//         ttFilter,
+//         paBatches.map((b) => b.batchCode)
+//       );
+//     const timetables = await TimeTable.find(ttFilter).lean();
+//     const subjectPhaseMins = new Map();
+//     const subjectTotalMins = new Map();
+//     const countPeriod = (p) => {
+//       if (p?.isCancelled) return;
+//       const sid = safeTrim(p?.subjectId);
+//       const phId = safeTrim(p?.phaseId || '');
+//       if (!sid) return;
+//       if (subjectId && sid !== subjectId) return;
+//       const start = toInt(p?.time?.startMin, -1);
+//       const end = toInt(p?.time?.endMin, -1);
+//       if (start < 0 || end <= start) return;
+//       const mins = end - start;
+//       subjectTotalMins.set(sid, (subjectTotalMins.get(sid) || 0) + mins);
+//       const key = `${sid}_${phId}`;
+//       subjectPhaseMins.set(key, (subjectPhaseMins.get(key) || 0) + mins);
+//     };
+//     for (const tt of timetables) {
+//       for (const dayObj of tt.week || []) {
+//         for (const p of dayObj.periods || []) countPeriod(p);
+//       }
+//       for (const ov of tt.dayOverrides || []) {
+//         if (ov.action === 'CANCEL_DAY') continue;
+//         if (ov.action === 'REPLACE_DAY') {
+//           for (const p of ov.periods || []) countPeriod(p);
+//         }
+//       }
+//       const ovrMap = new Map();
+//       for (const ov of tt.periodOverrides || []) {
+//         const k = `${ov.date}_${normDay(ov.day)}_${ov.periodNo}`;
+//         ovrMap.set(k, ov);
+//       }
+//       for (const ov of ovrMap.values()) {
+//         if (ov.action === 'CANCEL_PERIOD') {
+//           const dayObj = (tt.week || []).find((d) => normDay(d.day) === normDay(ov.day));
+//           const base = (dayObj?.periods || []).find((p) => toInt(p?.periodNo) === toInt(ov.periodNo));
+//           if (base && !base.isCancelled) {
+//             const sid = safeTrim(base.subjectId);
+//             const phId = safeTrim(base.phaseId || '');
+//             const start = toInt(base.time?.startMin, -1);
+//             const end = toInt(base.time?.endMin, -1);
+//             if (sid && start >= 0 && end > start) {
+//               if (!subjectId || sid === subjectId) {
+//                 const mins = end - start;
+//                 const key = `${sid}_${phId}`;
+//                 subjectPhaseMins.set(key, Math.max(0, (subjectPhaseMins.get(key) || 0) - mins));
+//                 subjectTotalMins.set(sid, Math.max(0, (subjectTotalMins.get(sid) || 0) - mins));
+//               }
+//             }
+//           }
+//         } else if (ov.action === 'REPLACE_PERIOD' && ov.period) {
+//           const dayObj = (tt.week || []).find((d) => normDay(d.day) === normDay(ov.day));
+//           const base = (dayObj?.periods || []).find((p) => toInt(p?.periodNo) === toInt(ov.periodNo));
+//           if (base && !base.isCancelled) {
+//             const sid = safeTrim(base.subjectId);
+//             const phId = safeTrim(base.phaseId || '');
+//             const start = toInt(base.time?.startMin, -1);
+//             const end = toInt(base.time?.endMin, -1);
+//             if (sid && start >= 0 && end > start) {
+//               if (!subjectId || sid === subjectId) {
+//                 const mins = end - start;
+//                 const key = `${sid}_${phId}`;
+//                 subjectPhaseMins.set(key, Math.max(0, (subjectPhaseMins.get(key) || 0) - mins));
+//                 subjectTotalMins.set(sid, Math.max(0, (subjectTotalMins.get(sid) || 0) - mins));
+//               }
+//             }
+//           }
+//           countPeriod({ ...ov.period, periodNo: ov.periodNo });
+//         } else if (ov.action === 'ADD_PERIOD' && ov.period) {
+//           countPeriod({ ...ov.period, periodNo: ov.periodNo });
+//         }
+//       }
+//     }
+//     const phaseQuery = { tenantId, isdeleted: false, status: 'Active' };
+//     if (batch) {
+//       phaseQuery.programId = batch.programId;
+//       phaseQuery.classNo = batch.classNo;
+//     } else if (programIds.length) {
+//       const progBatches = await Batch.find(
+//         {
+//           tenantId,
+//           programId: { $in: programIds },
+//           isdeleted: false
+//         },
+//         { programId: 1, classNo: 1 }
+//       ).lean();
+//       const classNos = [...new Set(progBatches.map((b) => b.classNo).filter(Boolean))];
+//       if (classNos.length) phaseQuery.classNo = { $in: classNos };
+//       phaseQuery.programId = programIds.length === 1 ? programIds[0] : { $in: programIds };
+//     }
+//     if (subjectId) phaseQuery.subjectId = new mongoose.Types.ObjectId(subjectId);
+//     const phases = await Phase.find(phaseQuery).sort({ subjectId: 1, sortOrder: 1 }).lean();
+//     const phasesBySubject = new Map();
+//     for (const ph of phases) {
+//       const sid = String(ph.subjectId);
+//       if (!phasesBySubject.has(sid)) phasesBySubject.set(sid, []);
+//       phasesBySubject.get(sid).push(ph);
+//     }
+//     const toHours = (mins) => round2(mins / 60);
+//     const subjectIds = subjectId ? [subjectId] : [...new Set([...subjectTotalMins.keys(), ...phasesBySubject.keys()])];
+//     const subjectDocs = await Subject.find(
+//       {
+//         _id: {
+//           $in: subjectIds
+//             .map((id) => {
+//               try {
+//                 return new mongoose.Types.ObjectId(id);
+//               } catch {
+//                 return null;
+//               }
+//             })
+//             .filter(Boolean)
+//         },
+//         isdeleted: false
+//       },
+//       { subjectName: 1, subjectCode: 1 }
+//     ).lean();
+//     const subjectDocMap = new Map(subjectDocs.map((s) => [String(s._id), s]));
+//     // const data = subjectIds.map((sid) => {
+//     //   const subDoc = subjectDocMap.get(sid) || {};
+//     //   const totalAllocMins = subjectTotalMins.get(sid) || 0;
+//     //   const subjectPhases = phasesBySubject.get(sid) || [];
+//     //   let totalEstMins = 0;
+//     //   const phasesReport = subjectPhases
+//     //     .map((ph) => {
+//     //       const phAllotMins = subjectPhaseMins.get(`${sid}_${ph.phaseId}`) || 0;
+//     //       const phEstMins = (ph.topics || []).reduce((s, t) => s + (t.estHours || 0) * 60, 0);
+//     //       totalEstMins += phEstMins;
+
+//     //       const topicsReport = (ph.topics || [])
+//     //         .map((t) => {
+//     //           const estMins = (t.estHours || 0) * 60;
+//     //           return {
+//     //             topicName: t.topicName,
+//     //             estHours: t.estHours || 0,
+//     //             sortOrder: t.sortOrder || 0
+//     //           };
+//     //         })
+//     //         .sort((a, b) => a.sortOrder - b.sortOrder);
+//     //       const remainingMins = phEstMins - phAllotMins;
+//     //       const progressPct = phEstMins > 0 ? round2((phAllotMins / phEstMins) * 100) : null;
+//     //       return {
+//     //         phaseId: ph.phaseId,
+//     //         phaseName: ph.phaseName,
+//     //         sortOrder: ph.sortOrder || 0,
+//     //         estHours: toHours(phEstMins),
+//     //         allottedHours: toHours(phAllotMins),
+//     //         remainingHours: toHours(remainingMins),
+//     //         progressPct,
+//     //         topics: topicsReport
+//     //       };
+//     //     })
+//     //     .sort((a, b) => a.sortOrder - b.sortOrder);
+//     //   const unassignedKey = `${sid}_`;
+//     //   const unassignedMins = subjectPhaseMins.get(unassignedKey) || 0;
+//     //   const totalRemMins = totalEstMins - totalAllocMins;
+//     //   return {
+//     //     subjectId: sid,
+//     //     subjectName: subDoc.subjectName || null,
+//     //     subjectCode: subDoc.subjectCode || null,
+//     //     totalEstHours: toHours(totalEstMins),
+//     //     totalAllottedHours: toHours(totalAllocMins),
+//     //     totalRemainingHours: toHours(totalRemMins),
+//     //     overallProgressPct: totalEstMins > 0 ? round2((totalAllocMins / totalEstMins) * 100) : null,
+//     //     unassignedHours: toHours(unassignedMins),
+//     //     phases: phasesReport
+//     //   };
+//     // });
+//     const batchSubjectMinsMap = new Map();
+//     for (const tt of timetables) {
+//       for (const dayObj of tt.week || []) {
+//         for (const p of dayObj.periods || []) {
+//           if (p?.isCancelled) continue;
+//           const sid = safeTrim(p?.subjectId);
+//           if (!sid) continue;
+//           if (subjectId && sid !== subjectId) continue;
+//           const start = toInt(p?.time?.startMin, -1);
+//           const end = toInt(p?.time?.endMin, -1);
+//           if (start < 0 || end <= start) continue;
+//           const mins = end - start;
+//           const phId = safeTrim(p?.phaseId || '');
+//           const batchKey = `${tt.batchCode}_${sid}_${phId}`;
+//           batchSubjectMinsMap.set(batchKey, (batchSubjectMinsMap.get(batchKey) || 0) + mins);
+//         }
+//       }
+//     }
+//     const batchInfoMap = new Map((paBatches || []).map((b) => [b.batchCode, b]));
+//     const batchSubjectKeys = new Set();
+//     for (const key of batchSubjectMinsMap.keys()) {
+//       const parts = key.split('_');
+//       const batchCode = parts[0];
+//       const sid = parts.slice(1, parts.length - 1).join('_');
+//       batchSubjectKeys.add(`${batchCode}_${sid}`);
+//     }
+//     const data = [];
+//     for (const bsKey of batchSubjectKeys) {
+//       const underscoreIdx = bsKey.indexOf('_');
+//       const batchCode = bsKey.substring(0, underscoreIdx);
+//       const sid = bsKey.substring(underscoreIdx + 1);
+//       const batchInfo = batchInfoMap.get(batchCode) || {};
+//       const subDoc = subjectDocMap.get(sid) || {};
+//       const subjectPhases = phasesBySubject.get(sid) || [];
+//       let totalEstMins = 0;
+//       let totalAllocMins = 0;
+//       const phasesReport = subjectPhases
+//         .map((ph) => {
+//           const phAllotMins = batchSubjectMinsMap.get(`${batchCode}_${sid}_${ph.phaseId}`) || 0;
+//           const phEstMins = (ph.topics || []).reduce((s, t) => s + (t.estHours || 0) * 60, 0);
+//           totalEstMins += phEstMins;
+//           totalAllocMins += phAllotMins;
+//           const remainingMins = phEstMins - phAllotMins;
+//           const progressPct = phEstMins > 0 ? round2((phAllotMins / phEstMins) * 100) : null;
+//           return {
+//             phaseId: ph.phaseId,
+//             phaseName: ph.phaseName,
+//             sortOrder: ph.sortOrder || 0,
+//             estHours: toHours(phEstMins),
+//             allottedHours: toHours(phAllotMins),
+//             remainingHours: toHours(remainingMins),
+//             progressPct
+//           };
+//         })
+//         .sort((a, b) => a.sortOrder - b.sortOrder);
+//       const unassignedKey = `${batchCode}_${sid}_`;
+//       const unassignedMins = batchSubjectMinsMap.get(unassignedKey) || 0;
+//       const totalRemMins = totalEstMins - totalAllocMins;
+//       data.push({
+//         batchCode,
+//         batchName: batchInfo.batchName || null,
+//         subjectId: sid,
+//         subjectName: subDoc.subjectName || null,
+//         subjectCode: subDoc.subjectCode || null,
+//         totalEstHours: toHours(totalEstMins),
+//         totalAllottedHours: toHours(totalAllocMins),
+//         totalRemainingHours: toHours(totalRemMins),
+//         overallProgressPct: totalEstMins > 0 ? round2((totalAllocMins / totalEstMins) * 100) : null,
+//         unassignedHours: toHours(unassignedMins),
+//         phases: phasesReport
+//       });
+//     }
+//     data.sort((a, b) => {
+//       const bc = (a.batchCode || '').localeCompare(b.batchCode || '');
+//       if (bc !== 0) return bc;
+//       return (a.subjectName || '').localeCompare(b.subjectName || '');
+//     });
+//     return res.status(200).json({
+//       status: true,
+//       batchCode: batch?.batchCode || null,
+//       batchName: batch?.batchName || null,
+//       programId: batch?.programId || null,
+//       classNo: batch?.classNo || null,
+//       count: data.length,
+//       data
+//     });
+//   } catch (err) {
+//     return next(err);
+//   }
+// };
+
 const getPhaseAllotmentReport = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     const batchId = safeTrim(req.body?.batchId || '');
     const batchCode = safeTrim(req.body?.batchCode || '');
-    const subjectId = safeTrim(req.body?.subjectId || ''); // optional filter
-
+    const subjectId = safeTrim(req.body?.subjectId || '');
+    const programIds = Array.isArray(req.body?.programIds) ? req.body.programIds.filter(Boolean) : [];
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-
     const batch = batchId || batchCode ? await resolveBatch(tenantId, batchId, batchCode) : null;
     if ((batchId || batchCode) && !batch) return res.status(404).json({ status: false, message: 'Batch not found' });
-
-    // Get all published timetables for batch (or all batches)
     const paBatchIds = pickBatchIds(req);
     const paBatches = paBatchIds.length ? await Batch.find({ tenantId, batchId: { $in: paBatchIds }, isdeleted: false }).lean() : batch ? [batch] : null;
     const ttFilter = { tenantId, isdeleted: false, status: 'Active' };
@@ -412,40 +652,40 @@ const getPhaseAllotmentReport = async (req, res, next) => {
         paBatches.map((b) => b.batchCode)
       );
     const timetables = await TimeTable.find(ttFilter).lean();
-
-    // Build subject → phaseId → minutes allotted from timetable
-    const subjectPhaseMins = new Map(); // key: `${subjectId}_${phaseId}` → mins
-    const subjectTotalMins = new Map(); // key: subjectId → total mins
-
-    const countPeriod = (p) => {
+    if (!timetables.length) {
+      return res.status(200).json({
+        status: true,
+        batchCode: batch?.batchCode || null,
+        batchName: batch?.batchName || null,
+        count: 0,
+        data: []
+      });
+    }
+    const batchSubjectMinsMap = new Map();
+    const countBatchPeriod = (p, bc) => {
       if (p?.isCancelled) return;
       const sid = safeTrim(p?.subjectId);
-      const phId = safeTrim(p?.phaseId || '');
       if (!sid) return;
       if (subjectId && sid !== subjectId) return;
       const start = toInt(p?.time?.startMin, -1);
       const end = toInt(p?.time?.endMin, -1);
       if (start < 0 || end <= start) return;
       const mins = end - start;
-
-      subjectTotalMins.set(sid, (subjectTotalMins.get(sid) || 0) + mins);
-
-      const key = `${sid}_${phId}`;
-      subjectPhaseMins.set(key, (subjectPhaseMins.get(key) || 0) + mins);
+      const phId = safeTrim(p?.phaseId || '');
+      const key = `${bc}::${sid}::${phId}`;
+      batchSubjectMinsMap.set(key, (batchSubjectMinsMap.get(key) || 0) + mins);
     };
-
     for (const tt of timetables) {
+      const bc = tt.batchCode;
       for (const dayObj of tt.week || []) {
-        for (const p of dayObj.periods || []) countPeriod(p);
+        for (const p of dayObj.periods || []) countBatchPeriod(p, bc);
       }
-      // Day overrides
       for (const ov of tt.dayOverrides || []) {
         if (ov.action === 'CANCEL_DAY') continue;
         if (ov.action === 'REPLACE_DAY') {
-          for (const p of ov.periods || []) countPeriod(p);
+          for (const p of ov.periods || []) countBatchPeriod(p, bc);
         }
       }
-      // Period overrides — net change
       const ovrMap = new Map();
       for (const ov of tt.periodOverrides || []) {
         const k = `${ov.date}_${normDay(ov.day)}_${ov.periodNo}`;
@@ -463,14 +703,12 @@ const getPhaseAllotmentReport = async (req, res, next) => {
             if (sid && start >= 0 && end > start) {
               if (!subjectId || sid === subjectId) {
                 const mins = end - start;
-                const key = `${sid}_${phId}`;
-                subjectPhaseMins.set(key, Math.max(0, (subjectPhaseMins.get(key) || 0) - mins));
-                subjectTotalMins.set(sid, Math.max(0, (subjectTotalMins.get(sid) || 0) - mins));
+                const key = `${bc}::${sid}::${phId}`;
+                batchSubjectMinsMap.set(key, Math.max(0, (batchSubjectMinsMap.get(key) || 0) - mins));
               }
             }
           }
         } else if (ov.action === 'REPLACE_PERIOD' && ov.period) {
-          // subtract old, add new
           const dayObj = (tt.week || []).find((d) => normDay(d.day) === normDay(ov.day));
           const base = (dayObj?.periods || []).find((p) => toInt(p?.periodNo) === toInt(ov.periodNo));
           if (base && !base.isCancelled) {
@@ -481,43 +719,63 @@ const getPhaseAllotmentReport = async (req, res, next) => {
             if (sid && start >= 0 && end > start) {
               if (!subjectId || sid === subjectId) {
                 const mins = end - start;
-                const key = `${sid}_${phId}`;
-                subjectPhaseMins.set(key, Math.max(0, (subjectPhaseMins.get(key) || 0) - mins));
-                subjectTotalMins.set(sid, Math.max(0, (subjectTotalMins.get(sid) || 0) - mins));
+                const key = `${bc}::${sid}::${phId}`;
+                batchSubjectMinsMap.set(key, Math.max(0, (batchSubjectMinsMap.get(key) || 0) - mins));
               }
             }
           }
-          countPeriod({ ...ov.period, periodNo: ov.periodNo });
+          countBatchPeriod({ ...ov.period, periodNo: ov.periodNo }, bc);
         } else if (ov.action === 'ADD_PERIOD' && ov.period) {
-          countPeriod({ ...ov.period, periodNo: ov.periodNo });
+          countBatchPeriod({ ...ov.period, periodNo: ov.periodNo }, bc);
         }
       }
     }
-
-    // Fetch phases for this batch's program + classNo (or all if no batch)
     const phaseQuery = { tenantId, isdeleted: false, status: 'Active' };
     if (batch) {
       phaseQuery.programId = batch.programId;
       phaseQuery.classNo = batch.classNo;
+    } else if (paBatches && paBatches.length) {
+      const programIdSet = [...new Set(paBatches.map((b) => b.programId).filter(Boolean))];
+      const classNoSet = [...new Set(paBatches.map((b) => b.classNo).filter(Boolean))];
+      if (programIdSet.length === 1) phaseQuery.programId = programIdSet[0];
+      else if (programIdSet.length > 1) phaseQuery.programId = { $in: programIdSet };
+      if (classNoSet.length === 1) phaseQuery.classNo = classNoSet[0];
+      else if (classNoSet.length > 1) phaseQuery.classNo = { $in: classNoSet };
+    } else if (programIds.length) {
+      const progBatches = await Batch.find({ tenantId, programId: { $in: programIds }, isdeleted: false }, { programId: 1, classNo: 1 }).lean();
+      const classNos = [...new Set(progBatches.map((b) => b.classNo).filter(Boolean))];
+      if (classNos.length) phaseQuery.classNo = { $in: classNos };
+      phaseQuery.programId = programIds.length === 1 ? programIds[0] : { $in: programIds };
     }
     if (subjectId) phaseQuery.subjectId = new mongoose.Types.ObjectId(subjectId);
-
     const phases = await Phase.find(phaseQuery).sort({ subjectId: 1, sortOrder: 1 }).lean();
-
-    // Group phases by subjectId
     const phasesBySubject = new Map();
     for (const ph of phases) {
       const sid = String(ph.subjectId);
       if (!phasesBySubject.has(sid)) phasesBySubject.set(sid, []);
       phasesBySubject.get(sid).push(ph);
     }
-
-    // Build report
-    const toHours = (mins) => round2(mins / 60);
-
-    const subjectIds = subjectId ? [subjectId] : [...new Set([...subjectTotalMins.keys(), ...phasesBySubject.keys()])];
-
-    // Fetch subject names
+    const batchSubjectKeys = new Set();
+    for (const key of batchSubjectMinsMap.keys()) {
+      const parts = key.split('::');
+      const bc = parts[0];
+      const sid = parts[1];
+      if (bc && sid) batchSubjectKeys.add(`${bc}::${sid}`);
+    }
+    if (paBatches) {
+      for (const b of paBatches) {
+        for (const [sid] of phasesBySubject.entries()) {
+          batchSubjectKeys.add(`${b.batchCode}::${sid}`);
+        }
+      }
+    }
+    const subjectIds = [
+      ...new Set(
+        Array.from(batchSubjectKeys)
+          .map((key) => key.split('::')[1])
+          .filter(Boolean)
+      )
+    ];
     const subjectDocs = await Subject.find(
       {
         _id: {
@@ -536,33 +794,25 @@ const getPhaseAllotmentReport = async (req, res, next) => {
       { subjectName: 1, subjectCode: 1 }
     ).lean();
     const subjectDocMap = new Map(subjectDocs.map((s) => [String(s._id), s]));
-
-    const data = subjectIds.map((sid) => {
+    const batchInfoMap = new Map((paBatches || []).map((b) => [b.batchCode, b]));
+    const toHours = (mins) => round2(mins / 60);
+    const data = [];
+    for (const bsKey of batchSubjectKeys) {
+      const [bc, sid] = bsKey.split('::');
+      if (!bc || !sid) continue;
+      const batchInfo = batchInfoMap.get(bc) || {};
       const subDoc = subjectDocMap.get(sid) || {};
-      const totalAllocMins = subjectTotalMins.get(sid) || 0;
       const subjectPhases = phasesBySubject.get(sid) || [];
-
       let totalEstMins = 0;
+      let totalAllocMins = 0;
       const phasesReport = subjectPhases
         .map((ph) => {
-          const phAllotMins = subjectPhaseMins.get(`${sid}_${ph.phaseId}`) || 0;
+          const phAllotMins = batchSubjectMinsMap.get(`${bc}::${sid}::${ph.phaseId}`) || 0;
           const phEstMins = (ph.topics || []).reduce((s, t) => s + (t.estHours || 0) * 60, 0);
           totalEstMins += phEstMins;
-
-          const topicsReport = (ph.topics || [])
-            .map((t) => {
-              const estMins = (t.estHours || 0) * 60;
-              return {
-                topicName: t.topicName,
-                estHours: t.estHours || 0,
-                sortOrder: t.sortOrder || 0
-              };
-            })
-            .sort((a, b) => a.sortOrder - b.sortOrder);
-
+          totalAllocMins += phAllotMins;
           const remainingMins = phEstMins - phAllotMins;
           const progressPct = phEstMins > 0 ? round2((phAllotMins / phEstMins) * 100) : null;
-
           return {
             phaseId: ph.phaseId,
             phaseName: ph.phaseName,
@@ -570,19 +820,27 @@ const getPhaseAllotmentReport = async (req, res, next) => {
             estHours: toHours(phEstMins),
             allottedHours: toHours(phAllotMins),
             remainingHours: toHours(remainingMins),
-            progressPct,
-            topics: topicsReport
+            progressPct
           };
         })
         .sort((a, b) => a.sortOrder - b.sortOrder);
-
-      // Unassigned hours — allotted without a phase
-      const unassignedKey = `${sid}_`;
-      const unassignedMins = subjectPhaseMins.get(unassignedKey) || 0;
-
+      const unassignedMins = batchSubjectMinsMap.get(`${bc}::${sid}::`) || 0;
+      if (unassignedMins > 0) {
+        totalAllocMins += unassignedMins;
+        phasesReport.push({
+          phaseId: null,
+          phaseName: 'Unassigned',
+          sortOrder: 9999,
+          estHours: 0,
+          allottedHours: toHours(unassignedMins),
+          remainingHours: toHours(-unassignedMins),
+          progressPct: null
+        });
+      }
       const totalRemMins = totalEstMins - totalAllocMins;
-
-      return {
+      data.push({
+        batchCode: bc,
+        batchName: batchInfo.batchName || null,
         subjectId: sid,
         subjectName: subDoc.subjectName || null,
         subjectCode: subDoc.subjectCode || null,
@@ -592,9 +850,13 @@ const getPhaseAllotmentReport = async (req, res, next) => {
         overallProgressPct: totalEstMins > 0 ? round2((totalAllocMins / totalEstMins) * 100) : null,
         unassignedHours: toHours(unassignedMins),
         phases: phasesReport
-      };
+      });
+    }
+    data.sort((a, b) => {
+      const bc = (a.batchCode || '').localeCompare(b.batchCode || '');
+      if (bc !== 0) return bc;
+      return (a.subjectName || '').localeCompare(b.subjectName || '');
     });
-
     return res.status(200).json({
       status: true,
       batchCode: batch?.batchCode || null,
@@ -609,10 +871,6 @@ const getPhaseAllotmentReport = async (req, res, next) => {
   }
 };
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// REPORT 6 — Assignment Completion
-// POST /batch/reports/assignments
-// ═══════════════════════════════════════════════════════════════════════════════
 const getAssignmentCompletionReport = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
@@ -706,10 +964,6 @@ const getAssignmentCompletionReport = async (req, res, next) => {
   }
 };
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// REPORT 7 — Mock Exam Completion
-// POST /batch/reports/exams
-// ═══════════════════════════════════════════════════════════════════════════════
 const getExamCompletionReport = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
@@ -850,27 +1104,250 @@ const getBatchInfoReport = async (req, res, next) => {
   }
 };
 
+// const getSubjectHoursReport = async (req, res, next) => {
+//   try {
+//     const tenantId = pickTid(req);
+//     const batchId = safeTrim(req.body?.batchId || '');
+//     const batchCode = safeTrim(req.body?.batchCode || '');
+//     const phaseId = safeTrim(req.body?.phaseId || '');
+//     const filterSubjectId = safeTrim(req.body?.subjectId || '');
+//     const fromDate = toInt(req.body?.fromDate, 0);
+//     const toDate = toInt(req.body?.toDate, 0);
+//     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+//     const batch = batchId || batchCode ? await resolveBatch(tenantId, batchId, batchCode) : null;
+//     if ((batchId || batchCode) && !batch) return res.status(404).json({ status: false, message: 'Batch not found' });
+//     const shBatchIds = pickBatchIds(req);
+//     const shBatches = shBatchIds.length ? await Batch.find({ tenantId, batchId: { $in: shBatchIds }, isdeleted: false }).lean() : batch ? [batch] : null;
+//     const shTtQuery = { tenantId, isdeleted: false, status: 'Active' };
+//     if (shBatches)
+//       applyBatchCodeFilter(
+//         shTtQuery,
+//         shBatches.map((b) => b.batchCode)
+//       );
+//     if (fromDate) {
+//       const fromMonday = getPreviousMonday(fromDate);
+//       shTtQuery.wkStartOn = { $gte: fromMonday };
+//     }
+//     if (toDate) {
+//       const toMonday = getPreviousMonday(toDate);
+//       shTtQuery.wkStartOn = { ...shTtQuery.wkStartOn, $lte: toMonday };
+//     }
+//     const timetables = await TimeTable.find(shTtQuery).lean();
+//     if (!timetables.length) {
+//       return res.status(200).json({
+//         status: true,
+//         batchCode: batch?.batchCode || null,
+//         count: 0,
+//         data: [],
+//         summary: { totalAllottedHours: 0 }
+//       });
+//     }
+//     const batchNameMap = new Map((shBatches || []).map((b) => [b.batchCode, b.batchName]));
+//     const programClassPairs = (shBatches || [])
+//       .map((b) => ({
+//         programId: b.programId,
+//         classNo: b.classNo
+//       }))
+//       .filter((p) => p.programId && p.classNo);
+//     // const subjectMins = new Map();
+//     // const subjectMeta = new Map();
+//     // const countP = (p) => {
+//     //   if (p?.isCancelled) return;
+//     //   const sid = safeTrim(p?.subjectId);
+//     //   if (!sid) return;
+//     //   if (phaseId && safeTrim(p?.phaseId) !== phaseId) return;
+//     //   const start = toInt(p?.time?.startMin, -1);
+//     //   const end = toInt(p?.time?.endMin, -1);
+//     //   if (start < 0 || end <= start) return;
+//     //   subjectMins.set(sid, (subjectMins.get(sid) || 0) + (end - start));
+//     //   if (!subjectMeta.has(sid)) {
+//     //     subjectMeta.set(sid, {
+//     //       subjectCode: safeTrim(p?.subjectCode) || null,
+//     //       subjectName: safeTrim(p?.subjectName) || null
+//     //     });
+//     //   }
+//     // };
+//     // for (const tt of timetables) {
+//     //   for (const dayObj of tt.week || []) {
+//     //     for (const p of dayObj.periods || []) countP(p);
+//     //   }
+//     //   for (const ov of tt.dayOverrides || []) {
+//     //     if (ov.action === 'CANCEL_DAY') continue;
+//     //     if (ov.action === 'REPLACE_DAY') {
+//     //       for (const p of ov.periods || []) countP(p);
+//     //     }
+//     //   }
+//     //   const ovrMap = new Map();
+//     //   for (const ov of tt.periodOverrides || []) {
+//     //     ovrMap.set(`${ov.date}_${normDay(ov.day)}_${ov.periodNo}`, ov);
+//     //   }
+//     //   for (const ov of ovrMap.values()) {
+//     //     if (ov.action === 'CANCEL_PERIOD') {
+//     //       const dayObj = (tt.week || []).find((d) => normDay(d.day) === normDay(ov.day));
+//     //       const base = (dayObj?.periods || []).find((p) => toInt(p?.periodNo) === toInt(ov.periodNo));
+//     //       if (base && !base.isCancelled) {
+//     //         const sid = safeTrim(base.subjectId);
+//     //         const s = toInt(base.time?.startMin, -1);
+//     //         const e = toInt(base.time?.endMin, -1);
+//     //         if (sid && s >= 0 && e > s) {
+//     //           if (!phaseId || safeTrim(base.phaseId) === phaseId) {
+//     //             subjectMins.set(sid, Math.max(0, (subjectMins.get(sid) || 0) - (e - s)));
+//     //           }
+//     //         }
+//     //       }
+//     //     } else if (ov.action === 'REPLACE_PERIOD' && ov.period) {
+//     //       const dayObj = (tt.week || []).find((d) => normDay(d.day) === normDay(ov.day));
+//     //       const base = (dayObj?.periods || []).find((p) => toInt(p?.periodNo) === toInt(ov.periodNo));
+//     //       if (base && !base.isCancelled) {
+//     //         const sid = safeTrim(base.subjectId);
+//     //         const s = toInt(base.time?.startMin, -1);
+//     //         const e = toInt(base.time?.endMin, -1);
+//     //         if (sid && s >= 0 && e > s) {
+//     //           if (!phaseId || safeTrim(base.phaseId) === phaseId) {
+//     //             subjectMins.set(sid, Math.max(0, (subjectMins.get(sid) || 0) - (e - s)));
+//     //           }
+//     //         }
+//     //       }
+//     //       countP({ ...ov.period, periodNo: ov.periodNo });
+//     //     } else if (ov.action === 'ADD_PERIOD' && ov.period) {
+//     //       countP({ ...ov.period, periodNo: ov.periodNo });
+//     //     }
+//     //   }
+//     // }
+//     const batchSubjectMins = new Map();
+//     const subjectMeta = new Map();
+//     const countP = (p, batchCode) => {
+//       if (p?.isCancelled) return;
+//       const sid = safeTrim(p?.subjectId);
+//       if (!sid) return;
+//       if (filterSubjectId && sid !== filterSubjectId) return;
+//       if (phaseId && safeTrim(p?.phaseId) !== phaseId) return;
+//       const start = toInt(p?.time?.startMin, -1);
+//       const end = toInt(p?.time?.endMin, -1);
+//       if (start < 0 || end <= start) return;
+//       const key = `${batchCode}_${sid}`;
+//       batchSubjectMins.set(key, (batchSubjectMins.get(key) || 0) + (end - start));
+//       if (!subjectMeta.has(sid)) {
+//         subjectMeta.set(sid, {
+//           subjectCode: safeTrim(p?.subjectCode) || null,
+//           subjectName: safeTrim(p?.subjectName) || null
+//         });
+//       }
+//     };
+//     for (const tt of timetables) {
+//       const bc = tt.batchCode;
+//       for (const dayObj of tt.week || []) {
+//         for (const p of dayObj.periods || []) countP(p, bc);
+//       }
+//       for (const ov of tt.dayOverrides || []) {
+//         if (ov.action === 'CANCEL_DAY') continue;
+//         if (ov.action === 'REPLACE_DAY') {
+//           for (const p of ov.periods || []) countP(p, bc);
+//         }
+//       }
+//       const ovrMap = new Map();
+//       for (const ov of tt.periodOverrides || []) {
+//         ovrMap.set(`${ov.date}_${normDay(ov.day)}_${ov.periodNo}`, ov);
+//       }
+//       for (const ov of ovrMap.values()) {
+//         if (ov.action === 'CANCEL_PERIOD') {
+//           const dayObj = (tt.week || []).find((d) => normDay(d.day) === normDay(ov.day));
+//           const base = (dayObj?.periods || []).find((p) => toInt(p?.periodNo) === toInt(ov.periodNo));
+//           if (base && !base.isCancelled) {
+//             const sid = safeTrim(base.subjectId);
+//             const s = toInt(base.time?.startMin, -1);
+//             const e = toInt(base.time?.endMin, -1);
+//             if (sid && s >= 0 && e > s) {
+//               if (!phaseId || safeTrim(base.phaseId) === phaseId) {
+//                 const key = `${bc}_${sid}`;
+//                 batchSubjectMins.set(key, Math.max(0, (batchSubjectMins.get(key) || 0) - (e - s)));
+//               }
+//             }
+//           }
+//         } else if (ov.action === 'REPLACE_PERIOD' && ov.period) {
+//           const dayObj = (tt.week || []).find((d) => normDay(d.day) === normDay(ov.day));
+//           const base = (dayObj?.periods || []).find((p) => toInt(p?.periodNo) === toInt(ov.periodNo));
+//           if (base && !base.isCancelled) {
+//             const sid = safeTrim(base.subjectId);
+//             const s = toInt(base.time?.startMin, -1);
+//             const e = toInt(base.time?.endMin, -1);
+//             if (sid && s >= 0 && e > s) {
+//               if (!phaseId || safeTrim(base.phaseId) === phaseId) {
+//                 const key = `${bc}_${sid}`;
+//                 batchSubjectMins.set(key, Math.max(0, (batchSubjectMins.get(key) || 0) - (e - s)));
+//               }
+//             }
+//           }
+//           countP({ ...ov.period, periodNo: ov.periodNo }, bc);
+//         } else if (ov.action === 'ADD_PERIOD' && ov.period) {
+//           countP({ ...ov.period, periodNo: ov.periodNo }, bc);
+//         }
+//       }
+//     }
+//     const toHours = (m) => round2(m / 60);
+//     const data = [];
+//     for (const [key, mins] of batchSubjectMins.entries()) {
+//       const [batchCode, ...subjectParts] = key.split('_');
+//       const sid = subjectParts.join('_');
+//       const meta = subjectMeta.get(sid) || {};
+//       data.push({
+//         batchCode,
+//         batchName: batchNameMap.get(batchCode) || null,
+//         subjectId: sid,
+//         subjectCode: meta.subjectCode || null,
+//         subjectName: meta.subjectName || null,
+//         allottedHours: toHours(mins),
+//         allottedMinutes: mins
+//       });
+//     }
+//     data.sort((a, b) => {
+//       const bc = a.batchCode.localeCompare(b.batchCode);
+//       if (bc !== 0) return bc;
+//       return (a.subjectName || '').localeCompare(b.subjectName || '');
+//     });
+//     const totalAllottedHours = toHours(Array.from(batchSubjectMins.values()).reduce((s, m) => s + m, 0));
+//     // const toHours = (m) => round2(m / 60);
+//     // const data = Array.from(subjectMins.entries())
+//     //   .map(([sid, mins]) => {
+//     //     const meta = subjectMeta.get(sid) || {};
+//     //     return {
+//     //       subjectId: sid,
+//     //       subjectCode: meta.subjectCode || null,
+//     //       subjectName: meta.subjectName || null,
+//     //       allottedHours: toHours(mins),
+//     //       allottedMinutes: mins
+//     //     };
+//     //   })
+//     //   .sort((a, b) => (a.subjectName || '').localeCompare(b.subjectName || ''));
+//     // const totalAllottedHours = toHours(Array.from(subjectMins.values()).reduce((s, m) => s + m, 0));
+//     return res.status(200).json({
+//       status: true,
+//       batchCode: batch?.batchCode || null,
+//       batchName: batch?.batchName || null,
+//       programId: batch?.programId || null,
+//       classNo: batch?.classNo || null,
+//       summary: { totalAllottedHours },
+//       count: data.length,
+//       data
+//     });
+//   } catch (err) {
+//     return next(err);
+//   }
+// };
+
 const getSubjectHoursReport = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
     const batchId = safeTrim(req.body?.batchId || '');
     const batchCode = safeTrim(req.body?.batchCode || '');
-    const phaseId = safeTrim(req.body?.phaseId || '');
     const filterSubjectId = safeTrim(req.body?.subjectId || '');
     const fromDate = toInt(req.body?.fromDate, 0);
     const toDate = toInt(req.body?.toDate, 0);
-    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
     const batch = batchId || batchCode ? await resolveBatch(tenantId, batchId, batchCode) : null;
     if ((batchId || batchCode) && !batch) return res.status(404).json({ status: false, message: 'Batch not found' });
     const shBatchIds = pickBatchIds(req);
     const shBatches = shBatchIds.length ? await Batch.find({ tenantId, batchId: { $in: shBatchIds }, isdeleted: false }).lean() : batch ? [batch] : null;
-    // const shTtQuery = { tenantId, isdeleted: false, status: 'Active' };
-    // if (shBatches)
-    //   applyBatchCodeFilter(
-    //     shTtQuery,
-    //     shBatches.map((b) => b.batchCode)
-    //   );
-    // const timetables = await TimeTable.find(shTtQuery).lean();
     const shTtQuery = { tenantId, isdeleted: false, status: 'Active' };
     if (shBatches)
       applyBatchCodeFilter(
@@ -883,101 +1360,37 @@ const getSubjectHoursReport = async (req, res, next) => {
     }
     if (toDate) {
       const toMonday = getPreviousMonday(toDate);
-      shTtQuery.wkStartOn = { ...shTtQuery.wkStartOn, $lte: toMonday };
+      shTtQuery.wkStartOn = { ...(shTtQuery.wkStartOn || {}), $lte: toMonday };
     }
     const timetables = await TimeTable.find(shTtQuery).lean();
     if (!timetables.length) {
       return res.status(200).json({
         status: true,
         batchCode: batch?.batchCode || null,
+        batchName: batch?.batchName || null,
+        summary: { totalAllottedHours: 0 },
         count: 0,
-        data: [],
-        summary: { totalAllottedHours: 0 }
+        data: []
       });
     }
-    const batchNameMap = new Map((shBatches || []).map((b) => [b.batchCode, b.batchName]));
-    // const subjectMins = new Map();
-    // const subjectMeta = new Map();
-    // const countP = (p) => {
-    //   if (p?.isCancelled) return;
-    //   const sid = safeTrim(p?.subjectId);
-    //   if (!sid) return;
-    //   if (phaseId && safeTrim(p?.phaseId) !== phaseId) return;
-    //   const start = toInt(p?.time?.startMin, -1);
-    //   const end = toInt(p?.time?.endMin, -1);
-    //   if (start < 0 || end <= start) return;
-    //   subjectMins.set(sid, (subjectMins.get(sid) || 0) + (end - start));
-    //   if (!subjectMeta.has(sid)) {
-    //     subjectMeta.set(sid, {
-    //       subjectCode: safeTrim(p?.subjectCode) || null,
-    //       subjectName: safeTrim(p?.subjectName) || null
-    //     });
-    //   }
-    // };
-    // for (const tt of timetables) {
-    //   for (const dayObj of tt.week || []) {
-    //     for (const p of dayObj.periods || []) countP(p);
-    //   }
-    //   for (const ov of tt.dayOverrides || []) {
-    //     if (ov.action === 'CANCEL_DAY') continue;
-    //     if (ov.action === 'REPLACE_DAY') {
-    //       for (const p of ov.periods || []) countP(p);
-    //     }
-    //   }
-    //   const ovrMap = new Map();
-    //   for (const ov of tt.periodOverrides || []) {
-    //     ovrMap.set(`${ov.date}_${normDay(ov.day)}_${ov.periodNo}`, ov);
-    //   }
-    //   for (const ov of ovrMap.values()) {
-    //     if (ov.action === 'CANCEL_PERIOD') {
-    //       const dayObj = (tt.week || []).find((d) => normDay(d.day) === normDay(ov.day));
-    //       const base = (dayObj?.periods || []).find((p) => toInt(p?.periodNo) === toInt(ov.periodNo));
-    //       if (base && !base.isCancelled) {
-    //         const sid = safeTrim(base.subjectId);
-    //         const s = toInt(base.time?.startMin, -1);
-    //         const e = toInt(base.time?.endMin, -1);
-    //         if (sid && s >= 0 && e > s) {
-    //           if (!phaseId || safeTrim(base.phaseId) === phaseId) {
-    //             subjectMins.set(sid, Math.max(0, (subjectMins.get(sid) || 0) - (e - s)));
-    //           }
-    //         }
-    //       }
-    //     } else if (ov.action === 'REPLACE_PERIOD' && ov.period) {
-    //       const dayObj = (tt.week || []).find((d) => normDay(d.day) === normDay(ov.day));
-    //       const base = (dayObj?.periods || []).find((p) => toInt(p?.periodNo) === toInt(ov.periodNo));
-    //       if (base && !base.isCancelled) {
-    //         const sid = safeTrim(base.subjectId);
-    //         const s = toInt(base.time?.startMin, -1);
-    //         const e = toInt(base.time?.endMin, -1);
-    //         if (sid && s >= 0 && e > s) {
-    //           if (!phaseId || safeTrim(base.phaseId) === phaseId) {
-    //             subjectMins.set(sid, Math.max(0, (subjectMins.get(sid) || 0) - (e - s)));
-    //           }
-    //         }
-    //       }
-    //       countP({ ...ov.period, periodNo: ov.periodNo });
-    //     } else if (ov.action === 'ADD_PERIOD' && ov.period) {
-    //       countP({ ...ov.period, periodNo: ov.periodNo });
-    //     }
-    //   }
-    // }
-    const batchSubjectMins = new Map();
+    const batchSubjectPhaseMins = new Map();
     const subjectMeta = new Map();
-    const countP = (p, batchCode) => {
+    const countP = (p, bc) => {
       if (p?.isCancelled) return;
       const sid = safeTrim(p?.subjectId);
       if (!sid) return;
       if (filterSubjectId && sid !== filterSubjectId) return;
-      if (phaseId && safeTrim(p?.phaseId) !== phaseId) return;
       const start = toInt(p?.time?.startMin, -1);
       const end = toInt(p?.time?.endMin, -1);
       if (start < 0 || end <= start) return;
-      const key = `${batchCode}_${sid}`;
-      batchSubjectMins.set(key, (batchSubjectMins.get(key) || 0) + (end - start));
+      const mins = end - start;
+      const phId = safeTrim(p?.phaseId || '');
+      const key = `${bc}::${sid}::${phId}`;
+      batchSubjectPhaseMins.set(key, (batchSubjectPhaseMins.get(key) || 0) + mins);
       if (!subjectMeta.has(sid)) {
         subjectMeta.set(sid, {
-          subjectCode: safeTrim(p?.subjectCode) || null,
-          subjectName: safeTrim(p?.subjectName) || null
+          subjectName: safeTrim(p?.subjectName) || null,
+          subjectCode: safeTrim(p?.subjectCode) || null
         });
       }
     };
@@ -994,7 +1407,8 @@ const getSubjectHoursReport = async (req, res, next) => {
       }
       const ovrMap = new Map();
       for (const ov of tt.periodOverrides || []) {
-        ovrMap.set(`${ov.date}_${normDay(ov.day)}_${ov.periodNo}`, ov);
+        const k = `${ov.date}_${normDay(ov.day)}_${ov.periodNo}`;
+        ovrMap.set(k, ov);
       }
       for (const ov of ovrMap.values()) {
         if (ov.action === 'CANCEL_PERIOD') {
@@ -1002,12 +1416,14 @@ const getSubjectHoursReport = async (req, res, next) => {
           const base = (dayObj?.periods || []).find((p) => toInt(p?.periodNo) === toInt(ov.periodNo));
           if (base && !base.isCancelled) {
             const sid = safeTrim(base.subjectId);
-            const s = toInt(base.time?.startMin, -1);
-            const e = toInt(base.time?.endMin, -1);
-            if (sid && s >= 0 && e > s) {
-              if (!phaseId || safeTrim(base.phaseId) === phaseId) {
-                const key = `${bc}_${sid}`;
-                batchSubjectMins.set(key, Math.max(0, (batchSubjectMins.get(key) || 0) - (e - s)));
+            const phId = safeTrim(base.phaseId || '');
+            const start = toInt(base.time?.startMin, -1);
+            const end = toInt(base.time?.endMin, -1);
+            if (sid && start >= 0 && end > start) {
+              if (!filterSubjectId || sid === filterSubjectId) {
+                const mins = end - start;
+                const key = `${bc}::${sid}::${phId}`;
+                batchSubjectPhaseMins.set(key, Math.max(0, (batchSubjectPhaseMins.get(key) || 0) - mins));
               }
             }
           }
@@ -1016,12 +1432,14 @@ const getSubjectHoursReport = async (req, res, next) => {
           const base = (dayObj?.periods || []).find((p) => toInt(p?.periodNo) === toInt(ov.periodNo));
           if (base && !base.isCancelled) {
             const sid = safeTrim(base.subjectId);
-            const s = toInt(base.time?.startMin, -1);
-            const e = toInt(base.time?.endMin, -1);
-            if (sid && s >= 0 && e > s) {
-              if (!phaseId || safeTrim(base.phaseId) === phaseId) {
-                const key = `${bc}_${sid}`;
-                batchSubjectMins.set(key, Math.max(0, (batchSubjectMins.get(key) || 0) - (e - s)));
+            const phId = safeTrim(base.phaseId || '');
+            const start = toInt(base.time?.startMin, -1);
+            const end = toInt(base.time?.endMin, -1);
+            if (sid && start >= 0 && end > start) {
+              if (!filterSubjectId || sid === filterSubjectId) {
+                const mins = end - start;
+                const key = `${bc}::${sid}::${phId}`;
+                batchSubjectPhaseMins.set(key, Math.max(0, (batchSubjectPhaseMins.get(key) || 0) - mins));
               }
             }
           }
@@ -1031,48 +1449,131 @@ const getSubjectHoursReport = async (req, res, next) => {
         }
       }
     }
+    const phasesBySubject = new Map();
+    if (shBatches && shBatches.length) {
+      const programIdSet = [...new Set(shBatches.map((b) => b.programId).filter(Boolean))];
+      const classNoSet = [...new Set(shBatches.map((b) => b.classNo).filter(Boolean))];
+      if (programIdSet.length && classNoSet.length) {
+        const phaseQuery = {
+          tenantId,
+          isdeleted: false,
+          status: 'Active'
+        };
+        if (programIdSet.length === 1) phaseQuery.programId = programIdSet[0];
+        else phaseQuery.programId = { $in: programIdSet };
+        if (classNoSet.length === 1) phaseQuery.classNo = classNoSet[0];
+        else phaseQuery.classNo = { $in: classNoSet };
+        if (filterSubjectId) phaseQuery.subjectId = new mongoose.Types.ObjectId(filterSubjectId);
+        const phases = await Phase.find(phaseQuery).sort({ subjectId: 1, sortOrder: 1 }).lean();
+        for (const ph of phases) {
+          const sid = String(ph.subjectId);
+          if (!phasesBySubject.has(sid)) phasesBySubject.set(sid, []);
+          phasesBySubject.get(sid).push(ph);
+        }
+      }
+    }
+    const phaseNameMap = new Map();
+    for (const [, phases] of phasesBySubject.entries()) {
+      for (const ph of phases) {
+        phaseNameMap.set(ph.phaseId, ph.phaseName);
+      }
+    }
+    const phaseEstMinsMap = new Map();
+    for (const [sid, phases] of phasesBySubject.entries()) {
+      for (const ph of phases) {
+        const estMins = (ph.topics || []).reduce((s, t) => s + (t.estHours || 0) * 60, 0);
+        const key = `${sid}::${ph.phaseId}`;
+        phaseEstMinsMap.set(key, (phaseEstMinsMap.get(key) || 0) + estMins);
+      }
+    }
+    const batchSubjectPhaseKeys = new Set(batchSubjectPhaseMins.keys());
+    if (shBatches) {
+      for (const b of shBatches) {
+        for (const [sid, phases] of phasesBySubject.entries()) {
+          if (filterSubjectId && sid !== filterSubjectId) continue;
+          for (const ph of phases) {
+            batchSubjectPhaseKeys.add(`${b.batchCode}::${sid}::${ph.phaseId}`);
+          }
+        }
+      }
+    }
+    const allSubjectIds = [
+      ...new Set(
+        Array.from(batchSubjectPhaseKeys)
+          .map((key) => key.split('::')[1])
+          .filter(Boolean)
+      )
+    ];
+    const subjectDocs = await Subject.find(
+      {
+        _id: {
+          $in: allSubjectIds
+            .map((id) => {
+              try {
+                return new mongoose.Types.ObjectId(id);
+              } catch {
+                return null;
+              }
+            })
+            .filter(Boolean)
+        },
+        isdeleted: false
+      },
+      { subjectName: 1, subjectCode: 1 }
+    ).lean();
+    const subjectDocMap = new Map(subjectDocs.map((s) => [String(s._id), s]));
+    for (const [sid, doc] of subjectDocMap.entries()) {
+      if (!subjectMeta.has(sid) || !subjectMeta.get(sid).subjectName) {
+        subjectMeta.set(sid, {
+          subjectName: doc.subjectName || null,
+          subjectCode: doc.subjectCode || null
+        });
+      }
+    }
+    const batchNameMap = new Map((shBatches || []).map((b) => [b.batchCode, b.batchName]));
     const toHours = (m) => round2(m / 60);
     const data = [];
-    for (const [key, mins] of batchSubjectMins.entries()) {
-      const [batchCode, ...subjectParts] = key.split('_');
-      const sid = subjectParts.join('_');
+    for (const key of batchSubjectPhaseKeys) {
+      const parts = key.split('::');
+      const bc = parts[0];
+      const sid = parts[1];
+      const phId = parts[2] ?? '';
+
+      if (!bc || !sid) continue;
+      const allottedMins = batchSubjectPhaseMins.get(key) || 0;
+      const estMins = phaseEstMinsMap.get(`${sid}::${phId}`) || 0;
+      const balanceMins = estMins - allottedMins;
       const meta = subjectMeta.get(sid) || {};
+      const phaseName = phId ? phaseNameMap.get(phId) || phId : 'Unassigned';
       data.push({
-        batchCode,
-        batchName: batchNameMap.get(batchCode) || null,
+        batchCode: bc,
+        batchName: batchNameMap.get(bc) || null,
         subjectId: sid,
-        subjectCode: meta.subjectCode || null,
         subjectName: meta.subjectName || null,
-        allottedHours: toHours(mins),
-        allottedMinutes: mins
+        phaseId: phId || null,
+        phaseName,
+        estHours: toHours(estMins),
+        allottedHours: toHours(allottedMins),
+        balanceHours: toHours(balanceMins),
+        allottedMinutes: allottedMins
       });
     }
     data.sort((a, b) => {
-      const bc = a.batchCode.localeCompare(b.batchCode);
+      const bc = (a.batchCode || '').localeCompare(b.batchCode || '');
       if (bc !== 0) return bc;
-      return (a.subjectName || '').localeCompare(b.subjectName || '');
+      const sc = (a.subjectName || '').localeCompare(b.subjectName || '');
+      if (sc !== 0) return sc;
+      if (a.phaseName === 'Unassigned') return 1;
+      if (b.phaseName === 'Unassigned') return -1;
+      return (a.phaseName || '').localeCompare(b.phaseName || '');
     });
-    const totalAllottedHours = toHours(Array.from(batchSubjectMins.values()).reduce((s, m) => s + m, 0));
-    // const toHours = (m) => round2(m / 60);
-    // const data = Array.from(subjectMins.entries())
-    //   .map(([sid, mins]) => {
-    //     const meta = subjectMeta.get(sid) || {};
-    //     return {
-    //       subjectId: sid,
-    //       subjectCode: meta.subjectCode || null,
-    //       subjectName: meta.subjectName || null,
-    //       allottedHours: toHours(mins),
-    //       allottedMinutes: mins
-    //     };
-    //   })
-    //   .sort((a, b) => (a.subjectName || '').localeCompare(b.subjectName || ''));
-    // const totalAllottedHours = toHours(Array.from(subjectMins.values()).reduce((s, m) => s + m, 0));
+
+    const totalAllottedHours = toHours(Array.from(batchSubjectPhaseMins.values()).reduce((s, m) => s + m, 0));
+
     return res.status(200).json({
       status: true,
       batchCode: batch?.batchCode || null,
       batchName: batch?.batchName || null,
-      programId: batch?.programId || null,
-      classNo: batch?.classNo || null,
       summary: { totalAllottedHours },
       count: data.length,
       data
@@ -1598,6 +2099,828 @@ const getSlashReport = async (req, res, next) => {
   }
 };
 
+const getSubjectsByBatch = async (req, res, next) => {
+  try {
+    const tenantId = pickTid(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+    const batchCodes = Array.isArray(req.body?.batchCodes) ? req.body.batchCodes.map(safeTrim).filter(Boolean) : [];
+    const ttQuery = { tenantId, isdeleted: false, status: 'Active' };
+    if (batchCodes.length) applyBatchCodeFilter(ttQuery, batchCodes);
+    const timetables = await TimeTable.find(ttQuery, { week: 1 }).lean();
+    const subjectIdSet = new Set();
+    for (const tt of timetables) {
+      for (const day of tt.week || []) {
+        for (const p of day.periods || []) {
+          if (p.subjectId) subjectIdSet.add(String(p.subjectId));
+        }
+      }
+    }
+    if (!subjectIdSet.size) {
+      return res.status(200).json({ status: true, count: 0, data: [] });
+    }
+    const subjects = await Subject.find(
+      {
+        _id: {
+          $in: Array.from(subjectIdSet)
+            .map((id) => {
+              try {
+                return new mongoose.Types.ObjectId(id);
+              } catch {
+                return null;
+              }
+            })
+            .filter(Boolean)
+        },
+        isdeleted: false
+      },
+      { subjectName: 1, subjectCode: 1 }
+    ).lean();
+    const seen = new Set();
+    const data = subjects
+      .filter((s) => {
+        if (seen.has(s.subjectName)) return false;
+        seen.add(s.subjectName);
+        return true;
+      })
+      .sort((a, b) => (a.subjectName || '').localeCompare(b.subjectName || ''));
+
+    return res.status(200).json({ status: true, count: data.length, data });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+// const getAssignmentReport = async (req, res, next) => {
+//   try {
+//     const tenantId = pickTid(req);
+//     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+//     const view = safeTrim(req.body?.view || 'batch');
+//     const filterSubjectId = safeTrim(req.body?.subjectId || '');
+//     const admissionNos = Array.isArray(req.body?.admissionNos) ? req.body.admissionNos.map(safeTrim).filter(Boolean) : [];
+//     const batchIds = pickBatchIds(req);
+//     if (!batchIds.length) return res.status(400).json({ status: false, message: 'batchIds[] is required' });
+//     const batches = await Batch.find({ tenantId, batchId: { $in: batchIds }, isdeleted: false }).lean();
+//     if (!batches.length) return res.status(200).json({ status: true, view, count: 0, batches: [] });
+//     const batchMap = new Map(batches.map((b) => [b.batchId, b]));
+//     const enableQuery = { tenantId, isdeleted: false, status: 'enabled', batchId: { $in: batchIds } };
+//     if (filterSubjectId) enableQuery.subjectId = filterSubjectId;
+//     const enabledRows = await BatchAssignEnable.find(enableQuery).lean();
+//     if (!enabledRows.length) return res.status(200).json({ status: true, view, count: 0, batches: [] });
+//     const allTestIds = [...new Set(enabledRows.map((r) => safeTrim(r.testId)).filter(Boolean))];
+//     const assignments = await Assignment.find({ tenantId, testId: { $in: allTestIds }, isdeleted: false }, { testId: 1, testNo: 1, testCode: 1, subjectId: 1, topicId: 1, subTopicId: 1, categoryId: 1, subCategoryId: 1, classNo: 1 }).lean();
+//     console.log('allTestIds:', allTestIds.length);
+//     console.log('assignments found:', assignments.length);
+//     console.log('categoryIds:', categoryIds);
+//     console.log('subCategoryIds:', subCategoryIds);
+//     console.log('catDocs found:', catDocs.length);
+//     console.log('subCatDocs found:', subCatDocs.length);
+//     const assignMap = new Map(assignments.map((a) => [a.testId, a]));
+//     const categoryIds = [...new Set(assignments.map((a) => safeTrim(a.categoryId)).filter(Boolean))];
+//     const subCategoryIds = [...new Set(assignments.map((a) => safeTrim(a.subCategoryId)).filter(Boolean))];
+//     const [catDocs, subCatDocs] = await Promise.all([
+//       ExamCategory.find({ tenantId, categoryId: { $in: categoryIds }, isdeleted: false }, { categoryId: 1, categoryName: 1, categoryCode: 1 }).lean(),
+//       ExamSubCategory.find({ tenantId, subCategoryId: { $in: subCategoryIds }, isdeleted: false }, { subCategoryId: 1, subCategoryName: 1, subCategoryCode: 1, categoryId: 1 }).lean()
+//     ]);
+//     const catMap = new Map(catDocs.map((c) => [c.categoryId, c]));
+//     const subCatMap = new Map(subCatDocs.map((s) => [s.subCategoryId, s]));
+//     const subjectIds = [...new Set(enabledRows.map((r) => safeTrim(r.subjectId)).filter(Boolean))];
+//     const subjectDocs = await Subject.find(
+//       {
+//         _id: {
+//           $in: subjectIds
+//             .map((id) => {
+//               try {
+//                 return new mongoose.Types.ObjectId(id);
+//               } catch {
+//                 return null;
+//               }
+//             })
+//             .filter(Boolean)
+//         }
+//       },
+//       { subjectName: 1, subjectCode: 1 }
+//     ).lean();
+//     const subjectDocMap = new Map(subjectDocs.map((s) => [String(s._id), s]));
+//     let topicMap = new Map();
+//     let subTopicMap = new Map();
+//     if (view === 'student') {
+//       const topicIds = [...new Set(assignments.map((a) => safeTrim(a.topicId)).filter(Boolean))];
+//       const subTopicIds = [...new Set(assignments.map((a) => safeTrim(a.subTopicId)).filter(Boolean))];
+//       const [topicDocs, subTopicDocs] = await Promise.all([Topic.find({ tenantId, topicId: { $in: topicIds }, isdeleted: false }, { topicId: 1, topicName: 1 }).lean(), SubTopic.find({ tenantId, subTopicId: { $in: subTopicIds }, isdeleted: false }, { subTopicId: 1, subTopicName: 1 }).lean()]);
+//       topicMap = new Map(topicDocs.map((t) => [t.topicId, t.topicName]));
+//       subTopicMap = new Map(subTopicDocs.map((s) => [s.subTopicId, s.subTopicName]));
+//     }
+//     const enabledByBatch = new Map();
+//     for (const row of enabledRows) {
+//       const bid = safeTrim(row.batchId);
+//       if (!enabledByBatch.has(bid)) enabledByBatch.set(bid, []);
+//       enabledByBatch.get(bid).push(row);
+//     }
+//     if (view === 'batch') {
+//       const batchResults = [];
+//       for (const batchId of batchIds) {
+//         const batch = batchMap.get(batchId);
+//         if (!batch) continue;
+//         const batchEnabledRows = enabledByBatch.get(batchId) || [];
+//         if (!batchEnabledRows.length) continue;
+//         const colKeySet = new Map();
+//         for (const row of batchEnabledRows) {
+//           const asg = assignMap.get(safeTrim(row.testId));
+//           if (!asg) continue;
+//           const catId = safeTrim(asg.categoryId);
+//           const subCatId = safeTrim(asg.subCategoryId);
+//           const colKey = `${catId}::${subCatId}`;
+//           if (!colKeySet.has(colKey)) {
+//             const cat = catMap.get(catId) || {};
+//             const subCat = subCatMap.get(subCatId) || {};
+//             const catCode = safeTrim(cat.categoryCode || cat.categoryName || catId);
+//             const subCatCode = safeTrim(subCat.subCategoryCode || subCat.subCategoryName || subCatId);
+//             colKeySet.set(colKey, {
+//               colKey,
+//               categoryId: catId,
+//               subCategoryId: subCatId,
+//               catName: cat.categoryName || catId,
+//               subCatName: subCat.subCategoryName || subCatId,
+//               colLabel: `${catCode}${subCatCode}`
+//             });
+//           }
+//         }
+//         const columns = Array.from(colKeySet.values());
+//         const testColMap = new Map();
+//         for (const row of batchEnabledRows) {
+//           const asg = assignMap.get(safeTrim(row.testId));
+//           if (!asg) continue;
+//           const colKey = `${safeTrim(asg.categoryId)}::${safeTrim(asg.subCategoryId)}`;
+//           testColMap.set(safeTrim(row.testId), colKey);
+//         }
+//         const studentColCgpa = new Map();
+//         for (const row of batchEnabledRows) {
+//           const testId = safeTrim(row.testId);
+//           const colKey = testColMap.get(testId);
+//           if (!colKey) continue;
+//           for (const stu of row.students || []) {
+//             const admNo = safeTrim(stu.admissionNo);
+//             if (!admNo) continue;
+//             if (!studentColCgpa.has(admNo)) studentColCgpa.set(admNo, new Map());
+//             const stuMap = studentColCgpa.get(admNo);
+//             if (stu.status === 'COMPLETED' && stu.cgpa !== null && stu.cgpa !== undefined) {
+//               stuMap.set(colKey, round2(Number(stu.cgpa)));
+//             } else if (!stuMap.has(colKey)) {
+//               stuMap.set(colKey, 0);
+//             }
+//           }
+//         }
+//         const batchStudents = await StudentProfile.find({ tenantId, batchId, isdeleted: false, status: 'ACTIVE' }, { admissionNo: 1, 'student.name': 1 }).sort({ 'student.name': 1 }).lean();
+//         const studentRows = [];
+//         let slNo = 0;
+//         const colSums = new Map();
+//         const colCounts = new Map();
+//         for (const stu of batchStudents) {
+//           const admNo = safeTrim(stu.admissionNo);
+//           const stuColMap = studentColCgpa.get(admNo) || new Map();
+//           const row = {
+//             slNo: ++slNo,
+//             admissionNo: admNo,
+//             studentName: stu.student?.name || null
+//           };
+//           let sgpaSum = 0;
+//           let sgpaCount = 0;
+//           for (const col of columns) {
+//             const cgpa = stuColMap.has(col.colKey) ? stuColMap.get(col.colKey) : 0;
+//             row[col.colKey] = cgpa;
+//             colSums.set(col.colKey, (colSums.get(col.colKey) || 0) + cgpa);
+//             if (cgpa > 0) {
+//               colCounts.set(col.colKey, (colCounts.get(col.colKey) || 0) + 1);
+//               sgpaSum += cgpa;
+//               sgpaCount++;
+//             }
+//           }
+//           const sgpa = sgpaCount > 0 ? round2(sgpaSum / sgpaCount) : 0;
+//           row['SGPA'] = sgpa;
+//           row['GSGPA'] = sgpa;
+//           studentRows.push(row);
+//         }
+//         const avgRow = {
+//           slNo: null,
+//           admissionNo: null,
+//           studentName: 'Batch Average (BGPA)'
+//         };
+//         let batchSgpaSum = 0;
+//         let batchSgpaCount = 0;
+//         for (const col of columns) {
+//           const total = colSums.get(col.colKey) || 0;
+//           const count = batchStudents.length;
+//           const avg = count > 0 ? round2(total / count) : 0;
+//           avgRow[col.colKey] = avg;
+//           if (avg > 0) {
+//             batchSgpaSum += avg;
+//             batchSgpaCount++;
+//           }
+//         }
+//         const batchSgpa = batchSgpaCount > 0 ? round2(batchSgpaSum / batchSgpaCount) : 0;
+//         avgRow['SGPA'] = batchSgpa;
+//         avgRow['GSGPA'] = batchSgpa;
+//         batchResults.push({
+//           batchId,
+//           batchCode: batch.batchCode,
+//           batchName: batch.batchName,
+//           columns: columns.map((c) => ({
+//             colKey: c.colKey,
+//             colLabel: c.colLabel,
+//             catName: c.catName,
+//             subCatName: c.subCatName
+//           })),
+//           students: studentRows,
+//           batchAverage: avgRow,
+//           totalStudents: batchStudents.length
+//         });
+//       }
+//       return res.status(200).json({
+//         status: true,
+//         view: 'batch',
+//         count: batchResults.length,
+//         batches: batchResults
+//       });
+//     }
+//     if (view === 'student') {
+//       if (!admissionNos.length) return res.status(400).json({ status: false, message: 'admissionNos[] is required for student view' });
+//       const students = await StudentProfile.find({ tenantId, admissionNo: { $in: admissionNos }, isdeleted: false }, { admissionNo: 1, batchId: 1, batchCode: 1, 'student.name': 1 }).lean();
+//       const studentMap = new Map(students.map((s) => [s.admissionNo, s]));
+//       const studentResults = [];
+//       for (const admNo of admissionNos) {
+//         const student = studentMap.get(admNo);
+//         if (!student) continue;
+//         const stuBatchRows = enabledByBatch.get(student.batchId) || [];
+//         const testRows = [];
+//         for (const row of stuBatchRows) {
+//           const testId = safeTrim(row.testId);
+//           const asg = assignMap.get(testId);
+//           if (!asg) continue;
+//           const stuData = (row.students || []).find((s) => safeTrim(s.admissionNo) === admNo);
+//           const cgpa = stuData?.status === 'COMPLETED' && stuData?.cgpa !== null ? round2(Number(stuData.cgpa)) : 0;
+//           const status = stuData?.status || 'NOT_ASSIGNED';
+//           const cat = catMap.get(safeTrim(asg.categoryId)) || {};
+//           const subCat = subCatMap.get(safeTrim(asg.subCategoryId)) || {};
+//           const subDoc = subjectDocMap.get(String(asg.subjectId)) || {};
+//           testRows.push({
+//             testId,
+//             testCode: asg.testCode || null,
+//             testNo: asg.testNo || null,
+//             subjectName: subDoc.subjectName || null,
+//             topicName: topicMap.get(safeTrim(asg.topicId)) || null,
+//             subTopicName: subTopicMap.get(safeTrim(asg.subTopicId)) || null,
+//             categoryName: cat.categoryName || null,
+//             subCategoryName: subCat.subCategoryName || null,
+//             colLabel: `${safeTrim(cat.categoryCode || cat.categoryName || '')}${safeTrim(subCat.subCategoryCode || subCat.subCategoryName || '')}`,
+//             cgpa,
+//             status
+//           });
+//         }
+//         testRows.sort((a, b) => {
+//           const s = (a.subjectName || '').localeCompare(b.subjectName || '');
+//           if (s !== 0) return s;
+//           return (a.topicName || '').localeCompare(b.topicName || '');
+//         });
+//         const completedRows = testRows.filter((r) => r.cgpa > 0);
+//         const sgpa = completedRows.length > 0 ? round2(completedRows.reduce((s, r) => s + r.cgpa, 0) / completedRows.length) : 0;
+//         studentResults.push({
+//           admissionNo: admNo,
+//           studentName: student.student?.name || null,
+//           batchCode: student.batchCode || null,
+//           sgpa,
+//           tests: testRows
+//         });
+//       }
+//       return res.status(200).json({
+//         status: true,
+//         view: 'student',
+//         count: studentResults.length,
+//         students: studentResults
+//       });
+//     }
+//     return res.status(400).json({ status: false, message: 'Invalid view. Use batch or student' });
+//   } catch (err) {
+//     return next(err);
+//   }
+// };
+
+const getSlashDetailReport = async (req, res, next) => {
+  try {
+    const tenantId = pickTid(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+
+    const batchIds = pickBatchIds(req);
+    if (!batchIds.length) return res.status(400).json({ status: false, message: 'batchIds[] is required' });
+
+    const filterSubjectId = safeTrim(req.body?.subjectId || '');
+    const filterTopicIds = Array.isArray(req.body?.topicIds) ? req.body.topicIds.map(safeTrim).filter(Boolean) : [];
+
+    // Fetch batches
+    const batches = await Batch.find({ tenantId, batchId: { $in: batchIds }, isdeleted: false }, { batchId: 1, batchCode: 1, batchName: 1 }).lean();
+    const batchMap = new Map(batches.map((b) => [b.batchId, b]));
+
+    // Fetch enabled tests
+    const enableQuery = {
+      tenantId,
+      isdeleted: false,
+      status: 'enabled',
+      batchId: { $in: batchIds }
+    };
+    if (filterSubjectId) enableQuery.subjectId = filterSubjectId;
+    const enabledRows = await BatchAssignEnable.find(enableQuery).lean();
+
+    if (!enabledRows.length) return res.status(200).json({ status: true, count: 0, data: [] });
+
+    // Fetch assignment meta for topicId
+    const allTestIds = [...new Set(enabledRows.map((r) => safeTrim(r.testId)).filter(Boolean))];
+    const assignments = await Assignment.find({ tenantId, testId: { $in: allTestIds }, isdeleted: false }, { testId: 1, topicId: 1, subTopicId: 1, subjectId: 1 }).lean();
+    const assignMap = new Map(assignments.map((a) => [a.testId, a]));
+
+    // Fetch topic names
+    const topicIds = [...new Set(assignments.map((a) => safeTrim(a.topicId)).filter(Boolean))];
+    const topicDocs = await Topic.find({ tenantId, topicId: { $in: topicIds }, isdeleted: false }, { topicId: 1, topicName: 1 }).lean();
+    const topicNameMap = new Map(topicDocs.map((t) => [t.topicId, t.topicName]));
+
+    // Fetch subject names
+    const subjectIds = [...new Set(enabledRows.map((r) => safeTrim(r.subjectId)).filter(Boolean))];
+    const subjectDocs = await Subject.find(
+      {
+        _id: {
+          $in: subjectIds
+            .map((id) => {
+              try {
+                return new mongoose.Types.ObjectId(id);
+              } catch {
+                return null;
+              }
+            })
+            .filter(Boolean)
+        }
+      },
+      { subjectName: 1 }
+    ).lean();
+    const subjectDocMap = new Map(subjectDocs.map((s) => [String(s._id), s]));
+
+    // Build testId → topicId map, filtered by topicIds if provided
+    const testTopicMap = new Map(); // testId → topicId
+    for (const asg of assignments) {
+      const topicId = safeTrim(asg.topicId);
+      if (filterTopicIds.length && !filterTopicIds.includes(topicId)) continue;
+      testTopicMap.set(safeTrim(asg.testId), topicId);
+    }
+
+    // Build batchId → subjectId → topicId → testIds[] map
+    // for counting available tests per batch+subject+topic
+    const batchSubjectTopicTests = new Map();
+    // key: `${batchId}::${subjectId}::${topicId}` → Set of testIds
+
+    for (const row of enabledRows) {
+      const bid = safeTrim(row.batchId);
+      const sid = safeTrim(row.subjectId);
+      const testId = safeTrim(row.testId);
+      const topicId = testTopicMap.get(testId);
+      if (!topicId) continue;
+
+      const key = `${bid}::${sid}::${topicId}`;
+      if (!batchSubjectTopicTests.has(key)) batchSubjectTopicTests.set(key, new Set());
+      batchSubjectTopicTests.get(key).add(testId);
+    }
+
+    // Build student data
+    // admissionNo → batchId → subjectId → topicId → { completed, total }
+    // First collect all students from enabledRows
+    const studentBatchMap = new Map(); // admissionNo → batchId
+    const studentNameMap = new Map(); // admissionNo → name
+
+    // Fetch students for all batches
+    const allStudents = await StudentProfile.find({ tenantId, batchId: { $in: batchIds }, isdeleted: false, status: 'ACTIVE' }, { admissionNo: 1, batchId: 1, batchCode: 1, 'student.name': 1 }).lean();
+
+    for (const stu of allStudents) {
+      studentBatchMap.set(safeTrim(stu.admissionNo), stu);
+      studentNameMap.set(safeTrim(stu.admissionNo), stu.student?.name || null);
+    }
+
+    // Build per student per subject+topic completion map
+    // key: `${admNo}::${batchId}::${subjectId}::${topicId}` → { completedTests: Set, totalTests: Set }
+    const studentTopicMap = new Map();
+
+    for (const row of enabledRows) {
+      const bid = safeTrim(row.batchId);
+      const sid = safeTrim(row.subjectId);
+      const testId = safeTrim(row.testId);
+      const topicId = testTopicMap.get(testId);
+      if (!topicId) continue;
+
+      for (const stu of row.students || []) {
+        const admNo = safeTrim(stu.admissionNo);
+        if (!admNo) continue;
+        const key = `${admNo}::${bid}::${sid}::${topicId}`;
+        if (!studentTopicMap.has(key)) {
+          studentTopicMap.set(key, {
+            admissionNo: admNo,
+            batchId: bid,
+            subjectId: sid,
+            topicId,
+            completedTests: new Set(),
+            totalTests: new Set()
+          });
+        }
+        const entry = studentTopicMap.get(key);
+        entry.totalTests.add(testId);
+        if (stu.status === 'COMPLETED') entry.completedTests.add(testId);
+      }
+    }
+
+    // Build flat report rows
+    const data = [];
+
+    for (const [key, entry] of studentTopicMap.entries()) {
+      const stuDoc = studentBatchMap.get(entry.admissionNo) || {};
+      const batch = batchMap.get(entry.batchId) || {};
+      const subDoc = subjectDocMap.get(entry.subjectId) || {};
+      const topicName = topicNameMap.get(entry.topicId) || entry.topicId;
+
+      const available = entry.totalTests.size;
+      const completed = entry.completedTests.size;
+      const notCompleted = available - completed;
+
+      data.push({
+        batchCode: batch.batchCode || null,
+        batchName: batch.batchName || null,
+        admissionNo: entry.admissionNo,
+        studentName: studentNameMap.get(entry.admissionNo) || null,
+        subjectId: entry.subjectId,
+        subjectName: subDoc.subjectName || null,
+        topicId: entry.topicId,
+        topicName,
+        available,
+        completed,
+        notCompleted,
+        report: `${available}/${completed}/${notCompleted}`
+      });
+    }
+
+    // Sort by batchCode → studentName → subjectName → topicName
+    data.sort((a, b) => {
+      const bc = (a.batchCode || '').localeCompare(b.batchCode || '');
+      if (bc !== 0) return bc;
+      const sn = (a.studentName || '').localeCompare(b.studentName || '');
+      if (sn !== 0) return sn;
+      const sub = (a.subjectName || '').localeCompare(b.subjectName || '');
+      if (sub !== 0) return sub;
+      return (a.topicName || '').localeCompare(b.topicName || '');
+    });
+
+    const summary = {
+      totalStudents: new Set(data.map((r) => r.admissionNo)).size,
+      totalBatches: new Set(data.map((r) => r.batchCode)).size,
+      totalTopics: new Set(data.map((r) => r.topicId)).size
+    };
+
+    return res.status(200).json({
+      status: true,
+      summary,
+      count: data.length,
+      data
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const getAssignmentReport = async (req, res, next) => {
+  try {
+    const tenantId = pickTid(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+
+    const view = safeTrim(req.body?.view || 'batch'); // 'batch' | 'student'
+    const filterSubjectId = safeTrim(req.body?.subjectId || '');
+    const admissionNos = Array.isArray(req.body?.admissionNos) ? req.body.admissionNos.map(safeTrim).filter(Boolean) : [];
+
+    const batchIds = pickBatchIds(req);
+    if (!batchIds.length) return res.status(400).json({ status: false, message: 'batchIds[] is required' });
+
+    // ── Fetch batches ──
+    const batches = await Batch.find({ tenantId, batchId: { $in: batchIds }, isdeleted: false }).lean();
+    if (!batches.length) return res.status(200).json({ status: true, view, count: 0, batches: [] });
+
+    const batchMap = new Map(batches.map((b) => [b.batchId, b]));
+
+    // ── Fetch enabled tests ──
+    const enableQuery = {
+      tenantId,
+      isdeleted: false,
+      status: 'enabled',
+      batchId: { $in: batchIds }
+    };
+    if (filterSubjectId) enableQuery.subjectId = filterSubjectId;
+    const enabledRows = await BatchAssignEnable.find(enableQuery).lean();
+    if (!enabledRows.length) return res.status(200).json({ status: true, view, count: 0, batches: [] });
+
+    const allTestIds = [...new Set(enabledRows.map((r) => safeTrim(r.testId)).filter(Boolean))];
+
+    // ── Fetch Assignment meta ──
+    const assignments = await Assignment.find({ tenantId, testId: { $in: allTestIds }, isdeleted: false }, { testId: 1, testNo: 1, testCode: 1, subjectId: 1, topicId: 1, subTopicId: 1, categoryId: 1, subCategoryId: 1, classNo: 1 }).lean();
+    const assignMap = new Map(assignments.map((a) => [a.testId, a]));
+
+    // ── Derive categoryIds and subCategoryIds BEFORE using them ──
+    const categoryIds = [...new Set(assignments.map((a) => safeTrim(a.categoryId)).filter(Boolean))];
+    const subCategoryIds = [...new Set(assignments.map((a) => safeTrim(a.subCategoryId)).filter(Boolean))];
+
+    // ── Fetch category + subcategory names ──
+    const [catDocs, subCatDocs] = await Promise.all([
+      ExamCategory.find({ tenantId, categoryId: { $in: categoryIds }, isdeleted: false }, { categoryId: 1, categoryName: 1, categoryCode: 1 }).lean(),
+      ExamSubCategory.find({ tenantId, subCategoryId: { $in: subCategoryIds }, isdeleted: false }, { subCategoryId: 1, subCategoryName: 1, subCategoryCode: 1, categoryId: 1 }).lean()
+    ]);
+    const catMap = new Map(catDocs.map((c) => [c.categoryId, c]));
+    const subCatMap = new Map(subCatDocs.map((s) => [s.subCategoryId, s]));
+    const subjectIds = [...new Set(enabledRows.map((r) => safeTrim(r.subjectId)).filter(Boolean))];
+    const subjectDocs = await Subject.find(
+      {
+        _id: {
+          $in: subjectIds
+            .map((id) => {
+              try {
+                return new mongoose.Types.ObjectId(id);
+              } catch {
+                return null;
+              }
+            })
+            .filter(Boolean)
+        }
+      },
+      { subjectName: 1, subjectCode: 1 }
+    ).lean();
+    const subjectDocMap = new Map(subjectDocs.map((s) => [String(s._id), s]));
+
+    // ── Fetch topic + subtopic names (for student view) ──
+    let topicMap = new Map();
+    let subTopicMap = new Map();
+    if (view === 'student') {
+      const topicIds = [...new Set(assignments.map((a) => safeTrim(a.topicId)).filter(Boolean))];
+      const subTopicIds = [...new Set(assignments.map((a) => safeTrim(a.subTopicId)).filter(Boolean))];
+      const [topicDocs, subTopicDocs] = await Promise.all([Topic.find({ tenantId, topicId: { $in: topicIds }, isdeleted: false }, { topicId: 1, topicName: 1 }).lean(), SubTopic.find({ tenantId, subTopicId: { $in: subTopicIds }, isdeleted: false }, { subTopicId: 1, subTopicName: 1 }).lean()]);
+      topicMap = new Map(topicDocs.map((t) => [t.topicId, t.topicName]));
+      subTopicMap = new Map(subTopicDocs.map((s) => [s.subTopicId, s.subTopicName]));
+    }
+
+    // ── Group enabled rows by batchId ──
+    const enabledByBatch = new Map();
+    for (const row of enabledRows) {
+      const bid = safeTrim(row.batchId);
+      if (!enabledByBatch.has(bid)) enabledByBatch.set(bid, []);
+      enabledByBatch.get(bid).push(row);
+    }
+
+    // Helper to build column label from category + subcategory
+    const buildColLabel = (catId, subCatId) => {
+      const cat = catMap.get(catId) || {};
+      const subCat = subCatMap.get(subCatId) || {};
+      const catPart = safeTrim(cat.categoryName);
+      const subCatPart = safeTrim(subCat.subCategoryName);
+      return `${catPart} ${subCatPart}`;
+    };
+
+    // ════════════════════════════════════════════════════════════════
+    // BATCH VIEW
+    // ════════════════════════════════════════════════════════════════
+    if (view === 'batch') {
+      const batchResults = [];
+
+      for (const batchId of batchIds) {
+        const batch = batchMap.get(batchId);
+        if (!batch) continue;
+
+        const batchEnabledRows = enabledByBatch.get(batchId) || [];
+        if (!batchEnabledRows.length) continue;
+
+        // Build columns — unique categoryId+subCategoryId combos for this batch
+        const colKeySet = new Map(); // colKey → column meta
+        for (const row of batchEnabledRows) {
+          const asg = assignMap.get(safeTrim(row.testId));
+          if (!asg) continue;
+          const catId = safeTrim(asg.categoryId);
+          const subCatId = safeTrim(asg.subCategoryId);
+          if (!catId || !subCatId) continue;
+          const colKey = `${catId}::${subCatId}`;
+          if (!colKeySet.has(colKey)) {
+            const cat = catMap.get(catId) || {};
+            const subCat = subCatMap.get(subCatId) || {};
+            colKeySet.set(colKey, {
+              colKey,
+              categoryId: catId,
+              subCategoryId: subCatId,
+              catName: cat.categoryName || catId,
+              subCatName: subCat.subCategoryName || subCatId,
+              colLabel: buildColLabel(catId, subCatId),
+              sortOrder: subCat.sortOrder || 0
+            });
+          }
+        }
+
+        // Sort columns by subcategory sortOrder
+        const columns = Array.from(colKeySet.values()).sort((a, b) => a.sortOrder - b.sortOrder);
+
+        // Build testId → colKey map
+        const testColMap = new Map();
+        for (const row of batchEnabledRows) {
+          const asg = assignMap.get(safeTrim(row.testId));
+          if (!asg) continue;
+          const catId = safeTrim(asg.categoryId);
+          const subCatId = safeTrim(asg.subCategoryId);
+          if (!catId || !subCatId) continue;
+          testColMap.set(safeTrim(row.testId), `${catId}::${subCatId}`);
+        }
+
+        // Build student → colKey → cgpa map
+        const studentColCgpa = new Map(); // admissionNo → Map(colKey → cgpa)
+        for (const row of batchEnabledRows) {
+          const testId = safeTrim(row.testId);
+          const colKey = testColMap.get(testId);
+          if (!colKey) continue;
+          for (const stu of row.students || []) {
+            const admNo = safeTrim(stu.admissionNo);
+            if (!admNo) continue;
+            if (!studentColCgpa.has(admNo)) studentColCgpa.set(admNo, new Map());
+            const stuMap = studentColCgpa.get(admNo);
+            if (stu.status === 'COMPLETED' && stu.cgpa !== null && stu.cgpa !== undefined) {
+              // Only one test per col — take as-is
+              stuMap.set(colKey, round2(Number(stu.cgpa)));
+            } else if (!stuMap.has(colKey)) {
+              stuMap.set(colKey, 0);
+            }
+          }
+        }
+
+        // Fetch all active students in batch ordered by name
+        const batchStudents = await StudentProfile.find({ tenantId, batchId, isdeleted: false, status: 'ACTIVE' }, { admissionNo: 1, 'student.name': 1 }).sort({ 'student.name': 1 }).lean();
+
+        // Build student rows
+        const studentRows = [];
+        let slNo = 0;
+        const colSums = new Map(); // colKey → sum of all student cgpa
+        const colNonZeroCounts = new Map(); // colKey → count with cgpa > 0
+
+        for (const stu of batchStudents) {
+          const admNo = safeTrim(stu.admissionNo);
+          const stuColMap = studentColCgpa.get(admNo) || new Map();
+          const row = {
+            slNo: ++slNo,
+            admissionNo: admNo,
+            studentName: stu.student?.name || null
+          };
+
+          let sgpaSum = 0;
+          let sgpaCount = 0;
+
+          for (const col of columns) {
+            const cgpa = stuColMap.has(col.colKey) ? stuColMap.get(col.colKey) : 0;
+            row[col.colKey] = cgpa;
+            colSums.set(col.colKey, (colSums.get(col.colKey) || 0) + cgpa);
+            if (cgpa > 0) {
+              colNonZeroCounts.set(col.colKey, (colNonZeroCounts.get(col.colKey) || 0) + 1);
+              sgpaSum += cgpa;
+              sgpaCount++;
+            }
+          }
+
+          // SGPA = average of non-zero cgpa columns for this student
+          row['SGPA'] = sgpaCount > 0 ? round2(sgpaSum / sgpaCount) : 0;
+          row['GSGPA'] = row['SGPA']; // same for now
+
+          studentRows.push(row);
+        }
+
+        // Build batch average row
+        const avgRow = {
+          slNo: null,
+          admissionNo: null,
+          studentName: 'Batch Average (BGPA)'
+        };
+        let batchSgpaSum = 0;
+        let batchSgpaCount = 0;
+        const totalStudents = batchStudents.length;
+
+        for (const col of columns) {
+          const total = colSums.get(col.colKey) || 0;
+          const avg = totalStudents > 0 ? round2(total / totalStudents) : 0;
+          avgRow[col.colKey] = avg;
+          if (avg > 0) {
+            batchSgpaSum += avg;
+            batchSgpaCount++;
+          }
+        }
+        avgRow['SGPA'] = batchSgpaCount > 0 ? round2(batchSgpaSum / batchSgpaCount) : 0;
+        avgRow['GSGPA'] = avgRow['SGPA'];
+
+        batchResults.push({
+          batchId,
+          batchCode: batch.batchCode,
+          batchName: batch.batchName,
+          columns: columns.map((c) => ({
+            colKey: c.colKey,
+            colLabel: c.colLabel,
+            catName: c.catName,
+            subCatName: c.subCatName
+          })),
+          students: studentRows,
+          batchAverage: avgRow,
+          totalStudents
+        });
+      }
+
+      return res.status(200).json({
+        status: true,
+        view: 'batch',
+        count: batchResults.length,
+        batches: batchResults
+      });
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // STUDENT VIEW
+    // ════════════════════════════════════════════════════════════════
+    if (view === 'student') {
+      if (!admissionNos.length)
+        return res.status(400).json({
+          status: false,
+          message: 'admissionNos[] is required for student view'
+        });
+
+      // Fetch student profiles
+      const students = await StudentProfile.find({ tenantId, admissionNo: { $in: admissionNos }, isdeleted: false }, { admissionNo: 1, batchId: 1, batchCode: 1, 'student.name': 1 }).lean();
+      const studentMap = new Map(students.map((s) => [s.admissionNo, s]));
+
+      const studentResults = [];
+
+      for (const admNo of admissionNos) {
+        const student = studentMap.get(admNo);
+        if (!student) continue;
+
+        const stuBatchRows = enabledByBatch.get(student.batchId) || [];
+        const testRows = [];
+
+        for (const row of stuBatchRows) {
+          const testId = safeTrim(row.testId);
+          const asg = assignMap.get(testId);
+          if (!asg) continue;
+
+          const stuData = (row.students || []).find((s) => safeTrim(s.admissionNo) === admNo);
+          const cgpa = stuData?.status === 'COMPLETED' && stuData?.cgpa !== null ? round2(Number(stuData.cgpa)) : 0;
+          const status = stuData?.status || 'NOT_ASSIGNED';
+          const cat = catMap.get(safeTrim(asg.categoryId)) || {};
+          const subCat = subCatMap.get(safeTrim(asg.subCategoryId)) || {};
+          const subDoc = subjectDocMap.get(String(asg.subjectId)) || {};
+
+          testRows.push({
+            testId,
+            testCode: asg.testCode || null,
+            testNo: asg.testNo || null,
+            subjectName: subDoc.subjectName || null,
+            topicName: topicMap.get(safeTrim(asg.topicId)) || null,
+            subTopicName: subTopicMap.get(safeTrim(asg.subTopicId)) || null,
+            categoryName: cat.categoryName || null,
+            subCategoryName: subCat.subCategoryName || null,
+            colLabel: buildColLabel(safeTrim(asg.categoryId), safeTrim(asg.subCategoryId)),
+            cgpa,
+            status
+          });
+        }
+
+        // Sort by subject → topic
+        testRows.sort((a, b) => {
+          const s = (a.subjectName || '').localeCompare(b.subjectName || '');
+          if (s !== 0) return s;
+          return (a.topicName || '').localeCompare(b.topicName || '');
+        });
+
+        // SGPA = average of non-zero cgpa rows
+        const completedRows = testRows.filter((r) => r.cgpa > 0);
+        const sgpa = completedRows.length > 0 ? round2(completedRows.reduce((s, r) => s + r.cgpa, 0) / completedRows.length) : 0;
+
+        studentResults.push({
+          admissionNo: admNo,
+          studentName: student.student?.name || null,
+          batchCode: student.batchCode || null,
+          sgpa,
+          tests: testRows
+        });
+      }
+
+      return res.status(200).json({
+        status: true,
+        view: 'student',
+        count: studentResults.length,
+        students: studentResults
+      });
+    }
+
+    return res.status(400).json({ status: false, message: 'Invalid view. Use batch or student' });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   getStudentListReport,
   getStaffListReport,
@@ -1611,5 +2934,8 @@ export default {
   getFeedbackReport,
   getBatchPtmReport,
   getCgpaReport,
-  getSlashReport
+  getSlashReport,
+  getSubjectsByBatch,
+  getAssignmentReport,
+  getSlashDetailReport
 };
