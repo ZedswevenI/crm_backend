@@ -77,12 +77,15 @@ function normalizeColumns(arr) {
       text: safeTrim(c.text || '')
     }));
 }
+
 function needsOptions(qt) {
   return ['mcq_single', 'mcq_multi'].includes(qt);
 }
+
 function needsOneCorrect(qt) {
   return ['mcq_single', 'true_false'].includes(qt);
 }
+
 function validateQDoc(d, label) {
   if (!d.tenantId) return `${label}: tenantId required`;
   if (d.examId && !d.sectionId) return `${label}: sectionId required when examId is set`;
@@ -208,6 +211,7 @@ const createQuestion = async (req, res, next) => {
     const diff = safeTrim(req.body?.difficulty || 'medium').toLowerCase();
     const opts = normalizeOptions(req.body?.questionOptions);
     const questionNo = await generateQuestionNo(tenantId, subjectIdRaw);
+    const qt_check = safeTrim(req.body?.questionType).toLowerCase();
     const doc = {
       tenantId,
       examId,
@@ -222,7 +226,8 @@ const createQuestion = async (req, res, next) => {
       images: normalizeImages(req.body?.images),
       positiveMarks: toNum(req.body?.positiveMarks),
       negativeMarks: toNum(req.body?.negativeMarks),
-      hasPartialMarking: req.body?.hasPartialMarking === true,
+      // hasPartialMarking: req.body?.hasPartialMarking === true,
+      hasPartialMarking: qt_check === 'matrix' ? true : req.body?.hasPartialMarking === true,
       numericMin: req.body?.numericMin != null ? toNum(req.body.numericMin) : null,
       numericMax: req.body?.numericMax != null ? toNum(req.body.numericMax) : null,
       questionHtml: req.body?.questionHtml ?? '',
@@ -349,9 +354,17 @@ const updateQuestion = async (req, res, next) => {
     for (const f of numFields) {
       if (req.body?.[f] !== undefined) set[f] = toNum(req.body[f]);
     }
-    const boolFields = ['hasPartialMarking', 'enablePassage', 'enableInstruction', 'enableSolution'];
+    // const boolFields = ['hasPartialMarking', 'enablePassage', 'enableInstruction', 'enableSolution'];
+    // for (const f of boolFields) {
+    //   if (req.body?.[f] !== undefined) set[f] = req.body[f] === true;
+    // }
+    const boolFields = ['enablePassage', 'enableInstruction', 'enableSolution'];
     for (const f of boolFields) {
       if (req.body?.[f] !== undefined) set[f] = req.body[f] === true;
+    }
+    if (req.body?.hasPartialMarking !== undefined) {
+      const finalType = safeTrim(set.questionType || existing.questionType).toLowerCase();
+      set.hasPartialMarking = finalType === 'matrix' ? true : req.body.hasPartialMarking === true;
     }
     if (req.body?.numericMin !== undefined) set.numericMin = req.body.numericMin != null ? toNum(req.body.numericMin) : null;
     if (req.body?.numericMax !== undefined) set.numericMax = req.body.numericMax != null ? toNum(req.body.numericMax) : null;
@@ -629,7 +642,8 @@ const createQuestionInBank = async (req, res, next) => {
       difficulty: safeTrim(difficulty) || 'medium',
       positiveMarks: toNum(positiveMarks, 0),
       negativeMarks: toNum(negativeMarks, 0),
-      hasPartialMarking: !!hasPartialMarking,
+      // hasPartialMarking: !!hasPartialMarking,
+      hasPartialMarking: safeTrim(questionType).toLowerCase() === 'matrix' ? true : !!hasPartialMarking,
       numericMin: numericMin !== undefined ? toNum(numericMin) : null,
       numericMax: numericMax !== undefined ? toNum(numericMax) : null,
       questionHtml: questionHtml || '',
@@ -691,7 +705,8 @@ const createQuestionsBulkInBank = async (req, res, next) => {
         difficulty: safeTrim(q.difficulty) || 'medium',
         positiveMarks: toNum(q.positiveMarks, 0),
         negativeMarks: toNum(q.negativeMarks, 0),
-        hasPartialMarking: !!q.hasPartialMarking,
+        // hasPartialMarking: !!q.hasPartialMarking,
+        hasPartialMarking: safeTrim(q?.questionType).toLowerCase() === 'matrix' ? true : q?.hasPartialMarking === true,
         numericMin: q.numericMin !== undefined ? toNum(q.numericMin) : null,
         numericMax: q.numericMax !== undefined ? toNum(q.numericMax) : null,
         questionHtml: q.questionHtml || '',
@@ -1100,6 +1115,9 @@ const bulkUploadAnswers = async (req, res, next) => {
       if (Object.keys(set).length <= 1) {
         errors.push({ questionId, message: 'No fields to update' });
         continue;
+      }
+      if (safeTrim(existing.questionType).toLowerCase() === 'matrix') {
+        set.hasPartialMarking = true;
       }
       ops.push({
         updateOne: {

@@ -33,6 +33,7 @@ routes.post('/school-exam/marks/add', studentCtrl.addSchoolExamMarks);
 routes.post('/bulk-update', studentCtrl.bulkUpdateStudents);
 routes.post('/bulk-image-upload', upload.array('images', 100), studentCtrl.bulkUploadPhotos);
 routes.post('/late-entries', studentCtrl.getStudentLateEntries);
+routes.post('/rpa-import', validatetoken, studentCtrl.importStudentRpa);
 
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Student routes' }));
 
