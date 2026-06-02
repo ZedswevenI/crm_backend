@@ -54,6 +54,7 @@ const StudentProfileSchema = new mongoose.Schema(
     yearNo: { type: Number, required: false, default: 1 },
     classNo: { type: Number, required: false, default: null },
     ayHistory: { type: [ayHistorySchema], required: false, default: [] },
+    studentRpa: { type: String, trim: true, default: null, index: true },
     status: {
       type: String,
       enum: ['ACTIVE', 'INACTIVE'],
@@ -69,6 +70,7 @@ const StudentProfileSchema = new mongoose.Schema(
 
 StudentProfileSchema.index({ tenantId: 1, admissionNo: 1 }, { unique: true });
 StudentProfileSchema.index({ tenantId: 1, registrationNumber: 1 });
+StudentProfileSchema.index({ tenantId: 1, studentRpa: 1 });
 StudentProfileSchema.index({ tenantId: 1, studentSchoolId: 1 });
 
 const StudentProfile = mongoose.model('studentprofile', StudentProfileSchema);

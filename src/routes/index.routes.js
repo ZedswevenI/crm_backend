@@ -19,6 +19,7 @@ import reportRoute from './reports.routes.js';
 import dashboardRoute from './dashboard.routes.js';
 import performanceRoute from './performance.routes.js';
 import communicationRoutes from './communication.routes.js';
+import invigiRoutes from './invigilation.routes.js';
 
 routes.post('/healthcheck', (req, res) => {
   try {
@@ -44,5 +45,6 @@ routes.use('/feedback', feedbackRoute);
 routes.use('/reports', reportRoute);
 routes.use('/performance', performanceRoute);
 routes.use('/communication', communicationRoutes);
+routes.use('/invigi', invigiRoutes);
 
 export default routes;

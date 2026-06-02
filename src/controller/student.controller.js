@@ -1679,6 +1679,76 @@ const getStudentLateEntries = async (req, res, next) => {
   }
 };
 
+const importStudentRpa = async (req, res, next) => {
+  try {
+    const tenantId = safeTrim(req.body?.entiId || '');
+    if (!tenantId) return res.status(400).json({ status: false, message: 'entiId is required' });
+    const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+    if (!rows.length) return res.status(400).json({ status: false, message: 'rows[] is required' });
+    const valid = [];
+    const invalid = [];
+    for (const row of rows) {
+      const admissionNo = safeTrim(row.admissionNo || '');
+      const studentRpa = safeTrim(row.studentRpa || '');
+      if (!admissionNo) {
+        invalid.push({ row, reason: 'admissionNo is empty' });
+        continue;
+      }
+      if (!studentRpa) {
+        invalid.push({ row, reason: 'studentRpa is empty' });
+        continue;
+      }
+      valid.push({ admissionNo, studentRpa });
+    }
+    if (!valid.length)
+      return res.status(400).json({
+        status: false,
+        message: 'No valid rows found',
+        invalidRows: invalid
+      });
+    const admissionNos = valid.map((r) => r.admissionNo);
+    const profiles = await StudentProfile.find({ tenantId, admissionNo: { $in: admissionNos }, isdeleted: false }, { _id: 1, admissionNo: 1, studentRpa: 1 }).lean();
+    const profileMap = new Map(profiles.map((p) => [safeTrim(p.admissionNo), p]));
+    const bulkOps = [];
+    const matched = [];
+    const unmatched = [];
+    for (const { admissionNo, studentRpa } of valid) {
+      const profile = profileMap.get(admissionNo);
+      if (!profile) {
+        unmatched.push({ admissionNo, studentRpa, reason: 'Student not found' });
+        continue;
+      }
+      matched.push({ admissionNo, studentRpa });
+      bulkOps.push({
+        updateOne: {
+          filter: { _id: profile._id },
+          update: { $set: { studentRpa, updatedAt: new Date() } }
+        }
+      });
+    }
+    let updatedCount = 0;
+    if (bulkOps.length) {
+      const result = await StudentProfile.bulkWrite(bulkOps, { ordered: false });
+      updatedCount = result.modifiedCount || bulkOps.length;
+    }
+    return res.status(200).json({
+      status: true,
+      message: `RPA import complete. ${updatedCount} student(s) updated.`,
+      summary: {
+        totalRows: rows.length,
+        validRows: valid.length,
+        invalidRows: invalid.length,
+        matched: matched.length,
+        unmatched: unmatched.length,
+        updated: updatedCount
+      },
+      unmatchedList: unmatched,
+      invalidList: invalid
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
 export default {
   listStudents,
   viewProfile,
@@ -1701,5 +1771,6 @@ export default {
   getStudentRemarks,
   bulkUpdateStudents,
   bulkUploadPhotos,
-  getStudentLateEntries
+  getStudentLateEntries,
+  importStudentRpa
 };
