@@ -23,13 +23,13 @@ import Staff from '../models/staff.model.js';
 import TimeTable from '../models/timetable.model.js';
 import Attendance from '../models/attandence.model.js';
 import StudyMaterial from '../models/studymaterial.model.js';
-import SchoolExam from '../models/schoolexam.model.js';
-import SchoolExamResult from '../models/schoolexamresult.model.js';
 import StudentRemark from '../models/studentremark.model.js';
 import LateEntryLog from '../models/lateEntrylog.model.js';
 import FeedbackForm from '../models/feedbackForm.model.js';
 import FeedbackResponse from '../models/feedbackResponse.model.js';
+import StudentAlumni from '../models/studentAlumni.model.js';
 import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
+import AdmZip from 'adm-zip';
 
 const QUESTION_BUCKET = process.env.AWS_S3_QUESTION_BUCKET;
 const REGION = process.env.AWS_REGION || 'ap-south-1';
@@ -55,9 +55,21 @@ const DAYS = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 
 
 const getPreviousMonday = (dateMs) => {
   const d = new Date(dateMs);
-  const utcDay = d.getUTCDay(); // 0=Sun
+  const utcDay = d.getUTCDay();
   const diffDays = utcDay === 0 ? -6 : 1 - utcDay;
   return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + diffDays);
+};
+
+const ALLOWED_IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp']);
+
+const getMimeType = (ext) => {
+  const map = {
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.png': 'image/png',
+    '.webp': 'image/webp'
+  };
+  return map[ext.toLowerCase()] || 'image/jpeg';
 };
 
 const getEffectivePeriods = (tt, dateMs) => {
@@ -212,7 +224,13 @@ const viewProfile = async (req, res, next) => {
         addressLine1: admission?.student?.address || '',
         city: admission?.student?.city || '',
         gender: admission?.student?.gender || '',
-        dob: admission?.student?.dateOfBirth || null
+        dob: admission?.student?.dateOfBirth || null,
+        photoUrl: profile.photoUrl || null,
+        isTabletBlocked: profile.isTabletBlocked || false,
+        studentRpa: profile.studentRpa || [],
+        boardExams: profile.boardExams || [],
+        classNo: profile.classNo || null,
+        batchCode: profile.batchCode || null
       },
       program: {
         programName: profile.programName,
@@ -1438,52 +1456,6 @@ const toggleTabletAccess = async (req, res, next) => {
   }
 };
 
-const addSchoolExamMarks = async (req, res, next) => {
-  try {
-    const tenantId = pickTenantId(req);
-    const { examId, studentId, subjects, remarks } = req.body;
-    if (!tenantId || !examId || !studentId || !Array.isArray(subjects)) {
-      return res.status(400).json({ status: false, message: 'tenantId, examId, studentId, and subjects array are required' });
-    }
-    const student = await StudentProfile.findOne({ tenantId, studentId, isdeleted: false }, { admissionNo: 1 }).lean();
-    if (!student) return res.status(404).json({ status: false, message: 'Student not found' });
-    let totalMaxMarks = 0;
-    let totalObtainedMarks = 0;
-    const formattedSubjects = subjects.map((s) => {
-      const max = toNum(s.maxMarks);
-      const obtained = toNum(s.obtainedMarks);
-      totalMaxMarks += max;
-      totalObtainedMarks += obtained;
-      return {
-        subjectName: safeTrim(s.subjectName),
-        maxMarks: max,
-        obtainedMarks: obtained,
-        grade: safeTrim(s.grade)
-      };
-    });
-    const percentage = totalMaxMarks > 0 ? Math.round((totalObtainedMarks / totalMaxMarks) * 100 * 100) / 100 : 0;
-    const result = await SchoolExamResult.findOneAndUpdate(
-      { tenantId, examId, studentId, isdeleted: false },
-      {
-        $set: {
-          admissionNo: student.admissionNo,
-          subjects: formattedSubjects,
-          totalMaxMarks,
-          totalObtainedMarks,
-          percentage,
-          remarks: safeTrim(remarks),
-          updatedBy: req.body?.userId || null
-        },
-        $setOnInsert: { createdBy: req.body?.userId || null }
-      },
-      { new: true, upsert: true }
-    );
-    return res.status(200).json({ status: true, message: 'School exam marks recorded successfully', data: result });
-  } catch (err) {
-    return next(err);
-  }
-};
-
 const addStudentRemark = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
@@ -1519,55 +1491,6 @@ const getStudentRemarks = async (req, res, next) => {
     }
     const remarks = await StudentRemark.find({ tenantId, admissionNo, isdeleted: false }).sort({ dateOfIncident: -1 }).lean();
     return res.status(200).json({ status: true, data: remarks, count: remarks.length });
-  } catch (err) {
-    return next(err);
-  }
-};
-
-const bulkUpdateStudents = async (req, res, next) => {
-  try {
-    const tenantId = pickTenantId(req);
-    const students = Array.isArray(req.body?.students) ? req.body.students : [];
-    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-    if (!students.length) return res.status(400).json({ status: false, message: 'students array is required' });
-    let successCount = 0;
-    let failedCount = 0;
-    const errors = [];
-    for (const s of students) {
-      const admissionNo = safeTrim(s['Enrolment Number'] || s['Admission No'] || s.admissionNo || '');
-      if (!admissionNo) {
-        failedCount++;
-        errors.push({ admissionNo: '-', reason: 'Missing admissionNo' });
-        continue;
-      }
-      const profileUpdate = {};
-      if (safeTrim(s['Full Name'] || s.fullName)) profileUpdate['student.name'] = safeTrim(s['Full Name'] || s.fullName);
-      if (safeTrim(s['Mobile'] || s.mobile)) profileUpdate['student.phone'] = safeTrim(s['Mobile'] || s.mobile);
-      if (safeTrim(s['Phone 1'] || s.phone1)) profileUpdate['student.phone1'] = safeTrim(s['Phone 1'] || s.phone1);
-      if (safeTrim(s['Phone 2'] || s.phone2)) profileUpdate['student.phone2'] = safeTrim(s['Phone 2'] || s.phone2);
-      if (safeTrim(s['Email'] || s.email)) profileUpdate['student.email'] = safeTrim(s['Email'] || s.email);
-      if (safeTrim(s['Email 1'] || s.email1)) profileUpdate['student.email1'] = safeTrim(s['Email 1'] || s.email1);
-      if (safeTrim(s['Email 2'] || s.email2)) profileUpdate['student.email2'] = safeTrim(s['Email 2'] || s.email2);
-      if (safeTrim(s['Parent Name'] || s.parentName)) profileUpdate['student.parentName'] = safeTrim(s['Parent Name'] || s.parentName);
-      if (safeTrim(s['Parent Mobile'] || s.parentMobile)) profileUpdate['student.parentPhone'] = safeTrim(s['Parent Mobile'] || s.parentMobile);
-      if (!Object.keys(profileUpdate).length) {
-        failedCount++;
-        errors.push({ admissionNo, reason: 'No fields to update' });
-        continue;
-      }
-      const result = await StudentProfile.updateOne({ tenantId, admissionNo, isdeleted: false }, { $set: { ...profileUpdate, updatedBy: safeTrim(req.body?.userId || '') } });
-      if (result.matchedCount === 0) {
-        failedCount++;
-        errors.push({ admissionNo, reason: 'Student not found' });
-      } else {
-        successCount++;
-      }
-    }
-    return res.status(200).json({
-      status: true,
-      message: 'Bulk update completed',
-      data: { successCount, failedCount, errors }
-    });
   } catch (err) {
     return next(err);
   }
@@ -1689,25 +1612,26 @@ const importStudentRpa = async (req, res, next) => {
     const invalid = [];
     for (const row of rows) {
       const admissionNo = safeTrim(row.admissionNo || '');
-      const studentRpa = safeTrim(row.studentRpa || '');
+      let rpaRaw = row.studentRpa;
+      let rpaArr = [];
+      if (Array.isArray(rpaRaw)) {
+        rpaArr = rpaRaw.map((r) => safeTrim(r)).filter(Boolean);
+      } else if (rpaRaw !== undefined && rpaRaw !== null && safeTrim(rpaRaw) !== '') {
+        rpaArr = [safeTrim(rpaRaw)];
+      }
       if (!admissionNo) {
         invalid.push({ row, reason: 'admissionNo is empty' });
         continue;
       }
-      if (!studentRpa) {
-        invalid.push({ row, reason: 'studentRpa is empty' });
+      if (!rpaArr.length) {
+        invalid.push({ row, reason: 'studentRpa is empty or invalid' });
         continue;
       }
-      valid.push({ admissionNo, studentRpa });
+      valid.push({ admissionNo, studentRpa: rpaArr });
     }
-    if (!valid.length)
-      return res.status(400).json({
-        status: false,
-        message: 'No valid rows found',
-        invalidRows: invalid
-      });
+    if (!valid.length) return res.status(400).json({ status: false, message: 'No valid rows found', invalidRows: invalid });
     const admissionNos = valid.map((r) => r.admissionNo);
-    const profiles = await StudentProfile.find({ tenantId, admissionNo: { $in: admissionNos }, isdeleted: false }, { _id: 1, admissionNo: 1, studentRpa: 1 }).lean();
+    const profiles = await StudentProfile.find({ tenantId, admissionNo: { $in: admissionNos }, isdeleted: false }, { _id: 1, admissionNo: 1 }).lean();
     const profileMap = new Map(profiles.map((p) => [safeTrim(p.admissionNo), p]));
     const bulkOps = [];
     const matched = [];
@@ -1749,6 +1673,409 @@ const importStudentRpa = async (req, res, next) => {
     return next(err);
   }
 };
+
+const importBoardExamMarks = async (req, res, next) => {
+  try {
+    const tenantId = safeTrim(req.body?.entiId || req.body?.tenantId || '');
+    if (!tenantId) return res.status(400).json({ status: false, message: 'entiId is required' });
+    const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+    if (!rows.length) return res.status(400).json({ status: false, message: 'rows[] is required' });
+    const valid = [];
+    const invalid = [];
+    for (const row of rows) {
+      const enrollmentNumber = safeTrim(row.enrollmentNumber || row.admissionNo || '');
+      const boardExamName = safeTrim(row.boardExamName || '');
+      if (!enrollmentNumber) {
+        invalid.push({ row, reason: 'enrollmentNumber is empty' });
+        continue;
+      }
+      if (!boardExamName) {
+        invalid.push({ row, reason: 'boardExamName is empty' });
+        continue;
+      }
+      valid.push({
+        enrollmentNumber,
+        boardExamName,
+        schoolId: safeTrim(row.schoolId || ''),
+        s1: row.s1 !== undefined ? toNum(row.s1) : null,
+        s2: row.s2 !== undefined ? toNum(row.s2) : null,
+        s3: row.s3 !== undefined ? toNum(row.s3) : null,
+        s4: row.s4 !== undefined ? toNum(row.s4) : null,
+        s5: row.s5 !== undefined ? toNum(row.s5) : null,
+        s6: row.s6 !== undefined ? toNum(row.s6) : null,
+        s7: row.s7 !== undefined ? toNum(row.s7) : null,
+        total: row.total !== undefined ? toNum(row.total) : null
+      });
+    }
+    if (!valid.length) return res.status(400).json({ status: false, message: 'No valid rows found', invalidRows: invalid });
+    const enrollmentNos = valid.map((r) => r.enrollmentNumber);
+    const profiles = await StudentProfile.find({ tenantId, admissionNo: { $in: enrollmentNos }, isdeleted: false }).lean();
+    const profileMap = new Map(profiles.map((p) => [safeTrim(p.admissionNo), p]));
+    const bulkOps = [];
+    const matched = [];
+    const unmatched = [];
+    for (const row of valid) {
+      const profile = profileMap.get(row.enrollmentNumber);
+      if (!profile) {
+        unmatched.push({ enrollmentNumber: row.enrollmentNumber, reason: 'Student not found' });
+        continue;
+      }
+      if (![10, 11].includes(Number(profile.classNo))) {
+        unmatched.push({ enrollmentNumber: row.enrollmentNumber, reason: `Class ${profile.classNo} not eligible (must be 10 or 11)` });
+        continue;
+      }
+      matched.push(row.enrollmentNumber);
+      const examEntry = { boardExamName: row.boardExamName, importedAt: Date.now() };
+      if (row.schoolId) examEntry.schoolId = row.schoolId;
+      if (row.s1 !== null) examEntry.s1 = row.s1;
+      if (row.s2 !== null) examEntry.s2 = row.s2;
+      if (row.s3 !== null) examEntry.s3 = row.s3;
+      if (row.s4 !== null) examEntry.s4 = row.s4;
+      if (row.s5 !== null) examEntry.s5 = row.s5;
+      if (row.s6 !== null) examEntry.s6 = row.s6;
+      if (row.s7 !== null) examEntry.s7 = row.s7;
+      if (row.total !== null) examEntry.total = row.total;
+      const existingExams = Array.isArray(profile.boardExams) ? profile.boardExams : [];
+      const alreadyExists = existingExams.some((e) => safeTrim(e.boardExamName).toLowerCase() === row.boardExamName.toLowerCase());
+      if (alreadyExists) {
+        bulkOps.push({
+          updateOne: {
+            filter: {
+              _id: profile._id,
+              'boardExams.boardExamName': { $regex: new RegExp(`^${row.boardExamName}$`, 'i') }
+            },
+            update: { $set: { 'boardExams.$': examEntry } }
+          }
+        });
+      } else {
+        bulkOps.push({
+          updateOne: {
+            filter: { _id: profile._id },
+            update: { $push: { boardExams: examEntry } }
+          }
+        });
+      }
+    }
+    let updatedCount = 0;
+    if (bulkOps.length) {
+      const result = await StudentProfile.bulkWrite(bulkOps, { ordered: false });
+      updatedCount = result.modifiedCount || bulkOps.length;
+    }
+    return res.status(200).json({
+      status: true,
+      message: `Board exam import complete. ${updatedCount} student(s) updated.`,
+      summary: {
+        totalRows: rows.length,
+        validRows: valid.length,
+        invalidRows: invalid.length,
+        matched: matched.length,
+        unmatched: unmatched.length,
+        updated: updatedCount
+      },
+      unmatchedList: unmatched,
+      invalidList: invalid
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const importAlumniData = async (req, res, next) => {
+  try {
+    const tenantId = safeTrim(req.body?.entiId || req.body?.tenantId || '');
+    if (!tenantId) return res.status(400).json({ status: false, message: 'entiId is required' });
+    const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+    if (!rows.length) return res.status(400).json({ status: false, message: 'rows[] is required' });
+    const valid = [];
+    const invalid = [];
+    for (const row of rows) {
+      const enrollmentNumber = safeTrim(row.enrollmentNumber || row.admissionNo || '');
+      if (!enrollmentNumber) {
+        invalid.push({ row, reason: 'enrollmentNumber is empty' });
+        continue;
+      }
+      valid.push({ enrollmentNumber, raw: row });
+    }
+    if (!valid.length) return res.status(400).json({ status: false, message: 'No valid rows found', invalidRows: invalid });
+    const enrollmentNos = valid.map((r) => r.enrollmentNumber);
+    const profiles = await StudentProfile.find({ tenantId, admissionNo: { $in: enrollmentNos }, isdeleted: false }).lean();
+    const profileMap = new Map(profiles.map((p) => [safeTrim(p.admissionNo), p]));
+    const bulkOps = [];
+    const matched = [];
+    const unmatched = [];
+    for (const { enrollmentNumber, raw } of valid) {
+      const profile = profileMap.get(enrollmentNumber);
+      const studentId = profile ? safeTrim(profile.studentId) : null;
+      if (!profile) {
+        unmatched.push({ enrollmentNumber, reason: 'Student profile not found — record still saved' });
+      } else if (![11, 12].includes(Number(profile.classNo))) {
+        unmatched.push({ enrollmentNumber, reason: `Class ${profile.classNo} not eligible (must be 11 or 12)` });
+        continue;
+      } else {
+        matched.push(enrollmentNumber);
+      }
+      const setFields = { updatedAt: Date.now() };
+      if (studentId) setFields.studentId = studentId;
+      const jm = {};
+      if (raw['jeeMain.physics'] !== undefined) jm.physics = toNum(raw['jeeMain.physics']);
+      if (raw['jeeMain.chemistry'] !== undefined) jm.chemistry = toNum(raw['jeeMain.chemistry']);
+      if (raw['jeeMain.maths'] !== undefined) jm.maths = toNum(raw['jeeMain.maths']);
+      if (raw['jeeMain.total'] !== undefined) jm.total = toNum(raw['jeeMain.total']);
+      if (raw['jeeMain.rank'] !== undefined) jm.rank = toNum(raw['jeeMain.rank']);
+      if (raw['jeeMain.selected'] !== undefined) jm.selected = safeTrim(raw['jeeMain.selected']);
+      if (Object.keys(jm).length) {
+        Object.entries(jm).forEach(([k, v]) => {
+          setFields[`jeeMain.${k}`] = v;
+        });
+      }
+      const jp1 = {};
+      if (raw['jeeAdv.paper1.physics'] !== undefined) jp1.physics = toNum(raw['jeeAdv.paper1.physics']);
+      if (raw['jeeAdv.paper1.chemistry'] !== undefined) jp1.chemistry = toNum(raw['jeeAdv.paper1.chemistry']);
+      if (raw['jeeAdv.paper1.maths'] !== undefined) jp1.maths = toNum(raw['jeeAdv.paper1.maths']);
+      if (raw['jeeAdv.paper1.total'] !== undefined) jp1.total = toNum(raw['jeeAdv.paper1.total']);
+      if (Object.keys(jp1).length) {
+        Object.entries(jp1).forEach(([k, v]) => {
+          setFields[`jeeAdv.paper1.${k}`] = v;
+        });
+      }
+      const jp2 = {};
+      if (raw['jeeAdv.paper2.physics'] !== undefined) jp2.physics = toNum(raw['jeeAdv.paper2.physics']);
+      if (raw['jeeAdv.paper2.chemistry'] !== undefined) jp2.chemistry = toNum(raw['jeeAdv.paper2.chemistry']);
+      if (raw['jeeAdv.paper2.maths'] !== undefined) jp2.maths = toNum(raw['jeeAdv.paper2.maths']);
+      if (raw['jeeAdv.paper2.total'] !== undefined) jp2.total = toNum(raw['jeeAdv.paper2.total']);
+      if (Object.keys(jp2).length) {
+        Object.entries(jp2).forEach(([k, v]) => {
+          setFields[`jeeAdv.paper2.${k}`] = v;
+        });
+      }
+      if (raw['jeeAdv.grandTotal'] !== undefined) setFields['jeeAdv.grandTotal'] = toNum(raw['jeeAdv.grandTotal']);
+      if (raw['jeeAdv.rank'] !== undefined) setFields['jeeAdv.rank'] = toNum(raw['jeeAdv.rank']);
+      if (raw['jeeAdv.selected'] !== undefined) setFields['jeeAdv.selected'] = safeTrim(raw['jeeAdv.selected']);
+      if (raw['neet.physics'] !== undefined) setFields['neet.physics'] = toNum(raw['neet.physics']);
+      if (raw['neet.chemistry'] !== undefined) setFields['neet.chemistry'] = toNum(raw['neet.chemistry']);
+      if (raw['neet.biology'] !== undefined) setFields['neet.biology'] = toNum(raw['neet.biology']);
+      if (raw['neet.total'] !== undefined) setFields['neet.total'] = toNum(raw['neet.total']);
+      if (raw['neet.rank'] !== undefined) setFields['neet.rank'] = toNum(raw['neet.rank']);
+      if (raw['neet.collegeName'] !== undefined) setFields['neet.collegeName'] = safeTrim(raw['neet.collegeName']);
+      if (raw['neet.course'] !== undefined) setFields['neet.course'] = safeTrim(raw['neet.course']);
+      bulkOps.push({
+        updateOne: {
+          filter: { tenantId, admissionNo: enrollmentNumber },
+          update: { $set: setFields, $setOnInsert: { importedAt: Date.now() } },
+          upsert: true
+        }
+      });
+    }
+    let upsertedCount = 0;
+    let modifiedCount = 0;
+    if (bulkOps.length) {
+      const result = await StudentAlumni.bulkWrite(bulkOps, { ordered: false });
+      upsertedCount = result.upsertedCount || 0;
+      modifiedCount = result.modifiedCount || 0;
+    }
+    return res.status(200).json({
+      status: true,
+      message: `Alumni import complete. ${modifiedCount} updated, ${upsertedCount} newly created.`,
+      summary: {
+        totalRows: rows.length,
+        validRows: valid.length,
+        invalidRows: invalid.length,
+        matched: matched.length,
+        unmatched: unmatched.length,
+        updated: modifiedCount,
+        created: upsertedCount
+      },
+      unmatchedList: unmatched,
+      invalidList: invalid
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const bulkUpdateStudents = async (req, res, next) => {
+  try {
+    const tenantId = safeTrim(req.body?.entiId || req.body?.tenantId || '');
+    const students = Array.isArray(req.body?.students) ? req.body.students : [];
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+    if (!students.length) return res.status(400).json({ status: false, message: 'students array is required' });
+    let successCount = 0;
+    let failedCount = 0;
+    const errors = [];
+    for (const s of students) {
+      const admissionNo = safeTrim(s['Enrolment Number'] || s['Admission No'] || s.admissionNo || '');
+      if (!admissionNo) {
+        failedCount++;
+        errors.push({ admissionNo: '-', reason: 'Missing admissionNo' });
+        continue;
+      }
+      const profileUpdate = {};
+      if (safeTrim(s['Full Name'] || s.fullName)) profileUpdate['student.name'] = safeTrim(s['Full Name'] || s.fullName);
+      if (safeTrim(s['Mobile'] || s.mobile)) profileUpdate['student.phone'] = safeTrim(s['Mobile'] || s.mobile);
+      if (safeTrim(s['Phone 1'] || s.phone1)) profileUpdate['student.phone1'] = safeTrim(s['Phone 1'] || s.phone1);
+      if (safeTrim(s['Phone 2'] || s.phone2)) profileUpdate['student.phone2'] = safeTrim(s['Phone 2'] || s.phone2);
+      if (safeTrim(s['Email'] || s.email)) profileUpdate['student.email'] = safeTrim(s['Email'] || s.email);
+      if (safeTrim(s['Email 1'] || s.email1)) profileUpdate['student.email1'] = safeTrim(s['Email 1'] || s.email1);
+      if (safeTrim(s['Email 2'] || s.email2)) profileUpdate['student.email2'] = safeTrim(s['Email 2'] || s.email2);
+      if (safeTrim(s['Parent Name'] || s.parentName)) profileUpdate['student.parentName'] = safeTrim(s['Parent Name'] || s.parentName);
+      if (safeTrim(s['Parent Mobile'] || s.parentMobile)) profileUpdate['student.parentPhone'] = safeTrim(s['Parent Mobile'] || s.parentMobile);
+      if (safeTrim(s['School ID'] || s.studentSchoolId)) profileUpdate.studentSchoolId = safeTrim(s['School ID'] || s.studentSchoolId);
+      if (!Object.keys(profileUpdate).length) {
+        failedCount++;
+        errors.push({ admissionNo, reason: 'No fields to update' });
+        continue;
+      }
+      const result = await StudentProfile.updateOne({ tenantId, admissionNo, isdeleted: false }, { $set: { ...profileUpdate, updatedBy: safeTrim(req.body?.userId || '') } });
+      if (result.matchedCount === 0) {
+        failedCount++;
+        errors.push({ admissionNo, reason: 'Student not found' });
+      } else {
+        successCount++;
+      }
+    }
+    return res.status(200).json({
+      status: true,
+      message: 'Bulk update completed',
+      data: { successCount, failedCount, errors }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const bulkUploadZipPhotos = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    if (!req.file) return res.status(400).json({ status: false, message: 'No ZIP file uploaded. Use field name "zip".' });
+    const zipExt = path.extname(req.file.originalname).toLowerCase();
+    if (zipExt !== '.zip') return res.status(400).json({ status: false, message: 'Uploaded file must be a .zip' });
+    if (!QUESTION_BUCKET) return res.status(500).json({ status: false, message: 'S3 bucket not configured' });
+    let zip;
+    try {
+      zip = new AdmZip(req.file.buffer);
+    } catch (e) {
+      return res.status(400).json({ status: false, message: 'Invalid or corrupted ZIP file' });
+    }
+    const entries = zip.getEntries();
+    if (!entries.length) return res.status(400).json({ status: false, message: 'ZIP file is empty' });
+    const imageEntries = entries.filter((entry) => {
+      if (entry.isDirectory) return false;
+      const entryName = entry.entryName;
+      if (path.basename(entryName).startsWith('.')) return false;
+      if (entryName.includes('__MACOSX')) return false;
+      const ext = path.extname(entryName).toLowerCase();
+      return ALLOWED_IMAGE_EXTENSIONS.has(ext);
+    });
+    if (!imageEntries.length)
+      return res.status(400).json({
+        status: false,
+        message: 'No valid image files found in ZIP (.jpg, .jpeg, .png, .webp allowed)'
+      });
+    const admissionNosFromZip = imageEntries.map((entry) => path.basename(entry.entryName, path.extname(entry.entryName)).trim()).filter(Boolean);
+    const profiles = await StudentProfile.find({ tenantId, admissionNo: { $in: admissionNosFromZip }, isdeleted: false }, { _id: 1, admissionNo: 1 }).lean();
+    const profileMap = new Map(profiles.map((p) => [safeTrim(p.admissionNo), p]));
+    let successCount = 0;
+    let failedCount = 0;
+    const errors = [];
+    const bulkOps = [];
+    for (const entry of imageEntries) {
+      const fileName = path.basename(entry.entryName);
+      const ext = path.extname(fileName).toLowerCase();
+      const admissionNo = path.basename(fileName, ext).trim();
+      if (!admissionNo) {
+        failedCount++;
+        errors.push({ file: fileName, reason: 'Cannot determine admissionNo from filename' });
+        continue;
+      }
+      const profile = profileMap.get(admissionNo);
+      if (!profile) {
+        failedCount++;
+        errors.push({ file: fileName, admissionNo, reason: 'Student not found' });
+        continue;
+      }
+      let fileBuffer;
+      try {
+        fileBuffer = entry.getData();
+      } catch (e) {
+        failedCount++;
+        errors.push({ file: fileName, admissionNo, reason: 'Failed to read file from ZIP' });
+        continue;
+      }
+      if (!fileBuffer || !fileBuffer.length) {
+        failedCount++;
+        errors.push({ file: fileName, admissionNo, reason: 'Empty file in ZIP' });
+        continue;
+      }
+      try {
+        const random = crypto.randomBytes(6).toString('hex');
+        const s3Key = `students/${admissionNo}-${Date.now()}-${random}${ext}`;
+        await s3Client.send(
+          new PutObjectCommand({
+            Bucket: QUESTION_BUCKET,
+            Key: s3Key,
+            Body: fileBuffer,
+            ContentType: getMimeType(ext)
+          })
+        );
+        const photoUrl = `https://${QUESTION_BUCKET}.s3.${REGION}.amazonaws.com/${s3Key}`;
+        bulkOps.push({
+          updateOne: {
+            filter: { _id: profile._id },
+            update: {
+              $set: {
+                photoUrl,
+                updatedBy: safeTrim(req.body?.userId || '')
+              }
+            }
+          }
+        });
+        successCount++;
+      } catch (uploadErr) {
+        failedCount++;
+        errors.push({
+          file: fileName,
+          admissionNo,
+          reason: uploadErr.message || 'S3 upload failed'
+        });
+      }
+    }
+    if (bulkOps.length) {
+      try {
+        await StudentProfile.bulkWrite(bulkOps, { ordered: false });
+      } catch (dbErr) {
+        console.error('[bulkUploadZipPhotos] DB bulkWrite error:', dbErr?.message);
+      }
+    }
+    return res.status(200).json({
+      status: true,
+      message: `ZIP photo upload complete. ${successCount} uploaded, ${failedCount} failed.`,
+      data: {
+        totalFilesInZip: entries.length,
+        imageFilesFound: imageEntries.length,
+        successCount,
+        failedCount,
+        errors
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const getAlumniData = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const admissionNo = safeTrim(req.body?.admissionNo || '');
+    if (!tenantId || !admissionNo) return res.status(400).json({ status: false, message: 'tenantId and admissionNo are required' });
+
+    const doc = await StudentAlumni.findOne({ tenantId, admissionNo }).lean();
+    return res.status(200).json({ status: true, data: doc || null });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   listStudents,
   viewProfile,
@@ -1766,11 +2093,14 @@ export default {
   getStudentAttendanceReport,
   updateBasicDetails,
   toggleTabletAccess,
-  addSchoolExamMarks,
   addStudentRemark,
   getStudentRemarks,
   bulkUpdateStudents,
   bulkUploadPhotos,
   getStudentLateEntries,
-  importStudentRpa
+  importStudentRpa,
+  importBoardExamMarks,
+  importAlumniData,
+  bulkUploadZipPhotos,
+  getAlumniData
 };

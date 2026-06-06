@@ -15,6 +15,23 @@ const ayHistorySchema = new mongoose.Schema(
   { _id: false }
 );
 
+const boardExamSchema = new mongoose.Schema(
+  {
+    boardExamName: { type: String, trim: true, default: null },
+    schoolId: { type: String, trim: true, default: null },
+    s1: { type: Number, default: null },
+    s2: { type: Number, default: null },
+    s3: { type: Number, default: null },
+    s4: { type: Number, default: null },
+    s5: { type: Number, default: null },
+    s6: { type: Number, default: null },
+    s7: { type: Number, default: null },
+    total: { type: Number, default: null },
+    importedAt: { type: Number, default: () => Date.now() }
+  },
+  { _id: false }
+);
+
 const StudentProfileSchema = new mongoose.Schema(
   {
     tenantId: { type: String, required: true, index: true },
@@ -25,6 +42,7 @@ const StudentProfileSchema = new mongoose.Schema(
     portalStudentId: { type: String, trim: true, index: true },
     studentSchoolId: { type: String, trim: true, default: null, index: true },
     photoUrl: { type: String, default: null, trim: true },
+    isTabletBlocked: { type: Boolean, default: false },
     student: {
       name: { type: String, required: true, trim: true },
       phone: { type: String, required: false, trim: true },
@@ -54,7 +72,8 @@ const StudentProfileSchema = new mongoose.Schema(
     yearNo: { type: Number, required: false, default: 1 },
     classNo: { type: Number, required: false, default: null },
     ayHistory: { type: [ayHistorySchema], required: false, default: [] },
-    studentRpa: { type: String, trim: true, default: null, index: true },
+    boardExams: { type: [boardExamSchema], default: [] },
+    studentRpa: { type: [String], default: [] },
     status: {
       type: String,
       enum: ['ACTIVE', 'INACTIVE'],
