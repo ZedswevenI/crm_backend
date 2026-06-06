@@ -592,47 +592,16 @@ const duplicateExam = async (req, res, next) => {
       await session.abortTransaction();
       return res.status(409).json({ status: false, message: 'Exam with this examCode already exists' });
     }
-    // let sections = [];
-    // if (Array.isArray(req.body?.sections) && req.body.sections.length) {
-    //   sections = buildSections(req.body.sections);
-    // } else {
-    //   sections = (sourceExam.sections || []).map((s, idx) => ({
-    //     sectionId: uuid(),
-    //     sectionCode: safeTrim(s.sectionCode),
-    //     sectionName: safeTrim(s.sectionName),
-    //     subjectId: s.subjectId,
-    //     numberOfQuestions: s.numberOfQuestions || 0,
-    //     sortOrder: s.sortOrder ?? idx,
-    //     status: s.status || 'active'
-    //   }));
-    // }
-    // Always copy sections from source for duplicate
-    // Frontend should NOT send sections for duplicate-with-questions
     const sections = (sourceExam.sections || []).map((s, idx) => ({
       sectionId: uuid(),
       sectionCode: safeTrim(s.sectionCode),
       sectionName: safeTrim(s.sectionName),
-      subjectId: s.subjectId, // ObjectId preserved directly from DB
+      subjectId: s.subjectId,
       numberOfQuestions: s.numberOfQuestions || 0,
       totalMarks: toNum(s.totalMarks) || 0,
       sortOrder: s.sortOrder ?? idx,
       status: s.status || 'active'
     }));
-    // const sourceSections = sourceExam.sections || [];
-    // const sectionIdMap = new Map();
-    // if (Array.isArray(req.body?.sections) && req.body.sections.length) {
-    //   for (const newSec of sections) {
-    //     const match = sourceSections.find((s) => safeTrim(s.sectionCode) === safeTrim(newSec.sectionCode));
-    //     if (match) sectionIdMap.set(safeTrim(match.sectionId), safeTrim(newSec.sectionId));
-    //   }
-    // } else {
-    //   sourceSections.forEach((s, idx) => {
-    //     if (sections[idx]) {
-    //       sectionIdMap.set(safeTrim(s.sectionId), safeTrim(sections[idx].sectionId));
-    //     }
-    //   });
-    // }
-    // Always index-based since we always copy from sourceExam
     const sourceSections = sourceExam.sections || [];
     const sectionIdMap = new Map();
     sourceSections.forEach((s, idx) => {
@@ -640,6 +609,7 @@ const duplicateExam = async (req, res, next) => {
         sectionIdMap.set(safeTrim(s.sectionId), safeTrim(sections[idx].sectionId));
       }
     });
+
     const newExamId = uuid();
     const totalQ = sections.reduce((s, sec) => s + (sec.numberOfQuestions || 0), 0) || toNum(req.body?.totalQuestions) || sourceExam.totalQuestions || 0;
     const [newExam] = await MockExam.create(

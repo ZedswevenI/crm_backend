@@ -5,8 +5,7 @@ import StudentProfile from '../models/studentProfile.model.js';
 import AssignmentResult from '../models/assignmentResult.model.js';
 import MockExamResult from '../models/mockExamResult.model.js';
 import MockExam from '../models/mockExam.model.js';
-import SchoolExamResult from '../models/schoolexamresult.model.js';
-import SchoolExam from '../models/schoolexam.model.js';
+import SchoolExamLog from '../models/schoolexam.model.js';
 import Subject from '../models/subject.model.js';
 import Staff from '../models/staff.model.js';
 import StaffPerformance from '../models/staffperformance.model.js';
@@ -245,52 +244,129 @@ const syncMockExamPerf = async (req, res, next) => {
   }
 };
 
+// const syncSchoolExamPerf = async (req, res, next) => {
+//   try {
+//     const tenantId = pickTenantId(req);
+//     const studentId = safeTrim(req.body?.studentId);
+//     const academicYear = safeTrim(req.body?.academicYear);
+//     if (!tenantId || !studentId || !academicYear) return res.status(400).json({ status: false, message: 'tenantId, studentId and academicYear are required' });
+//     const profile = await getProfile(tenantId, studentId);
+//     if (!profile) return res.status(404).json({ status: false, message: 'Student not found' });
+//     const results = await SchoolExamResult.find({ tenantId, studentId, isdeleted: false }).lean();
+//     if (!results.length) {
+//       return res.status(200).json({ status: true, message: 'No school exam results found', count: 0 });
+//     }
+//     const examIds = [...new Set(results.map((r) => r.examId))];
+//     const examDocs = await SchoolExam.find({ examLogId: { $in: examIds }, tenantId }, { examLogId: 1, examName: 1, examDate: 1 }).lean();
+//     const examMap = new Map(examDocs.map((e) => [e.examLogId, e]));
+//     const upserted = [];
+//     for (const r of results) {
+//       const exam = examMap.get(r.examId) || {};
+//       const pct = r.totalMaxMarks > 0 ? round2((r.totalObtainedMarks / r.totalMaxMarks) * 100) : null;
+//       const doc = await upsertPerf(
+//         { tenantId, studentId, examId: r.examId, performanceType: 'SCHOOL_EXAM' },
+//         {
+//           admissionNo: profile.admissionNo,
+//           batchId: profile.batchId,
+//           batchCode: profile.batchCode,
+//           programId: profile.programId,
+//           centerId: profile.centerId,
+//           academicYear,
+//           examName: exam.examName || null,
+//           examDate: exam.examDate || null,
+//           obtainedMarks: r.totalObtainedMarks || 0,
+//           totalMarks: r.totalMaxMarks || 0,
+//           percentage: pct,
+//           subjects: (r.subjects || []).map((s) => ({
+//             subjectName: s.subjectName || null,
+//             maxMarks: s.maxMarks || 0,
+//             obtainedMarks: s.obtainedMarks || 0,
+//             percentage: s.maxMarks > 0 ? round2((s.obtainedMarks / s.maxMarks) * 100) : null,
+//             grade: s.grade || null
+//           })),
+//           syncedAt: Date.now()
+//         },
+//         { tenantId, studentId, examId: r.examId, performanceType: 'SCHOOL_EXAM', academicYear }
+//       );
+//       upserted.push(doc);
+//     }
+//     await _recomputeSummary(tenantId, studentId, academicYear, profile);
+//     return res.status(200).json({
+//       status: true,
+//       message: `School exam performance synced — ${upserted.length} exam(s)`,
+//       count: upserted.length
+//     });
+//   } catch (err) {
+//     return next(err);
+//   }
+// };
+
 const syncSchoolExamPerf = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     const studentId = safeTrim(req.body?.studentId);
     const academicYear = safeTrim(req.body?.academicYear);
     if (!tenantId || !studentId || !academicYear) return res.status(400).json({ status: false, message: 'tenantId, studentId and academicYear are required' });
+
     const profile = await getProfile(tenantId, studentId);
     if (!profile) return res.status(404).json({ status: false, message: 'Student not found' });
-    const results = await SchoolExamResult.find({ tenantId, studentId, isdeleted: false }).lean();
-    if (!results.length) {
+
+    // Find all SchoolExamLogs where this student appears in results[]
+    const examLogs = await SchoolExamLog.find({
+      tenantId,
+      academicYear,
+      isdeleted: false,
+      'results.studentId': studentId
+    }).lean();
+
+    if (!examLogs.length) {
       return res.status(200).json({ status: true, message: 'No school exam results found', count: 0 });
     }
-    const examIds = [...new Set(results.map((r) => r.examId))];
-    const examDocs = await SchoolExam.find({ examLogId: { $in: examIds }, tenantId }, { examLogId: 1, examName: 1, examDate: 1 }).lean();
-    const examMap = new Map(examDocs.map((e) => [e.examLogId, e]));
+
     const upserted = [];
-    for (const r of results) {
-      const exam = examMap.get(r.examId) || {};
-      const pct = r.totalMaxMarks > 0 ? round2((r.totalObtainedMarks / r.totalMaxMarks) * 100) : null;
+    for (const examLog of examLogs) {
+      const studentResult = (examLog.results || []).find((r) => r.studentId === studentId);
+      if (!studentResult) continue;
+
+      const subjectsWithMarks = (studentResult.subjects || []).filter((s) => s.marks != null && !s.isAbsent);
+      const totalObtained = subjectsWithMarks.reduce((s, sub) => s + (toNum(sub.marks) || 0), 0);
+      const totalMax = toNum(studentResult.totalMarks) || null;
+      const pct = totalMax > 0 ? round2((totalObtained / totalMax) * 100) : null;
+
       const doc = await upsertPerf(
-        { tenantId, studentId, examId: r.examId, performanceType: 'SCHOOL_EXAM' },
+        { tenantId, studentId, examId: examLog.examLogId, performanceType: 'SCHOOL_EXAM' },
         {
           admissionNo: profile.admissionNo,
-          batchId: profile.batchId,
-          batchCode: profile.batchCode,
-          programId: profile.programId,
-          centerId: profile.centerId,
+          batchId: examLog.batchId || profile.batchId || null,
+          batchCode: examLog.batchCode || profile.batchCode || null,
+          programId: profile.programId || null,
+          centerId: examLog.centerId || profile.centerId || null,
           academicYear,
-          examName: exam.examName || null,
-          examDate: exam.examDate || null,
-          obtainedMarks: r.totalObtainedMarks || 0,
-          totalMarks: r.totalMaxMarks || 0,
+          examName: examLog.examName || null,
+          examDate: examLog.examDate || null,
+          obtainedMarks: totalObtained,
+          totalMarks: totalMax,
           percentage: pct,
-          subjects: (r.subjects || []).map((s) => ({
+          subjects: (studentResult.subjects || []).map((s) => ({
             subjectName: s.subjectName || null,
-            maxMarks: s.maxMarks || 0,
-            obtainedMarks: s.obtainedMarks || 0,
-            percentage: s.maxMarks > 0 ? round2((s.obtainedMarks / s.maxMarks) * 100) : null,
-            grade: s.grade || null
+            maxMarks: null,
+            obtainedMarks: s.isAbsent ? 0 : toNum(s.marks) || 0,
+            percentage: null,
+            grade: null
           })),
           syncedAt: Date.now()
         },
-        { tenantId, studentId, examId: r.examId, performanceType: 'SCHOOL_EXAM', academicYear }
+        {
+          tenantId,
+          studentId,
+          examId: examLog.examLogId,
+          performanceType: 'SCHOOL_EXAM',
+          academicYear
+        }
       );
       upserted.push(doc);
     }
+
     await _recomputeSummary(tenantId, studentId, academicYear, profile);
     return res.status(200).json({
       status: true,
@@ -460,41 +536,97 @@ const _runSyncMock = async (tenantId, studentId, academicYear) => {
   }
 };
 
+// const _runSyncSchool = async (tenantId, studentId, academicYear) => {
+//   const profile = await getProfile(tenantId, studentId);
+//   if (!profile) return;
+//   const results = await SchoolExamResult.find({ tenantId, studentId, isdeleted: false }).lean();
+//   if (!results.length) return;
+//   const examIds = [...new Set(results.map((r) => r.examId))];
+//   const examDocs = await SchoolExam.find({ examLogId: { $in: examIds }, tenantId }, { examLogId: 1, examName: 1, examDate: 1 }).lean();
+//   const examMap = new Map(examDocs.map((e) => [e.examLogId, e]));
+//   for (const r of results) {
+//     const exam = examMap.get(r.examId) || {};
+//     const pct = r.totalMaxMarks > 0 ? round2((r.totalObtainedMarks / r.totalMaxMarks) * 100) : null;
+//     await upsertPerf(
+//       { tenantId, studentId, examId: r.examId, performanceType: 'SCHOOL_EXAM' },
+//       {
+//         admissionNo: profile.admissionNo,
+//         batchId: profile.batchId,
+//         batchCode: profile.batchCode,
+//         programId: profile.programId,
+//         centerId: profile.centerId,
+//         academicYear,
+//         examName: exam.examName || null,
+//         examDate: exam.examDate || null,
+//         obtainedMarks: r.totalObtainedMarks || 0,
+//         totalMarks: r.totalMaxMarks || 0,
+//         percentage: pct,
+//         subjects: (r.subjects || []).map((s) => ({
+//           subjectName: s.subjectName || null,
+//           maxMarks: s.maxMarks || 0,
+//           obtainedMarks: s.obtainedMarks || 0,
+//           percentage: s.maxMarks > 0 ? round2((s.obtainedMarks / s.maxMarks) * 100) : null,
+//           grade: s.grade || null
+//         })),
+//         syncedAt: Date.now()
+//       },
+//       { tenantId, studentId, examId: r.examId, performanceType: 'SCHOOL_EXAM', academicYear }
+//     );
+//   }
+// };
+
 const _runSyncSchool = async (tenantId, studentId, academicYear) => {
   const profile = await getProfile(tenantId, studentId);
   if (!profile) return;
-  const results = await SchoolExamResult.find({ tenantId, studentId, isdeleted: false }).lean();
-  if (!results.length) return;
-  const examIds = [...new Set(results.map((r) => r.examId))];
-  const examDocs = await SchoolExam.find({ examLogId: { $in: examIds }, tenantId }, { examLogId: 1, examName: 1, examDate: 1 }).lean();
-  const examMap = new Map(examDocs.map((e) => [e.examLogId, e]));
-  for (const r of results) {
-    const exam = examMap.get(r.examId) || {};
-    const pct = r.totalMaxMarks > 0 ? round2((r.totalObtainedMarks / r.totalMaxMarks) * 100) : null;
+
+  const examLogs = await SchoolExamLog.find({
+    tenantId,
+    academicYear,
+    isdeleted: false,
+    'results.studentId': studentId
+  }).lean();
+
+  if (!examLogs.length) return;
+
+  for (const examLog of examLogs) {
+    const studentResult = (examLog.results || []).find((r) => r.studentId === studentId);
+    if (!studentResult) continue;
+
+    const subjectsWithMarks = (studentResult.subjects || []).filter((s) => s.marks != null && !s.isAbsent);
+    const totalObtained = subjectsWithMarks.reduce((s, sub) => s + (toNum(sub.marks) || 0), 0);
+    const totalMax = toNum(studentResult.totalMarks) || null;
+    const pct = totalMax > 0 ? round2((totalObtained / totalMax) * 100) : null;
+
     await upsertPerf(
-      { tenantId, studentId, examId: r.examId, performanceType: 'SCHOOL_EXAM' },
+      { tenantId, studentId, examId: examLog.examLogId, performanceType: 'SCHOOL_EXAM' },
       {
         admissionNo: profile.admissionNo,
-        batchId: profile.batchId,
-        batchCode: profile.batchCode,
-        programId: profile.programId,
-        centerId: profile.centerId,
+        batchId: examLog.batchId || profile.batchId || null,
+        batchCode: examLog.batchCode || profile.batchCode || null,
+        programId: profile.programId || null,
+        centerId: examLog.centerId || profile.centerId || null,
         academicYear,
-        examName: exam.examName || null,
-        examDate: exam.examDate || null,
-        obtainedMarks: r.totalObtainedMarks || 0,
-        totalMarks: r.totalMaxMarks || 0,
+        examName: examLog.examName || null,
+        examDate: examLog.examDate || null,
+        obtainedMarks: totalObtained,
+        totalMarks: totalMax,
         percentage: pct,
-        subjects: (r.subjects || []).map((s) => ({
+        subjects: (studentResult.subjects || []).map((s) => ({
           subjectName: s.subjectName || null,
-          maxMarks: s.maxMarks || 0,
-          obtainedMarks: s.obtainedMarks || 0,
-          percentage: s.maxMarks > 0 ? round2((s.obtainedMarks / s.maxMarks) * 100) : null,
-          grade: s.grade || null
+          maxMarks: null,
+          obtainedMarks: s.isAbsent ? 0 : toNum(s.marks) || 0,
+          percentage: null,
+          grade: null
         })),
         syncedAt: Date.now()
       },
-      { tenantId, studentId, examId: r.examId, performanceType: 'SCHOOL_EXAM', academicYear }
+      {
+        tenantId,
+        studentId,
+        examId: examLog.examLogId,
+        performanceType: 'SCHOOL_EXAM',
+        academicYear
+      }
     );
   }
 };

@@ -99,4 +99,6 @@ routes.post('/reportqns/create', bookmarkController.createReport);
 routes.post('/reportqns/list', bookmarkController.listReports);
 routes.post('/reportqns/update/status', bookmarkController.updateReportStatus);
 
+routes.post('/result/batch-subject-stats', validatetoken, mockExamResultController.getBatchSubjectStats);
+
 export default routes;

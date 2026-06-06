@@ -496,46 +496,13 @@ const evalAnswer = (q, answerRaw) => {
   return { isCorrect: null, correctAnswerRaw: q?.correctAnswer ?? null, marksAwarded: 0 };
 };
 
-// const buildSectionResults = (answers, sections, sectionTimings = {}) => {
-//   const secMap = new Map((sections || []).map((s) => [safeTrim(s.sectionId), s]));
-//   const buckets = new Map();
-//   for (const [sid, sec] of secMap.entries()) {
-//     buckets.set(sid, {
-//       sectionId: sid,
-//       subjectId: sec.subjectId || null,
-//       totalQuestions: 0,
-//       answeredCount: 0,
-//       correctCount: 0,
-//       wrongCount: 0,
-//       skippedCount: 0,
-//       totalMarks: toNum(sec.totalMarks) || 0,
-//       obtainedMarks: 0,
-//       timeTaken: toNum(sectionTimings[sid])
-//     });
-//   }
-//   for (const a of answers) {
-//     const b = buckets.get(safeTrim(a.sectionId));
-//     if (!b) continue;
-//     b.totalQuestions++;
-//     if (a.isSkipped) b.skippedCount++;
-//     else b.answeredCount++;
-//     if (a.isCorrect === true) b.correctCount++;
-//     if (a.isCorrect === false) b.wrongCount++;
-//     b.obtainedMarks += toNum(a.marksAwarded);
-//   }
-//   return Array.from(buckets.values());
-// };
-
 const buildSectionResults = (answers, sections, sectionTimings = {}) => {
   const secMap = new Map((sections || []).map((s) => [safeTrim(s.sectionId), s]));
-
-  // Calculate totalMarks per section from question positiveMarks
   const sectionTotalMarksMap = new Map();
   for (const a of answers) {
     const sid = safeTrim(a.sectionId);
     sectionTotalMarksMap.set(sid, (sectionTotalMarksMap.get(sid) || 0) + toNum(a.positiveMarks));
   }
-
   const buckets = new Map();
   for (const [sid, sec] of secMap.entries()) {
     buckets.set(sid, {
@@ -961,7 +928,9 @@ const getMyResultWithAnswers = async (req, res, next) => {
         topicId: 1,
         subTopicId: 1,
         tags: 1,
-        sortOrder: 1
+        sortOrder: 1,
+        leftColumn: 1,
+        rightColumn: 1
       }
     )
       .sort({ sectionId: 1, sortOrder: 1 })
@@ -993,6 +962,8 @@ const getMyResultWithAnswers = async (req, res, next) => {
         numericMax: q?.numericMax ?? null,
         topicId: q?.topicId || null,
         subTopicId: q?.subTopicId || null,
+        leftColumn: q?.leftColumn || [],
+        rightColumn: q?.rightColumn || [],
         tags: q?.tags || [],
         sortOrder: q?.sortOrder ?? null,
         passage: q?.passageId ? { title: q.passageId?.title || null, passageHtml: q.passageId?.passageHtml || null } : q?.passageHtml ? { title: null, passageHtml: q.passageHtml } : null
@@ -1748,6 +1719,52 @@ const getStudentResultAdmin = async (req, res, next) => {
   }
 };
 
+const getBatchSubjectStats = async (req, res, next) => {
+  try {
+    const tenantId = pickTid(req);
+    const examId = safeTrim(req.body?.examId);
+    const batchId = safeTrim(req.body?.batchId);
+    if (!tenantId || !examId || !batchId) return res.status(400).json({ status: false, message: 'tenantId, examId and batchId are required' });
+    const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }, { sections: 1 }).lean();
+    if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
+    const batchResults = await MockExamResult.find({ tenantId, examId, batchId, isdeleted: false }, { sectionResults: 1 }).lean();
+    const sectionNameMap = new Map((exam.sections || []).map((s) => [safeTrim(s.sectionId), s.sectionName || null]));
+    const sectionStatsMap = new Map();
+    for (const [sid, sname] of sectionNameMap.entries()) {
+      sectionStatsMap.set(sid, { subjectName: sname, marks: [] });
+    }
+    for (const r of batchResults) {
+      for (const sec of r.sectionResults || []) {
+        const sid = safeTrim(sec.sectionId);
+        if (!sectionStatsMap.has(sid)) {
+          sectionStatsMap.set(sid, { subjectName: sec.subjectName || null, marks: [] });
+        }
+        sectionStatsMap.get(sid).marks.push(toNum(sec.obtainedMarks) || 0);
+      }
+    }
+    const totalStudents = batchResults.length;
+    for (const [sid, data] of sectionStatsMap.entries()) {
+      const missing = totalStudents - data.marks.length;
+      for (let i = 0; i < missing; i++) data.marks.push(0);
+    }
+    const data = Array.from(sectionStatsMap.entries()).map(([sectionId, d]) => {
+      const marks = d.marks;
+      const avg = marks.length ? round2(marks.reduce((s, m) => s + m, 0) / marks.length) : 0;
+      const max = marks.length ? Math.max(...marks) : 0;
+      return {
+        sectionId,
+        subjectName: d.subjectName,
+        avgObtained: avg,
+        maxObtained: max,
+        studentCount: marks.length
+      };
+    });
+    return res.status(200).json({ status: true, examId, batchId, data });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export { evalAnswer };
 
 export default {
@@ -1766,5 +1783,6 @@ export default {
   compareWithTopper,
   getExamQuestionWiseReport,
   getExamParticipantsReport,
-  getStudentResultAdmin
+  getStudentResultAdmin,
+  getBatchSubjectStats
 };
