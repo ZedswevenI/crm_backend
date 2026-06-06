@@ -23,8 +23,6 @@ import Staff from '../models/staff.model.js';
 import TimeTable from '../models/timetable.model.js';
 import Attendance from '../models/attandence.model.js';
 import StudyMaterial from '../models/studymaterial.model.js';
-import SchoolExam from '../models/schoolexam.model.js';
-import SchoolExamResult from '../models/schoolexamresult.model.js';
 import StudentRemark from '../models/studentremark.model.js';
 import LateEntryLog from '../models/lateEntrylog.model.js';
 import FeedbackForm from '../models/feedbackForm.model.js';
@@ -1458,52 +1456,6 @@ const toggleTabletAccess = async (req, res, next) => {
   }
 };
 
-const addSchoolExamMarks = async (req, res, next) => {
-  try {
-    const tenantId = pickTenantId(req);
-    const { examId, studentId, subjects, remarks } = req.body;
-    if (!tenantId || !examId || !studentId || !Array.isArray(subjects)) {
-      return res.status(400).json({ status: false, message: 'tenantId, examId, studentId, and subjects array are required' });
-    }
-    const student = await StudentProfile.findOne({ tenantId, studentId, isdeleted: false }, { admissionNo: 1 }).lean();
-    if (!student) return res.status(404).json({ status: false, message: 'Student not found' });
-    let totalMaxMarks = 0;
-    let totalObtainedMarks = 0;
-    const formattedSubjects = subjects.map((s) => {
-      const max = toNum(s.maxMarks);
-      const obtained = toNum(s.obtainedMarks);
-      totalMaxMarks += max;
-      totalObtainedMarks += obtained;
-      return {
-        subjectName: safeTrim(s.subjectName),
-        maxMarks: max,
-        obtainedMarks: obtained,
-        grade: safeTrim(s.grade)
-      };
-    });
-    const percentage = totalMaxMarks > 0 ? Math.round((totalObtainedMarks / totalMaxMarks) * 100 * 100) / 100 : 0;
-    const result = await SchoolExamResult.findOneAndUpdate(
-      { tenantId, examId, studentId, isdeleted: false },
-      {
-        $set: {
-          admissionNo: student.admissionNo,
-          subjects: formattedSubjects,
-          totalMaxMarks,
-          totalObtainedMarks,
-          percentage,
-          remarks: safeTrim(remarks),
-          updatedBy: req.body?.userId || null
-        },
-        $setOnInsert: { createdBy: req.body?.userId || null }
-      },
-      { new: true, upsert: true }
-    );
-    return res.status(200).json({ status: true, message: 'School exam marks recorded successfully', data: result });
-  } catch (err) {
-    return next(err);
-  }
-};
-
 const addStudentRemark = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
@@ -1543,55 +1495,6 @@ const getStudentRemarks = async (req, res, next) => {
     return next(err);
   }
 };
-
-// const bulkUpdateStudents = async (req, res, next) => {
-//   try {
-//     const tenantId = pickTenantId(req);
-//     const students = Array.isArray(req.body?.students) ? req.body.students : [];
-//     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-//     if (!students.length) return res.status(400).json({ status: false, message: 'students array is required' });
-//     let successCount = 0;
-//     let failedCount = 0;
-//     const errors = [];
-//     for (const s of students) {
-//       const admissionNo = safeTrim(s['Enrolment Number'] || s['Admission No'] || s.admissionNo || '');
-//       if (!admissionNo) {
-//         failedCount++;
-//         errors.push({ admissionNo: '-', reason: 'Missing admissionNo' });
-//         continue;
-//       }
-//       const profileUpdate = {};
-//       if (safeTrim(s['Full Name'] || s.fullName)) profileUpdate['student.name'] = safeTrim(s['Full Name'] || s.fullName);
-//       if (safeTrim(s['Mobile'] || s.mobile)) profileUpdate['student.phone'] = safeTrim(s['Mobile'] || s.mobile);
-//       if (safeTrim(s['Phone 1'] || s.phone1)) profileUpdate['student.phone1'] = safeTrim(s['Phone 1'] || s.phone1);
-//       if (safeTrim(s['Phone 2'] || s.phone2)) profileUpdate['student.phone2'] = safeTrim(s['Phone 2'] || s.phone2);
-//       if (safeTrim(s['Email'] || s.email)) profileUpdate['student.email'] = safeTrim(s['Email'] || s.email);
-//       if (safeTrim(s['Email 1'] || s.email1)) profileUpdate['student.email1'] = safeTrim(s['Email 1'] || s.email1);
-//       if (safeTrim(s['Email 2'] || s.email2)) profileUpdate['student.email2'] = safeTrim(s['Email 2'] || s.email2);
-//       if (safeTrim(s['Parent Name'] || s.parentName)) profileUpdate['student.parentName'] = safeTrim(s['Parent Name'] || s.parentName);
-//       if (safeTrim(s['Parent Mobile'] || s.parentMobile)) profileUpdate['student.parentPhone'] = safeTrim(s['Parent Mobile'] || s.parentMobile);
-//       if (!Object.keys(profileUpdate).length) {
-//         failedCount++;
-//         errors.push({ admissionNo, reason: 'No fields to update' });
-//         continue;
-//       }
-//       const result = await StudentProfile.updateOne({ tenantId, admissionNo, isdeleted: false }, { $set: { ...profileUpdate, updatedBy: safeTrim(req.body?.userId || '') } });
-//       if (result.matchedCount === 0) {
-//         failedCount++;
-//         errors.push({ admissionNo, reason: 'Student not found' });
-//       } else {
-//         successCount++;
-//       }
-//     }
-//     return res.status(200).json({
-//       status: true,
-//       message: 'Bulk update completed',
-//       data: { successCount, failedCount, errors }
-//     });
-//   } catch (err) {
-//     return next(err);
-//   }
-// };
 
 const bulkUploadPhotos = async (req, res, next) => {
   try {
@@ -1698,77 +1601,6 @@ const getStudentLateEntries = async (req, res, next) => {
     return next(err);
   }
 };
-
-// const importStudentRpa = async (req, res, next) => {
-//   try {
-//     const tenantId = safeTrim(req.body?.entiId || '');
-//     if (!tenantId) return res.status(400).json({ status: false, message: 'entiId is required' });
-//     const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
-//     if (!rows.length) return res.status(400).json({ status: false, message: 'rows[] is required' });
-//     const valid = [];
-//     const invalid = [];
-//     for (const row of rows) {
-//       const admissionNo = safeTrim(row.admissionNo || '');
-//       const studentRpa = safeTrim(row.studentRpa || '');
-//       if (!admissionNo) {
-//         invalid.push({ row, reason: 'admissionNo is empty' });
-//         continue;
-//       }
-//       if (!studentRpa) {
-//         invalid.push({ row, reason: 'studentRpa is empty' });
-//         continue;
-//       }
-//       valid.push({ admissionNo, studentRpa });
-//     }
-//     if (!valid.length)
-//       return res.status(400).json({
-//         status: false,
-//         message: 'No valid rows found',
-//         invalidRows: invalid
-//       });
-//     const admissionNos = valid.map((r) => r.admissionNo);
-//     const profiles = await StudentProfile.find({ tenantId, admissionNo: { $in: admissionNos }, isdeleted: false }, { _id: 1, admissionNo: 1, studentRpa: 1 }).lean();
-//     const profileMap = new Map(profiles.map((p) => [safeTrim(p.admissionNo), p]));
-//     const bulkOps = [];
-//     const matched = [];
-//     const unmatched = [];
-//     for (const { admissionNo, studentRpa } of valid) {
-//       const profile = profileMap.get(admissionNo);
-//       if (!profile) {
-//         unmatched.push({ admissionNo, studentRpa, reason: 'Student not found' });
-//         continue;
-//       }
-//       matched.push({ admissionNo, studentRpa });
-//       bulkOps.push({
-//         updateOne: {
-//           filter: { _id: profile._id },
-//           update: { $set: { studentRpa, updatedAt: new Date() } }
-//         }
-//       });
-//     }
-//     let updatedCount = 0;
-//     if (bulkOps.length) {
-//       const result = await StudentProfile.bulkWrite(bulkOps, { ordered: false });
-//       updatedCount = result.modifiedCount || bulkOps.length;
-//     }
-//     return res.status(200).json({
-//       status: true,
-//       message: `RPA import complete. ${updatedCount} student(s) updated.`,
-//       summary: {
-//         totalRows: rows.length,
-//         validRows: valid.length,
-//         invalidRows: invalid.length,
-//         matched: matched.length,
-//         unmatched: unmatched.length,
-//         updated: updatedCount
-//       },
-//       unmatchedList: unmatched,
-//       invalidList: invalid
-//     });
-//   } catch (err) {
-//     return next(err);
-//   }
-// };
 
 const importStudentRpa = async (req, res, next) => {
   try {
@@ -2261,7 +2093,6 @@ export default {
   getStudentAttendanceReport,
   updateBasicDetails,
   toggleTabletAccess,
-  addSchoolExamMarks,
   addStudentRemark,
   getStudentRemarks,
   bulkUpdateStudents,
