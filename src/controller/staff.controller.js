@@ -10,6 +10,7 @@ import TimeTable from '../models/timetable.model.js';
 import Attendance from '../models/attandence.model.js';
 import Task from '../models/task.model.js';
 import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
+import Invigilation from '../models/invigilation.model.js';
 
 const DAYS = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
 
@@ -84,30 +85,22 @@ const toInt = (v, def = 0) => {
   return Number.isFinite(n) ? Math.trunc(n) : def;
 };
 
-// API 1: List Teaching Staff
 const listTeachingStaff = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-
     const search = safeTrim(req.query.search || req.body.search);
     const centerId = safeTrim(req.query.centerId || req.body.centerId);
-
     const page = Math.max(toInt(req.query.page || req.body.page, 1), 1);
     const limit = Math.min(Math.max(toInt(req.query.limit || req.body.limit, 20), 1), 200);
     const skip = (page - 1) * limit;
-
-    // Filter strictly by TEACHING faculty type
     const query = { tenantId, isdeleted: false, facultyType: 'TEACHING' };
-
     if (centerId) query.centerId = centerId;
     if (search) {
       const rx = new RegExp(escapeRegex(search), 'i');
       query.$or = [{ staffName: rx }, { staffCode: rx }, { phone: rx }, { email: rx }];
     }
-
     const [rows, count] = await Promise.all([Staff.find(query).populate('subject', 'subjectName').populate('department', 'departmentName').sort({ staffName: 1 }).skip(skip).limit(limit).lean(), Staff.countDocuments(query)]);
-
     return res.status(200).json({
       status: true,
       message: 'Teaching staff list loaded',
@@ -121,12 +114,10 @@ const listTeachingStaff = async (req, res, next) => {
   }
 };
 
-// API 2: View Teaching Staff Comprehensive Details
 const viewTeachingStaff = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     const staffId = safeTrim(req.body?.staffId || req.query?.staffId || req.body?.facultyId);
-
     if (!tenantId || !staffId) {
       return res.status(400).json({ status: false, message: 'tenantId and staffId are required' });
     }
@@ -216,10 +207,8 @@ const getTeacherBatches = async (req, res, next) => {
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
     const staffId = safeTrim(req.body?.staffId || req.body?.facultyId);
     if (!staffId) return res.status(400).json({ status: false, message: 'staffId is required' });
-    // ── Fetch staff ───────────────────────────────────────────────────────────
     const staffDoc = await Staff.findOne({ tenantId, staffId, isdeleted: false }, { staffId: 1, staffName: 1, staffCode: 1, subject: 1, facultyType: 1 }).lean();
     if (!staffDoc) return res.status(404).json({ status: false, message: 'Staff not found' });
-    // ── Find ACTIVE batches where this staff is in staffMap ───────────────────
     const batches = await Batch.find(
       {
         tenantId,
@@ -247,8 +236,6 @@ const getTeacherBatches = async (req, res, next) => {
     )
       .sort({ classNo: 1, batchName: 1 })
       .lean();
-
-    // ── Early return ──────────────────────────────────────────────────────────
     if (!batches.length) {
       return res.json({
         status: true,
@@ -263,20 +250,14 @@ const getTeacherBatches = async (req, res, next) => {
         }
       });
     }
-
-    // ── Build batches array ───────────────────────────────────────────────────
-    // Each entry is one batch — includes the subjects this teacher
-    // handles in that specific batch (from staffMap rows matching staffId)
     const batchList = batches.map((b) => {
       const myStaffMapRows = (Array.isArray(b.staffMap) ? b.staffMap : []).filter((row) => safeTrim(row?.staffId) === staffId);
-
       const batchSubjects = myStaffMapRows
         .map((row) => ({
           subjectId: safeTrim(row?.subjectId || ''),
           subjectName: safeTrim(row?.subjectName || '')
         }))
         .filter((s) => s.subjectId);
-
       return {
         batchId: b.batchId,
         batchCode: b.batchCode,
@@ -292,11 +273,9 @@ const getTeacherBatches = async (req, res, next) => {
         startDate: b.startDate ?? null,
         endDate: b.endDate ?? null,
         status: b.status || null,
-        subjects: batchSubjects // subjects teacher handles in THIS batch
+        subjects: batchSubjects
       };
     });
-
-    // ── Build subjects array — unique across all batches ──────────────────────
     const subjectMap = new Map();
     for (const b of batches) {
       const myRows = (Array.isArray(b.staffMap) ? b.staffMap : []).filter((row) => safeTrim(row?.staffId) === staffId);
@@ -311,20 +290,17 @@ const getTeacherBatches = async (req, res, next) => {
       }
     }
     const subjects = Array.from(subjectMap.values()).sort((a, b) => a.subjectName.localeCompare(b.subjectName));
-
-    // ── Build classes array — unique classNo across all batches ───────────────
     const classMap = new Map();
     for (const b of batches) {
       const cn = b.classNo ?? null;
       if (cn !== null && !classMap.has(cn)) {
         classMap.set(cn, {
           classNo: cn,
-          academicYear: b.academicYear || null // AY for this class level
+          academicYear: b.academicYear || null
         });
       }
     }
     const classes = Array.from(classMap.values()).sort((a, b) => Number(a.classNo) - Number(b.classNo));
-
     return res.json({
       status: true,
       message: 'Teacher batches loaded',
@@ -346,33 +322,26 @@ const getTeacherDashboard = async (req, res, next) => {
   try {
     const tenantId = safeTrim(req.body?.tenantId || req.body?.entiId);
     const facultyId = safeTrim(req.body?.staffId);
-    const staffId = safeTrim(req.body?.staffId || facultyId); // tasks use staffId
+    const staffId = safeTrim(req.body?.staffId || facultyId);
     const nowMs = Date.now();
-
     if (!tenantId || !facultyId) {
       return res.status(400).json({
         status: false,
         message: 'tenantId and facultyId are required'
       });
     }
-
-    // Today's UTC midnight
     const now = new Date(nowMs);
     const todayMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
     const mondayMs = getPreviousMonday(todayMs);
-
-    // Current time in minutes from midnight (local device time used for "next class")
+    const staffDoc = await Staff.findOne({ tenantId, staffId, isdeleted: false }, { _id: 1 }).lean();
+    const staffObjectId = staffDoc?._id || null;
     const currentMin = now.getUTCHours() * 60 + now.getUTCMinutes();
-
-    // ── 1. Fetch today's timetables for this teacher ───────────────────────────
     const allTimetables = await TimeTable.find({
       tenantId,
       isdeleted: false,
       status: 'Active',
       wkStartOn: mondayMs
     }).lean();
-
-    // Deduplicate by batchCode — pick latest wkStartOn
     const ttByBatch = new Map();
     for (const tt of allTimetables) {
       const ex = ttByBatch.get(tt.batchCode);
@@ -380,8 +349,6 @@ const getTeacherDashboard = async (req, res, next) => {
         ttByBatch.set(tt.batchCode, tt);
       }
     }
-
-    // Collect all periods assigned to this teacher today
     const myPeriods = [];
     for (const tt of ttByBatch.values()) {
       const periods = getEffectivePeriods(tt, todayMs);
@@ -402,18 +369,12 @@ const getTeacherDashboard = async (req, res, next) => {
         }
       }
     }
-
-    // Sort by startMin
     myPeriods.sort((a, b) => (a.time?.startMin || 0) - (b.time?.startMin || 0));
-
-    // ── 2. Fetch attendance records for these periods today ───────────────────
     let nextClass = null;
     let attendanceNotTaken = 0;
-
     if (myPeriods.length) {
       const batchCodes = [...new Set(myPeriods.map((p) => p.batchCode))];
       const periodNos = [...new Set(myPeriods.map((p) => p.periodNo))];
-
       const attRecords = await Attendance.find(
         {
           tenantId,
@@ -424,38 +385,53 @@ const getTeacherDashboard = async (req, res, next) => {
         },
         { batchCode: 1, periodNo: 1 }
       ).lean();
-
       const markedSet = new Set(attRecords.map((a) => `${a.batchCode}_${a.periodNo}`));
-
-      // Count attendance not taken
       attendanceNotTaken = myPeriods.filter((p) => !markedSet.has(`${p.batchCode}_${p.periodNo}`)).length;
-
-      // Next class — first period whose startMin > currentMin
-      // If none upcoming, show the last period of today (most recent)
       const upcoming = myPeriods.filter((p) => (p.time?.startMin || 0) > currentMin);
-
       if (upcoming.length) {
         nextClass = upcoming[0];
       } else if (myPeriods.length) {
-        // All classes done — show last one as context
         nextClass = myPeriods[myPeriods.length - 1];
         nextClass = { ...nextClass, _allDone: true };
       }
     }
-
-    // ── 3. Pending tasks for this staff ───────────────────────────────────────
     const pendingTaskCount = await Task.countDocuments({
       tenantId,
       staffId,
       isdeleted: false,
       status: { $in: ['PENDING', 'IN_PROGRESS'] }
     });
+    let invigilationToday = [];
+    if (staffObjectId) {
+      const invigiRecords = await Invigilation.find({
+        tenantId,
+        examDate: todayMs,
+        isdeleted: false,
+        $or: [{ 'rooms.slot1StaffId': staffObjectId }, { 'rooms.slot2StaffId': staffObjectId }]
+      }).lean();
 
-    // ── 4. Build response ─────────────────────────────────────────────────────
+      for (const rec of invigiRecords) {
+        for (const room of rec.rooms) {
+          const isSlot1 = String(room.slot1StaffId) === String(staffObjectId);
+          const isSlot2 = String(room.slot2StaffId) === String(staffObjectId);
+          if (!isSlot1 && !isSlot2) continue;
+          invigilationToday.push({
+            invigilationId: String(rec._id),
+            examName: rec.examName,
+            session: rec.session,
+            examStartTime: rec.examStartTime,
+            examEndTime: rec.examEndTime,
+            roomNo: room.roomNo,
+            slot: isSlot1 ? 'SLOT1' : 'SLOT2',
+            slotStartTime: isSlot1 ? rec.slot1StartTime : rec.slot2StartTime,
+            slotEndTime: isSlot1 ? rec.slot1EndTime : rec.slot2EndTime
+          });
+        }
+      }
+    }
     return res.status(200).json({
       status: true,
       data: {
-        // Next class
         nextClass: nextClass
           ? {
               batchCode: nextClass.batchCode,
@@ -471,13 +447,11 @@ const getTeacherDashboard = async (req, res, next) => {
               allDone: nextClass._allDone === true
             }
           : null,
-
-        // Attendance
         attendanceNotTaken,
         totalPeriodsToday: myPeriods.length,
-
-        // Tasks
-        pendingTasks: pendingTaskCount
+        pendingTasks: pendingTaskCount,
+        hasInvigilation: invigilationToday.length > 0,
+        invigilationToday
       }
     });
   } catch (err) {
