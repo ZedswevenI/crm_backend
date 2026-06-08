@@ -44,6 +44,9 @@ routes.post('/user/delete', validatetoken, userCtrl.deleteUser);
 routes.post('/user/view', validatetoken, userCtrl.viewUser);
 routes.post('/user/import', validatetoken, userCtrl.importUsers);
 routes.post('/user/link/staff', validatetoken, userCtrl.syncExistingUsersAndStaff);
+routes.post('/user/forgot-password', userCtrl.forgotPassword);
+routes.post('/user/verify-forgot-otp', userCtrl.verifyForgotOtp);
+routes.post('/user/reset-password', userCtrl.resetPassword);
 
 // program Routes
 routes.post('/program/create', validatetoken, programCtrl.createProgram);
