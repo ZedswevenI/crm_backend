@@ -332,6 +332,7 @@ const getTeacherDashboard = async (req, res, next) => {
     }
     const now = new Date(nowMs);
     const todayMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+    console.log('todayMs ', todayMs);
     const mondayMs = getPreviousMonday(todayMs);
     const staffDoc = await Staff.findOne({ tenantId, staffId, isdeleted: false }, { _id: 1 }).lean();
     const staffObjectId = staffDoc?._id || null;
