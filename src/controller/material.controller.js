@@ -4,6 +4,7 @@ import StudyMaterial from '../models/studymaterial.model.js';
 import { uploadFileToS3 } from '../middlewares/s3.service.js';
 import StudentProfile from '../models/studentProfile.model.js';
 import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
+import Staff from '../models/staff.model.js';
 
 const pickTenantId = (req) => String(req?.body?.tenantId || req?.body?.entiId || req?.query?.entiId || '').trim();
 const safeTrim = (v) => (v === undefined || v === null ? '' : String(v).trim());
@@ -59,6 +60,8 @@ const createMaterial = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     const userId = safeTrim(req.body?.userId);
+    const staffDoc = await Staff.findOne({ tenantId, userId, isdeleted: false }, { staffId: 1 }).lean();
+    const resolvedStaffId = staffDoc?.staffId || null;
     const { title, description, classNo, subjectId, topicId, subTopicId, batchIds, studentIds, availableFrom, availableUntil, attachmentUrl, status } = req.body;
     if (!tenantId || !title || !classNo || !subjectId) {
       return res.status(400).json({ status: false, message: 'tenantId, title, classNo, and subjectId are required.' });
@@ -82,6 +85,7 @@ const createMaterial = async (req, res, next) => {
       availableFrom: availableFrom ? Number(availableFrom) : null,
       availableUntil: availableUntil ? Number(availableUntil) : null,
       status: status || 'Active',
+      staffId: resolvedStaffId,
       isdeleted: false,
       createdBy: userId,
       updatedBy: userId
@@ -205,7 +209,7 @@ const listMaterials = async (req, res, next) => {
     if (status) query.status = safeTrim(status);
     if (batchId) query.batchIds = safeTrim(batchId);
     if (studentId) query.studentIds = safeTrim(studentId);
-    if (staffId) query.createdBy = safeTrim(staffId);
+    if (staffId) query.staffId = safeTrim(staffId);
     if (startDate || endDate) {
       query.createdAt = {};
       if (startDate) query.createdAt.$gte = new Date(Number(startDate));

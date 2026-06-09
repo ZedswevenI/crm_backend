@@ -22,6 +22,7 @@ const studyMaterialSchema = new mongoose.Schema(
     availableUntil: { type: Number, required: false, default: null },
     status: { type: String, enum: ['Active', 'Inactive', 'Draft'], default: 'Active', index: true },
     isdeleted: { type: Boolean, default: false, index: true },
+    staffId: { type: String, default: null, trim: true, index: true },
     createdBy: { type: String, default: null, trim: true },
     updatedBy: { type: String, default: null, trim: true }
   },
