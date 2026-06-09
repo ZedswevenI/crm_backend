@@ -10,5 +10,6 @@ router.post('/get/:id', validatetoken, invigiCtrl.getInvigilation);
 router.post('/update/:id', validatetoken, invigiCtrl.updateInvigilation);
 router.post('/delete/:id', validatetoken, invigiCtrl.deleteInvigilation);
 router.post('/by-date/:date', validatetoken, invigiCtrl.getByDate);
+router.post('/upcoming', validatetoken, invigiCtrl.listUpcoming);
 
 export default router;
