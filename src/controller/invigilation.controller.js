@@ -4,10 +4,17 @@ import Staff from '../models/staff.model.js';
 const pickTid = (req) => req.body?.entiId || req.query?.entiId || null;
 const safeTrim = (v) => (typeof v === 'string' ? v.trim() : String(v ?? '').trim());
 
+// const dateStrToEpoch = (str) => {
+//   if (!str) return null;
+//   const d = new Date(str);
+//   return isNaN(d.getTime()) ? null : new Date(str).setHours(0, 0, 0, 0);
+// };
+
 const dateStrToEpoch = (str) => {
   if (!str) return null;
   const d = new Date(str);
-  return isNaN(d.getTime()) ? null : new Date(str).setHours(0, 0, 0, 0);
+  if (isNaN(d.getTime())) return null;
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
 };
 
 const formatDate = (epoch) => {
@@ -148,12 +155,19 @@ const getByDate = async (req, res, next) => {
     const { date } = req.params;
     const epoch = isNaN(Number(date)) ? dateStrToEpoch(date) : Number(date);
     if (!epoch) return res.status(400).json({ status: false, message: 'Invalid date' });
-    const startOfDay = new Date(epoch).setHours(0, 0, 0, 0);
-    const endOfDay = new Date(epoch).setHours(23, 59, 59, 999);
+    // const startOfDay = new Date(epoch).setHours(0, 0, 0, 0);
+    // const endOfDay = new Date(epoch).setHours(23, 59, 59, 999);
+    // const records = await Invigilation.find({
+    //   tenantId,
+    //   isdeleted: false,
+    //   examDate: { $gte: startOfDay, $lte: endOfDay }
+    // }).lean();
+    const d = new Date(epoch);
+    const utcMidnight = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
     const records = await Invigilation.find({
       tenantId,
       isdeleted: false,
-      examDate: { $gte: startOfDay, $lte: endOfDay }
+      examDate: utcMidnight
     }).lean();
     if (!records.length) return res.status(404).json({ status: false, message: 'No records for this date' });
     const order = { MORNING: 1, AFTERNOON: 2, EVENING: 3 };
@@ -239,4 +253,58 @@ const deleteInvigilation = async (req, res, next) => {
   }
 };
 
-export default { createInvigilation, listInvigilation, getInvigilation, getByDate, updateInvigilation, deleteInvigilation };
+const listUpcoming = async (req, res, next) => {
+  try {
+    const tenantId = pickTid(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'entiId is required' });
+    const { staffId } = req.body;
+    let staffDoc = null;
+    const now = new Date();
+    const todayUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+    const query = { tenantId, isdeleted: false, examDate: { $gte: todayUtc } };
+    if (staffId) {
+      staffDoc = await Staff.findOne({ tenantId, staffId, isdeleted: false }, { _id: 1 }).lean();
+      if (!staffDoc) return res.status(404).json({ status: false, message: 'Staff not found' });
+      query.$or = [{ 'rooms.slot1StaffId': staffDoc._id }, { 'rooms.slot2StaffId': staffDoc._id }];
+    }
+    const records = await Invigilation.find(query).sort({ examDate: 1, session: 1 }).lean();
+    const data = records.map((rec) => {
+      const base = {
+        _id: rec._id,
+        examName: rec.examName,
+        examDate: rec.examDate,
+        examDateFormatted: formatDate(rec.examDate),
+        examDay: formatDay(rec.examDate),
+        session: rec.session,
+        examStartTime: rec.examStartTime,
+        examEndTime: rec.examEndTime,
+        slot1StartTime: rec.slot1StartTime,
+        slot1EndTime: rec.slot1EndTime,
+        slot2StartTime: rec.slot2StartTime,
+        slot2EndTime: rec.slot2EndTime,
+        roomCount: rec.rooms.length
+      };
+      if (staffId && staffDoc) {
+        base.assignedRooms = rec.rooms
+          .filter((r) => String(r.slot1StaffId) === String(staffDoc._id) || String(r.slot2StaffId) === String(staffDoc._id))
+          .map((r) => {
+            const isSlot1 = String(r.slot1StaffId) === String(staffDoc._id);
+            return {
+              roomNo: r.roomNo,
+              slot: isSlot1 ? 'SLOT1' : 'SLOT2',
+              slotStartTime: isSlot1 ? rec.slot1StartTime : rec.slot2StartTime,
+              slotEndTime: isSlot1 ? rec.slot1EndTime : rec.slot2EndTime
+            };
+          });
+      } else {
+        base.rooms = rec.rooms;
+      }
+      return base;
+    });
+    return res.status(200).json({ status: true, count: data.length, data });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+export default { createInvigilation, listInvigilation, getInvigilation, getByDate, updateInvigilation, deleteInvigilation, listUpcoming };
