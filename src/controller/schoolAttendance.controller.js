@@ -607,6 +607,106 @@ const finaliseAttendance = async (req, res, next) => {
   }
 };
 
+const getBatchAttendanceStatusReport = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const fromDate = toInt(req.body?.fromDate);
+    const toDate = toInt(req.body?.toDate);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+    const batches = await Batch.find({ tenantId, isdeleted: false, status: 'ACTIVE' }, { batchId: 1, batchCode: 1, batchName: 1, section: 1, classNo: 1, academicYear: 1, programName: 1, classTeacherId: 1, classTeacherName: 1 }).sort({ classNo: 1, batchCode: 1 }).lean();
+    if (!batches.length) return res.status(200).json({ status: true, data: [], count: 0, message: 'No active batches found' });
+    const batchCodes = batches.map((b) => b.batchCode);
+    const attQuery = { tenantId, batchCode: { $in: batchCodes }, isdeleted: false };
+    if (fromDate && toDate) attQuery.date = { $gte: fromDate, $lte: toDate };
+    else if (fromDate) attQuery.date = { $gte: fromDate };
+    else if (toDate) attQuery.date = { $lte: toDate };
+    const records = await SchoolAttendance.find(attQuery, {
+      batchCode: 1,
+      date: 1,
+      type: 1,
+      holidayName: 1,
+      markedBy: 1,
+      markedByName: 1,
+      markedByRole: 1,
+      isFinalised: 1,
+      finalisedBy: 1,
+      finalisedByName: 1,
+      finalisedAt: 1,
+      remarks: 1,
+      students: 1
+    })
+      .sort({ date: 1 })
+      .lean();
+    const recordMap = new Map();
+    for (const rec of records) {
+      if (!recordMap.has(rec.batchCode)) recordMap.set(rec.batchCode, new Map());
+      recordMap.get(rec.batchCode).set(rec.date, rec);
+    }
+    const allDates = [...new Set(records.map((r) => r.date))].sort((a, b) => a - b);
+    const data = batches.map((batch) => {
+      const dateMap = recordMap.get(batch.batchCode) || new Map();
+      const days = allDates.map((date) => {
+        const rec = dateMap.get(date) || null;
+        const isHoliday = rec && HOLIDAY_TYPES.includes(rec.type);
+        const isMarked = rec && rec.type === 'ATTENDANCE';
+        const students = rec?.students || [];
+        let status = 'NOT_MARKED';
+        if (isHoliday) status = rec.type;
+        else if (isMarked && rec.isFinalised) status = 'FINALISED';
+        else if (isMarked) status = 'MARKED';
+        return {
+          date,
+          status,
+          holidayName: isHoliday ? rec.holidayName || rec.type : null,
+          markedBy: isMarked ? rec.markedBy || null : null,
+          markedByName: isMarked ? rec.markedByName || null : null,
+          markedByRole: isMarked ? rec.markedByRole || null : null,
+          isFinalised: rec?.isFinalised || false,
+          finalisedBy: rec?.finalisedBy || null,
+          finalisedByName: rec?.finalisedByName || null,
+          finalisedAt: rec?.finalisedAt || null,
+          remarks: rec?.remarks || null,
+          totalStudents: students.length,
+          presentCount: students.filter((s) => s.status === 'PRESENT').length,
+          absentCount: students.filter((s) => s.status === 'ABSENT').length,
+          lateCount: students.filter((s) => s.status === 'LATE').length
+        };
+      });
+      const summary = {
+        totalDays: allDates.length,
+        marked: days.filter((d) => d.status === 'MARKED').length,
+        finalised: days.filter((d) => d.status === 'FINALISED').length,
+        notMarked: days.filter((d) => d.status === 'NOT_MARKED').length,
+        holiday: days.filter((d) => HOLIDAY_TYPES.includes(d.status)).length
+      };
+      return {
+        batchId: batch.batchId,
+        batchCode: batch.batchCode,
+        batchName: batch.batchName,
+        section: batch.section || null,
+        classNo: batch.classNo || null,
+        academicYear: batch.academicYear || null,
+        programName: batch.programName || null,
+        classTeacher: {
+          staffId: batch.classTeacherId || null,
+          name: batch.classTeacherName || null
+        },
+        summary,
+        days
+      };
+    });
+    const overall = {
+      totalBatches: data.length,
+      totalDates: allDates.length,
+      fromDate: allDates[0] || null,
+      toDate: allDates[allDates.length - 1] || null
+    };
+    return res.status(200).json({ status: true, overall, count: data.length, data });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   listBatchesForSchoolAttendance,
   getSchoolAttendanceStudents,
@@ -618,5 +718,6 @@ export default {
   getSchoolAttendanceSummary,
   checkMarkedBatches,
   getMonthlyAttendanceReport,
-  finaliseAttendance
+  finaliseAttendance,
+  getBatchAttendanceStatusReport
 };
