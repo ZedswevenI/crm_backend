@@ -38,6 +38,7 @@ routes.post('/school-attendance/holiday/declare-all-batches', validatetoken, scl
 routes.post('/school-attendance/holiday/remove', validatetoken, sclAtdnceCtrl.removeHoliday);
 routes.post('/school-attendance/holiday/list', validatetoken, sclAtdnceCtrl.listHolidays);
 routes.post('/school-attendance/finalise', validatetoken, sclAtdnceCtrl.finaliseAttendance);
+routes.post('/school-attendance/batch-status-report', validatetoken, sclAtdnceCtrl.getBatchAttendanceStatusReport);
 
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Batch routes' }));
 
