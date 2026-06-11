@@ -11,6 +11,7 @@ import Staff from '../models/staff.model.js';
 import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
 import Otp from '../models/otp.model.js';
 import { generateAndSaveOtp, sendOtpEmail, verifyOtp } from '../helpers/otp.helper.js';
+import jwt from 'jsonwebtoken';
 
 dotenv.config();
 
@@ -544,7 +545,7 @@ const verifyForgotOtp = async (req, res, next) => {
     if (!user) return res.status(404).json({ status: false, message: 'User not found' });
     const result = await verifyOtp(user.userId, 'FORGOT_PASSWORD', otp);
     if (!result.valid) return res.status(400).json({ status: false, message: result.message });
-    const resetToken = jwt.sign({ userId: user.userId, purpose: 'RESET_PASSWORD' }, process.env.JWT_SECRET || 'admin@123', { expiresIn: '5m' });
+    const resetToken = jwt.sign({ userId: user.userId, purpose: 'RESET_PASSWORD' }, process.env.JWT_SECRET || 'admin@123', { expiresIn: '15m' });
     return res.status(200).json({ status: true, message: 'OTP verified', resetToken });
   } catch (err) {
     logger.error(`Error in verifyForgotOtp: ${err.message}`);
