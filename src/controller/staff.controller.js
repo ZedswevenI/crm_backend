@@ -332,7 +332,6 @@ const getTeacherDashboard = async (req, res, next) => {
     }
     const now = new Date(nowMs);
     const todayMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-    console.log('todayMs ', todayMs);
     const mondayMs = getPreviousMonday(todayMs);
     const staffDoc = await Staff.findOne({ tenantId, staffId, isdeleted: false }, { _id: 1 }).lean();
     const staffObjectId = staffDoc?._id || null;
@@ -376,13 +375,22 @@ const getTeacherDashboard = async (req, res, next) => {
     if (myPeriods.length) {
       const batchCodes = [...new Set(myPeriods.map((p) => p.batchCode))];
       const periodNos = [...new Set(myPeriods.map((p) => p.periodNo))];
+      // const attRecords = await Attendance.find(
+      //   {
+      //     tenantId,
+      //     batchCode: { $in: batchCodes },
+      //     periodNo: { $in: periodNos },
+      //     date: todayMs,
+      //     isdeleted: false
+      //   },
+      //   { batchCode: 1, periodNo: 1 }
+      // ).lean();
       const attRecords = await Attendance.find(
         {
           tenantId,
-          batchCode: { $in: batchCodes },
-          periodNo: { $in: periodNos },
           date: todayMs,
-          isdeleted: false
+          isdeleted: false,
+          $or: myPeriods.map((p) => ({ batchCode: p.batchCode, periodNo: p.periodNo }))
         },
         { batchCode: 1, periodNo: 1 }
       ).lean();
@@ -410,7 +418,6 @@ const getTeacherDashboard = async (req, res, next) => {
         isdeleted: false,
         $or: [{ 'rooms.slot1StaffId': staffObjectId }, { 'rooms.slot2StaffId': staffObjectId }]
       }).lean();
-
       for (const rec of invigiRecords) {
         for (const room of rec.rooms) {
           const isSlot1 = String(room.slot1StaffId) === String(staffObjectId);
