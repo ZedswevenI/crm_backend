@@ -817,10 +817,11 @@ const removeStudentsFromBatch = async (req, res, next) => {
     const studentIds = normalizeIdList(payload.studentIds);
     if (!studentIds.length) return res.status(400).json({ status: false, message: 'studentIds must be a non-empty array' });
     const updatedBy = payload.userId || null;
+    const batchRemovalRemarks = safeTrim(payload.remarks) || null;
     const studs = await StudentProfile.find({ tenantId, isdeleted: false, status: 'ACTIVE', studentId: { $in: studentIds } }, { studentId: 1, batchId: 1 }).lean();
     const fromBatchIds = Array.from(new Set((studs || []).map((s) => safeTrim(s.batchId)).filter(Boolean)));
     session.startTransaction();
-    await StudentProfile.updateMany({ tenantId, isdeleted: false, status: 'ACTIVE', studentId: { $in: studentIds } }, { $set: { batchId: null, batchCode: null, updatedBy } }, { session });
+    await StudentProfile.updateMany({ tenantId, isdeleted: false, status: 'ACTIVE', studentId: { $in: studentIds } }, { $set: { batchId: null, batchCode: null, updatedBy, batchRemovalRemarks } }, { session });
     for (const bid of fromBatchIds) {
       await refreshStudentCount(tenantId, bid, session);
       await Batch.updateOne({ tenantId, batchId: bid, isdeleted: false }, { $set: { updatedBy } }, { session });
