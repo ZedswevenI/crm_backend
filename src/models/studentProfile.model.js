@@ -80,6 +80,7 @@ const StudentProfileSchema = new mongoose.Schema(
       default: 'ACTIVE',
       index: true
     },
+    batchRemovalRemarks: { type: String, default: null, trim: true },
     isdeleted: { type: Boolean, default: false, index: true },
     createdBy: { type: String, trim: true, default: null, ref: 'user' },
     updatedBy: { type: String, trim: true, default: null, ref: 'user' }
