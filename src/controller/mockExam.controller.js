@@ -592,7 +592,8 @@ const duplicateExam = async (req, res, next) => {
       await session.abortTransaction();
       return res.status(409).json({ status: false, message: 'Exam with this examCode already exists' });
     }
-    const sections = (sourceExam.sections || []).map((s, idx) => ({
+    const sourceSections = sourceExam.sections || [];
+    const sections = sourceSections.map((s, idx) => ({
       sectionId: uuid(),
       sectionCode: safeTrim(s.sectionCode),
       sectionName: safeTrim(s.sectionName),
@@ -602,14 +603,12 @@ const duplicateExam = async (req, res, next) => {
       sortOrder: s.sortOrder ?? idx,
       status: s.status || 'active'
     }));
-    const sourceSections = sourceExam.sections || [];
     const sectionIdMap = new Map();
     sourceSections.forEach((s, idx) => {
       if (sections[idx]) {
         sectionIdMap.set(safeTrim(s.sectionId), safeTrim(sections[idx].sectionId));
       }
     });
-
     const newExamId = uuid();
     const totalQ = sections.reduce((s, sec) => s + (sec.numberOfQuestions || 0), 0) || toNum(req.body?.totalQuestions) || sourceExam.totalQuestions || 0;
     const [newExam] = await MockExam.create(
@@ -661,6 +660,7 @@ const duplicateExam = async (req, res, next) => {
           isdeleted: false
         };
       });
+
       const inserted = await MockExamQns.insertMany(newQuestions, { session, ordered: false });
       copiedCount = inserted.length;
     }
@@ -694,7 +694,6 @@ const duplicateExam = async (req, res, next) => {
     });
   } catch (err) {
     await session.abortTransaction();
-
     if (err.httpStatus) {
       return res.status(err.httpStatus).json({ status: false, message: err.message });
     }
