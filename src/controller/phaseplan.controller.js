@@ -692,16 +692,26 @@ const deleteActivity = async (req, res, next) => {
 const listActivities = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
-    const page = parseInt(req.query.page, 10) || 1;
-    const limit = parseInt(req.query.limit, 10) || 10;
+    // const page = parseInt(req.query.page, 10) || 1;
+    // const limit = parseInt(req.query.limit, 10) || 10;
+    // const sort = req.query.sort || '-createdAt';
+    // const search = req.query.search || '';
+    // const batchCode = req.query.batchCode;
+    // const centerCode = req.query.centerCode;
+    // const status = req.query.status;
+    // const fromDate = req.query.fromDate;
+    // const toDate = req.query.toDate;
+    const page = parseInt(req.body.page, 10) || 1;
+    const limit = parseInt(req.body.limit, 10) || 10;
+    const sort = req.body.sort || '-createdAt';
+    const search = req.body.search || '';
     const skip = (page - 1) * limit;
-    const sort = req.query.sort || '-createdAt';
-    const search = req.query.search || '';
-    const batchCode = req.query.batchCode;
-    const centerCode = req.query.centerCode;
-    const status = req.query.status;
-    const fromDate = req.query.fromDate;
-    const toDate = req.query.toDate;
+    const batchCode = req.body.batchCode || null;
+    const centerCode = req.body.centerCode || null;
+    const status = req.body.status || null;
+    const fromDate = req.body.fromDate || null;
+    const toDate = req.body.toDate || null;
+    const listMode = String(req.body.list || '').toLowerCase();
     const query = { tenantId, isdeleted: false };
     if (batchCode) query.batchCode = safeTrim(batchCode);
     if (centerCode) query.centerCode = safeTrim(centerCode);
@@ -715,7 +725,7 @@ const listActivities = async (req, res, next) => {
       const rx = { $regex: safeTrim(search), $options: 'i' };
       query.$or = [{ activityName: rx }, { remarks: rx }];
     }
-    const listMode = String(req.query.list || req.body.list || '').toLowerCase();
+    // const listMode = String(req.query.list || req.body.list || '').toLowerCase();
     if (listMode === 'full') {
       const rows = await Activity.find(query).sort(sort).lean();
       return res.status(constants.HTTPS_SUCCESS).send({ status: true, data: rows, count: rows.length, message: 'Activities retrieved' });

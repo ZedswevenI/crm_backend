@@ -89,7 +89,12 @@ const MockExamSchema = new mongoose.Schema(
     status: {
       type: String,
       default: 'draft',
-      enum: ['draft', 'published', 'live', 'ended', 'result_published']
+      enum: ['draft', 'published', 'live', 'ended', 'result_published', 'disabled']
+    },
+    previousStatus: {
+      type: String,
+      enum: ['draft', 'published', 'result_published', 'completed', null],
+      default: null
     },
     graces: { type: [GraceSchema], default: [] },
     publishLogs: { type: [PublishLogSchema], default: [] },
