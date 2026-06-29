@@ -101,4 +101,9 @@ routes.post('/reportqns/update/status', bookmarkController.updateReportStatus);
 
 routes.post('/result/batch-subject-stats', validatetoken, mockExamResultController.getBatchSubjectStats);
 
+routes.post('/next-code', validatetoken, mockExamController.getNextExamCode);
+routes.post('/disable', validatetoken, mockExamController.disableExam);
+routes.post('/enable', validatetoken, mockExamController.enableExam);
+routes.post('/result/participant-report', validatetoken, mockExamResultController.getParticipantReport);
+
 export default routes;
