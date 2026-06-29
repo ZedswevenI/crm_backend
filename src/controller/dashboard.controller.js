@@ -63,6 +63,11 @@ const getKpis = async (req, res, next) => {
         date: { $gte: todayMs, $lt: todayMs + 86400000 },
         isdeleted: false
       }).lean(),
+      Attendance.find({
+        tenantId,
+        date: { $gte: todayMs, $lt: todayMs + 86400000 },
+        isdeleted: false
+      }).lean(),
       PTM.countDocuments({
         tenantId,
         ptmDate: { $gte: todayMs },
@@ -637,207 +642,6 @@ const getRecentUsers = async (req, res, next) => {
   }
 };
 
-// const getDashboardSummary = async (req, res, next) => {
-//   try {
-//     const tenantId = pickTenantId(req);
-//     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-//     req.body.tenantId = tenantId;
-//     const todayMs = startOfTodayMs();
-//     const threeDaysAgo = daysAgoMs(3);
-//     const { from, to, prevFrom, prevTo } = getPeriodRange(req.body?.period || 'week');
-//     const [totalStudents, staffData, usersData, totalBatches, todayAttendance, upcomingPtmCount, studentsByProgram, examPerf, assignPerf, performers, inactiveUsers, upcomingPtms, upcomingActivities, staffByDept, recentUsers, currentAttRecs, prevAttRecs] = await Promise.all([
-//       StudentProfile.countDocuments({ tenantId, isdeleted: false, status: 'ACTIVE' }),
-//       Staff_model.aggregate([{ $match: { tenantId, isdeleted: false, status: 'Active' } }, { $group: { _id: '$facultyType', count: { $sum: 1 } } }]),
-//       Promise.all([User.countDocuments({ tenantId, isdeleted: false, status: 'Active' }), User.countDocuments({ tenantId, isdeleted: false, status: 'Active', $or: [{ lastLoginAt: null }, { lastLoginAt: { $lt: new Date(threeDaysAgo) } }] })]),
-//       Batch.countDocuments({ tenantId, isdeleted: false, status: 'ACTIVE' }),
-//       SchoolAttendance.find({ tenantId, date: { $gte: todayMs, $lt: todayMs + 86400000 }, isdeleted: false }).lean(),
-//       PTM.countDocuments({ tenantId, ptmDate: { $gte: todayMs }, status: { $in: ['SCHEDULED', 'COMPLETED'] }, isdeleted: false }),
-//       StudentProfile.aggregate([
-//         { $match: { tenantId, isdeleted: false, status: 'ACTIVE' } },
-//         { $group: { _id: { programId: '$programId', programName: '$programName', programCode: '$programCode' }, count: { $sum: 1 } } },
-//         { $sort: { count: -1 } },
-//         { $project: { _id: 0, programId: '$_id.programId', programName: { $ifNull: ['$_id.programName', 'Unknown'] }, programCode: { $ifNull: ['$_id.programCode', ''] }, count: 1 } }
-//       ]),
-//       MockExamResult.aggregate([
-//         { $match: { tenantId, isdeleted: false, status: { $in: ['evaluated', 'result_published'] }, batchId: { $ne: null } } },
-//         { $group: { _id: '$batchId', avgObtained: { $avg: '$obtainedMarks' }, avgTotal: { $avg: '$totalMarks' }, studentCount: { $addToSet: '$admissionNo' } } },
-//         { $project: { _id: 0, batchId: '$_id', avgExamScore: { $cond: [{ $gt: ['$avgTotal', 0] }, { $round: [{ $multiply: [{ $divide: ['$avgObtained', '$avgTotal'] }, 100] }, 1] }, 0] }, studentCount: { $size: '$studentCount' } } }
-//       ]),
-//       AssignmentResult.aggregate([
-//         { $match: { tenantId, isdeleted: false, status: { $in: ['completed', 'evaluated'] }, batchId: { $ne: null } } },
-//         { $group: { _id: '$batchId', avgCgpa: { $avg: '$cgpa' } } },
-//         { $project: { _id: 0, batchId: '$_id', avgAssignmentScore: { $round: [{ $multiply: ['$avgCgpa', 10] }, 1] } } }
-//       ]),
-//       StudentPerformance.aggregate([
-//         { $match: { tenantId, isdeleted: false } },
-//         { $group: { _id: '$studentId', admissionNo: { $first: '$admissionNo' }, batchId: { $first: '$batchId' }, score: { $avg: { $cond: [{ $gt: [{ $ifNull: ['$combinedScore', 0] }, 0] }, '$combinedScore', { $multiply: [{ $ifNull: ['$assignment.cgpa', 0] }, 10] }] } } } },
-//         { $sort: { score: -1 } },
-//         { $limit: 5 },
-//         { $project: { _id: 0, studentId: '$_id', admissionNo: 1, batchId: 1, score: { $round: ['$score', 1] } } }
-//       ]),
-//       User.find({ tenantId, isdeleted: false, status: 'Active', $or: [{ lastLoginAt: null }, { lastLoginAt: { $lt: new Date(threeDaysAgo) } }] }, { userId: 1, name: 1, email: 1, roleLevel: 1, roleLabel: 1, centerId: 1, centerName: 1, lastLoginAt: 1 })
-//         .sort({ lastLoginAt: 1 })
-//         .limit(10)
-//         .lean(),
-
-//       PTM.find({ tenantId, ptmDate: { $gte: todayMs }, status: { $in: ['SCHEDULED', 'COMPLETED'] }, isdeleted: false }, { ptmId: 1, studentName: 1, admissionNo: 1, batchCode: 1, centerCode: 1, ptmDate: 1, startTime: 1, endTime: 1, durationMins: 1, meetingMode: 1, venue: 1, status: 1 })
-//         .sort({ ptmDate: 1, startTime: 1 })
-//         .limit(5)
-//         .lean(),
-//       Activity.find({ tenantId, startDate: { $gte: todayMs }, status: { $in: ['PLANNED', 'IN_PROGRESS'] }, isdeleted: false }, { activityId: 1, activityName: 1, batchCode: 1, centerCode: 1, startDate: 1, endDate: 1, status: 1 })
-//         .sort({ startDate: 1 })
-//         .limit(5)
-//         .lean(),
-//       Staff_model.aggregate([
-//         { $match: { tenantId, isdeleted: false, status: 'Active' } },
-//         { $group: { _id: '$department', count: { $sum: 1 }, teaching: { $sum: { $cond: [{ $eq: ['$facultyType', 'TEACHING'] }, 1, 0] } }, nonTeaching: { $sum: { $cond: [{ $eq: ['$facultyType', 'NON_TEACHING'] }, 1, 0] } } } },
-//         { $sort: { count: -1 } }
-//       ]),
-//       User.find({ tenantId, isdeleted: false }, { userId: 1, name: 1, email: 1, roleLevel: 1, roleLabel: 1, status: 1, lastLoginAt: 1, createdAt: 1, centerId: 1, centerName: 1 }).sort({ createdAt: -1 }).limit(5).lean(),
-//       SchoolAttendance.find({ tenantId, date: { $gte: from, $lte: to }, isdeleted: false }).lean(),
-//       SchoolAttendance.find({ tenantId, date: { $gte: prevFrom, $lte: prevTo }, isdeleted: false }).lean()
-//     ]);
-//     const staffBreakdown = { TEACHING: 0, NON_TEACHING: 0, total: 0 };
-//     staffData.forEach(({ _id, count }) => {
-//       if (_id === 'TEACHING') staffBreakdown.TEACHING = count;
-//       else if (_id === 'NON_TEACHING') staffBreakdown.NON_TEACHING = count;
-//       staffBreakdown.total += count;
-//     });
-//     const [totalUsers, inactiveCount] = usersData;
-//     let totalPresent = 0,
-//       totalMarked = 0;
-//     todayAttendance.forEach((rec) => {
-//       (rec.students || []).forEach((s) => {
-//         totalMarked++;
-//         if (s.status === 'PRESENT' || s.status === 'LATE') totalPresent++;
-//       });
-//     });
-//     const aggregateByDate = (recs) => {
-//       const map = new Map();
-//       recs.forEach((rec) => {
-//         if (!map.has(rec.date)) map.set(rec.date, { present: 0, total: 0 });
-//         const e = map.get(rec.date);
-//         (rec.students || []).forEach((s) => {
-//           e.total++;
-//           if (s.status === 'PRESENT' || s.status === 'LATE') e.present++;
-//         });
-//       });
-//       return Array.from(map.entries())
-//         .sort((a, b) => a[0] - b[0])
-//         .map(([date, { present, total }]) => ({ date, presentPct: total > 0 ? Math.round((present / total) * 100) : 0, totalStudents: total }));
-//     };
-//     const assignMap = new Map(assignPerf.map((a) => [a.batchId, a.avgAssignmentScore]));
-//     const mergedPerf = examPerf
-//       .map((e) => ({
-//         batchId: e.batchId,
-//         avgExamScore: e.avgExamScore,
-//         avgAssignmentScore: assignMap.get(e.batchId) ?? null,
-//         avgCombined: assignMap.has(e.batchId) ? Math.round((e.avgExamScore + assignMap.get(e.batchId)) / 2) : e.avgExamScore,
-//         studentCount: e.studentCount
-//       }))
-//       .sort((a, b) => b.avgCombined - a.avgCombined)
-//       .slice(0, 8);
-//     const topBatchIds = mergedPerf.map((x) => x.batchId);
-//     const batchDocs = await Batch.find({ tenantId, batchId: { $in: topBatchIds }, isdeleted: false }, { batchId: 1, batchCode: 1, batchName: 1 }).lean();
-//     const batchMap = new Map(batchDocs.map((b) => [b.batchId, b]));
-//     const batchPerf = mergedPerf.map((x) => ({ ...x, batchCode: batchMap.get(x.batchId)?.batchCode || x.batchId, batchName: batchMap.get(x.batchId)?.batchName || x.batchId }));
-//     const perfStudentIds = performers.map((p) => p.studentId);
-//     const perfBatchIds = [...new Set(performers.map((p) => p.batchId).filter(Boolean))];
-//     const [perfProfiles, perfBatches] = await Promise.all([
-//       StudentProfile.find({ tenantId, studentId: { $in: perfStudentIds }, isdeleted: false }, { studentId: 1, 'student.name': 1, batchCode: 1 }).lean(),
-//       Batch.find({ tenantId, batchId: { $in: perfBatchIds }, isdeleted: false }, { batchId: 1, batchCode: 1, batchName: 1 }).lean()
-//     ]);
-//     const profileMap = new Map(perfProfiles.map((p) => [p.studentId, p]));
-//     const perfBatchMap = new Map(perfBatches.map((b) => [b.batchId, b]));
-//     const topPerformers = performers.map((p, i) => {
-//       const profile = profileMap.get(p.studentId);
-//       const batch = perfBatchMap.get(p.batchId);
-//       return {
-//         rank: i + 1,
-//         studentId: p.studentId,
-//         admissionNo: p.admissionNo,
-//         name: profile?.student?.name || p.admissionNo,
-//         batchCode: profile?.batchCode || batch?.batchCode || null,
-//         score: p.score,
-//         avatar: (profile?.student?.name || p.admissionNo || '')
-//           .split(' ')
-//           .slice(0, 2)
-//           .map((w) => w[0]?.toUpperCase() || '')
-//           .join('')
-//       };
-//     });
-//     const inactiveUsersList = inactiveUsers.map((u) => ({
-//       userId: u.userId,
-//       name: u.name,
-//       email: u.email,
-//       roleLevel: u.roleLevel,
-//       roleLabel: u.roleLabel,
-//       centerId: u.centerId || null,
-//       centerName: u.centerName || null,
-//       lastLoginAt: u.lastLoginAt || null,
-//       neverLoggedIn: !u.lastLoginAt,
-//       daysSinceLogin: u.lastLoginAt ? Math.floor((Date.now() - new Date(u.lastLoginAt).getTime()) / 86400000) : null,
-//       avatar: (u.name || '')
-//         .split(' ')
-//         .slice(0, 2)
-//         .map((w) => w[0]?.toUpperCase() || '')
-//         .join('')
-//     }));
-//     const deptIds = staffByDept.map((d) => d._id).filter(Boolean);
-//     const deptDocs = await Department.find({ _id: { $in: deptIds } }, { _id: 1, departmentName: 1, departmentCode: 1 }).lean();
-//     const deptMap = new Map(deptDocs.map((d) => [String(d._id), d]));
-//     const totalStaffForDept = staffByDept.reduce((s, d) => s + d.count, 0);
-//     const staffDeptList = staffByDept.map((d) => {
-//       const dept = deptMap.get(String(d._id));
-//       return { departmentId: d._id, departmentName: dept?.departmentName || 'Unknown', departmentCode: dept?.departmentCode || null, count: d.count, teaching: d.teaching, nonTeaching: d.nonTeaching, pct: totalStaffForDept > 0 ? Math.round((d.count / totalStaffForDept) * 100) : 0 };
-//     });
-//     return res.status(200).json({
-//       status: true,
-//       message: 'Dashboard summary loaded',
-//       data: {
-//         kpis: {
-//           students: { total: totalStudents },
-//           staff: { total: staffBreakdown.total, teaching: staffBreakdown.TEACHING, nonTeaching: staffBreakdown.NON_TEACHING },
-//           users: { total: totalUsers, inactiveCount },
-//           batches: { total: totalBatches },
-//           attendance: { todayPct: totalMarked > 0 ? Math.round((totalPresent / totalMarked) * 100) : null, batchesMarked: todayAttendance.length },
-//           ptms: { upcoming: upcomingPtmCount }
-//         },
-//         attendanceTrend: {
-//           period: req.body?.period || 'week',
-//           current: aggregateByDate(currentAttRecs),
-//           previous: aggregateByDate(prevAttRecs)
-//         },
-//         studentsByProgram,
-//         batchPerformance: batchPerf,
-//         topPerformers,
-//         inactiveUsers: { list: inactiveUsersList, totalCount: inactiveCount, thresholdDays: 3 },
-//         upcomingPtms: { data: upcomingPtms, count: upcomingPtms.length },
-//         upcomingActivities: { data: upcomingActivities, count: upcomingActivities.length },
-//         staffByDepartment: { data: staffDeptList, total: totalStaffForDept },
-//         recentUsers: recentUsers.map((u) => ({
-//           userId: u.userId,
-//           name: u.name,
-//           email: u.email,
-//           roleLevel: u.roleLevel,
-//           roleLabel: u.roleLabel,
-//           status: u.status,
-//           lastLoginAt: u.lastLoginAt || null,
-//           centerId: u.centerId || null,
-//           centerName: u.centerName || null,
-//           avatar: (u.name || '')
-//             .split(' ')
-//             .slice(0, 2)
-//             .map((w) => w[0]?.toUpperCase() || '')
-//             .join('')
-//         }))
-//       }
-//     });
-//   } catch (err) {
-//     return next(err);
-//   }
-// };
-
 const getDashboardSummary = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
@@ -866,9 +670,9 @@ const getDashboardSummary = async (req, res, next) => {
       currentAttRecs,
       prevAttRecs,
       totalQuestions,
-      activeBatches
+      activeBatches,
+      todayPeriodAttendance
     ] = await Promise.all([
-      // StudentProfile.aggregate([{ $match: { tenantId, isdeleted: false, status: 'ACTIVE' } }, { $group: { _id: '$batchCode', count: { $sum: 1 } } }, { $sort: { count: -1 } }, { $project: { _id: 0, batchCode: '$_id', count: 1 } }]),
       StudentProfile.aggregate([{ $match: { tenantId, isdeleted: false, status: 'ACTIVE', batchCode: { $ne: null } } }, { $group: { _id: '$batchCode', count: { $sum: 1 } } }, { $sort: { count: -1 } }, { $project: { _id: 0, batchCode: '$_id', count: 1 } }]),
       Staff_model.aggregate([{ $match: { tenantId, isdeleted: false, status: 'Active' } }, { $group: { _id: '$facultyType', count: { $sum: 1 } } }]),
       Promise.all([User.countDocuments({ tenantId, isdeleted: false, status: 'Active' }), User.countDocuments({ tenantId, isdeleted: false, status: 'Active', $or: [{ lastLoginAt: null }, { lastLoginAt: { $lt: new Date(threeDaysAgo) } }] })]),
@@ -908,7 +712,7 @@ const getDashboardSummary = async (req, res, next) => {
         .sort({ ptmDate: 1, startTime: 1 })
         .limit(5)
         .lean(),
-      Activity.find({ tenantId, startDate: { $gte: todayMs }, status: { $in: ['PLANNED', 'IN_PROGRESS'] }, isdeleted: false }, { activityId: 1, activityName: 1, batchCode: 1, startDate: 1, endDate: 1, status: 1 })
+      Activity.find({ tenantId, startDate: { $gte: todayMs }, status: { $in: ['PLANNED', 'IN_PROGRESS'] }, isdeleted: false }, { activityId: 1, activityName: 1, batchCode: 1, startDate: 1, endDate: 1, status: 1, remarks: 1 })
         .sort({ startDate: 1 })
         .limit(5)
         .lean(),
@@ -921,7 +725,12 @@ const getDashboardSummary = async (req, res, next) => {
       SchoolAttendance.find({ tenantId, date: { $gte: from, $lte: to }, isdeleted: false }).lean(),
       SchoolAttendance.find({ tenantId, date: { $gte: prevFrom, $lte: prevTo }, isdeleted: false }).lean(),
       MockExamQns.countDocuments({ tenantId, isdeleted: false }),
-      Batch.find({ tenantId, isdeleted: false, status: 'ACTIVE' }, { batchCode: 1 }).lean()
+      Batch.find({ tenantId, isdeleted: false, status: 'ACTIVE' }, { batchCode: 1 }).lean(),
+      Attendance.find({
+        tenantId,
+        date: { $gte: todayMs, $lt: todayMs + 86400000 },
+        isdeleted: false
+      }).lean()
     ]);
     const staffBreakdown = { TEACHING: 0, NON_TEACHING: 0, total: 0 };
     staffData.forEach(({ _id, count }) => {
@@ -931,12 +740,48 @@ const getDashboardSummary = async (req, res, next) => {
     });
     const [totalUsers, inactiveCount] = usersData;
     const totalStudents = studentByBatch.reduce((s, b) => s + b.count, 0);
+    // let todayAbsent = 0,
+    //   todayMarked = 0;
+    // todayAttendance.forEach((rec) => {
+    //   (rec.students || []).forEach((s) => {
+    //     todayMarked++;
+    //     if (s.status === 'ABSENT') todayAbsent++;
+    //   });
+    // });
     let todayAbsent = 0,
       todayMarked = 0;
+    const todayAbsentList = [];
     todayAttendance.forEach((rec) => {
       (rec.students || []).forEach((s) => {
         todayMarked++;
-        if (s.status === 'ABSENT') todayAbsent++;
+        if (s.status === 'ABSENT') {
+          todayAbsent++;
+          todayAbsentList.push({
+            studentId: s.studentId,
+            admissionNo: s.admissionNo,
+            remarks: s.remarks || null,
+            batchCode: rec.batchCode,
+            batchName: rec.batchName || null,
+            date: rec.date
+          });
+        }
+      });
+    });
+    const todayPeriodAbsentList = [];
+    (todayPeriodAttendance || []).forEach((rec) => {
+      (rec.students || []).forEach((s) => {
+        if (s.status === 'ABSENT') {
+          todayPeriodAbsentList.push({
+            studentId: s.studentId,
+            admissionNo: s.admissionNo,
+            remarks: s.remarks || null,
+            batchCode: rec.batchCode,
+            date: rec.date,
+            periodNo: rec.periodNo,
+            subjectId: rec.subjectId,
+            facultyId: rec.facultyId
+          });
+        }
       });
     });
     const allBatchCodes = activeBatches.map((b) => b.batchCode);
@@ -967,7 +812,9 @@ const getDashboardSummary = async (req, res, next) => {
     const assignMap = new Map(assignPerf.map((a) => [a.batchId, a.avgAssignmentScore]));
     const schoolExamMap = new Map(schoolExamPerf.map((s) => [s.batchCode, s.avgSchoolExamScore]));
     const topBatchIds = mockExamPerf.map((e) => e.batchId);
-    const batchDocs = await Batch.find({ tenantId, batchId: { $in: topBatchIds }, isdeleted: false }, { batchId: 1, batchCode: 1, batchName: 1 }).lean();
+    const assignBatchIds = assignPerf.map((a) => a.batchId);
+    const allBatchIds = [...new Set([...topBatchIds, ...assignBatchIds])];
+    const batchDocs = await Batch.find({ tenantId, batchId: { $in: allBatchIds }, isdeleted: false }, { batchId: 1, batchCode: 1, batchName: 1 }).lean();
     const batchMap = new Map(batchDocs.map((b) => [b.batchId, b]));
     const mockExamPerfFinal = mockExamPerf.map((e) => ({
       batchId: e.batchId,
@@ -1038,6 +885,15 @@ const getDashboardSummary = async (req, res, next) => {
       const dept = deptMap.get(String(d._id));
       return { departmentId: d._id, departmentName: dept?.departmentName || 'Unknown', departmentCode: dept?.departmentCode || null, count: d.count, teaching: d.teaching, nonTeaching: d.nonTeaching, pct: totalStaffForDept > 0 ? Math.round((d.count / totalStaffForDept) * 100) : 0 };
     });
+    const absentStudentIds = [...new Set([...todayAbsentList.map((s) => s.studentId), ...todayPeriodAbsentList.map((s) => s.studentId)])];
+    const absentStudentProfiles = await StudentProfile.find({ studentId: { $in: absentStudentIds }, isdeleted: false }, { studentId: 1, 'student.name': 1 }).lean();
+    const studentNameMap = new Map(absentStudentProfiles.map((s) => [s.studentId, s.student?.name]));
+    todayAbsentList.forEach((s) => {
+      s.studentName = studentNameMap.get(s.studentId) || null;
+    });
+    todayPeriodAbsentList.forEach((s) => {
+      s.studentName = studentNameMap.get(s.studentId) || null;
+    });
     return res.status(200).json({
       status: true,
       message: 'Dashboard summary loaded',
@@ -1047,7 +903,8 @@ const getDashboardSummary = async (req, res, next) => {
           students: { total: totalStudents, byBatch: studentByBatch },
           staff: { total: staffBreakdown.total, teaching: staffBreakdown.TEACHING, nonTeaching: staffBreakdown.NON_TEACHING },
           users: { total: totalUsers, inactiveCount },
-          attendance: { todayAbsent, batchesMarked: todayAttendance.length, totalBatches: allBatchCodes.length },
+          // attendance: { todayAbsent, batchesMarked: todayAttendance.length, totalBatches: allBatchCodes.length },
+          attendance: { todayAbsent, todayAbsentList, todayPeriodAbsentList, batchesMarked: todayAttendance.length, totalBatches: allBatchCodes.length },
           questions: { total: totalQuestions }
         },
         attendanceTrend: { period: req.body?.period || 'week', attendanceType: 'school', current: aggregateByDate(currentAttRecs), previous: aggregateByDate(prevAttRecs), batches: allBatchCodes },

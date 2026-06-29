@@ -6,7 +6,7 @@ import TimeTable from '../models/timetable.model.js';
 import Attendance from '../models/attandence.model.js';
 import Assignment from '../models/assignment.model.js';
 import Topic from '../models/topic.model.js';
-
+import Invigilation from '../models/invigilation.model.js';
 import BatchAssignEnable from '../models/batchenabledAssignment.model.js';
 import MockExamBatchAssign from '../models/mockExambatchmapping.model.js';
 import MockExam from '../models/mockExam.model.js';
@@ -1466,12 +1466,6 @@ const formatHours = (mins) => {
   return `${hrs} hr ${m} min`;
 };
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// FACULTY REPORT
-// POST /teacher/faculty-report
-// Body: { entiId, staffIds[]?, fromDate?, toDate?, sections[] }
-// ═══════════════════════════════════════════════════════════════════════════════
-
 const getFacultyReport = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
@@ -1501,6 +1495,8 @@ const getFacultyReport = async (req, res, next) => {
     if (!allStaff.length) return res.status(200).json({ status: true, count: 0, data: [] });
     const allStaffIdSet = new Set(allStaff.map((s) => safeTrim(s.staffId)));
     const allStaffIds = Array.from(allStaffIdSet);
+    const staffMongoIdMap = new Map(allStaff.map((s) => [safeTrim(s.staffId), String(s._id)]));
+    const mongoIdToStaffIdMap = new Map(allStaff.map((s) => [String(s._id), safeTrim(s.staffId)]));
     const formatTime = (mins) => {
       if (mins === null || mins === undefined || mins < 0) return '-';
       const h = Math.floor(mins / 60);
@@ -1527,6 +1523,7 @@ const getFacultyReport = async (req, res, next) => {
     const needsLateEarly = sections.some((s) => ['lateEntry', 'earlyLeaving'].includes(s));
     const needsAttendance = sections.some((s) => ['attendanceMarked', 'attendanceNotMarked'].includes(s));
     const needsAssignments = sections.includes('assignments');
+    const needsInvigilation = sections.includes('invigilation');
     let timetables = [];
     let batchInfoMap = new Map();
     let subjectNameMap = new Map();
@@ -1742,6 +1739,59 @@ const getFacultyReport = async (req, res, next) => {
             if (bc !== 0) return bc;
             return (a.enabledAt || 0) - (b.enabledAt || 0);
           });
+        }
+      }
+    }
+    let invigilationByStaff = new Map();
+    if (needsInvigilation) {
+      const invigiQuery = { tenantId, isdeleted: false };
+      if (fromDate || toDate) {
+        invigiQuery.examDate = {};
+        if (fromDate) invigiQuery.examDate.$gte = fromDate;
+        if (toDate) invigiQuery.examDate.$lte = toDate;
+      }
+      const invigiRecords = await Invigilation.find(invigiQuery).sort({ examDate: 1, session: 1 }).lean();
+
+      const allMongoIds = new Set(allStaff.map((s) => String(s._id)));
+
+      for (const rec of invigiRecords) {
+        for (const room of rec.rooms || []) {
+          // Check slot1
+          const s1Id = String(room.slot1StaffId || '');
+          if (s1Id && allMongoIds.has(s1Id)) {
+            const staffId = mongoIdToStaffIdMap.get(s1Id);
+            if (staffId) {
+              if (!invigilationByStaff.has(staffId)) invigilationByStaff.set(staffId, []);
+              invigilationByStaff.get(staffId).push({
+                examName: rec.examName,
+                examDate: rec.examDate,
+                examDateFormatted: formatDateStr(rec.examDate),
+                session: rec.session,
+                roomNo: room.roomNo,
+                slot: 'SLOT1',
+                slotStartTime: rec.slot1StartTime || null,
+                slotEndTime: rec.slot1EndTime || null
+              });
+            }
+          }
+          // Check slot2
+          const s2Id = String(room.slot2StaffId || '');
+          if (s2Id && allMongoIds.has(s2Id)) {
+            const staffId = mongoIdToStaffIdMap.get(s2Id);
+            if (staffId) {
+              if (!invigilationByStaff.has(staffId)) invigilationByStaff.set(staffId, []);
+              invigilationByStaff.get(staffId).push({
+                examName: rec.examName,
+                examDate: rec.examDate,
+                examDateFormatted: formatDateStr(rec.examDate),
+                session: rec.session,
+                roomNo: room.roomNo,
+                slot: 'SLOT2',
+                slotStartTime: rec.slot2StartTime || null,
+                slotEndTime: rec.slot2EndTime || null
+              });
+            }
+          }
         }
       }
     }
@@ -1965,7 +2015,6 @@ const getFacultyReport = async (req, res, next) => {
     }
     const data = [];
     for (const staff of allStaff) {
-      console.log('staff ', staff);
       const sid = safeTrim(staff.staffId);
       const ttEntry = timetableData.get(sid) || { teaching: [], cancelled: [], replaced: [] };
       const sortByDate = (arr) =>
@@ -2028,6 +2077,10 @@ const getFacultyReport = async (req, res, next) => {
         const rows = assignmentsByBatchStaff.get(sid) || [];
         staffData.assignments = { count: rows.length, rows };
       }
+      if (sections.includes('invigilation')) {
+        const duties = (invigilationByStaff.get(sid) || []).sort((a, b) => a.examDate - b.examDate);
+        staffData.invigilation = { count: duties.length, duties };
+      }
       data.push(staffData);
       const teachingPeriods = staffData.teaching?.periods || [];
       const teachingMins = teachingPeriods.reduce((s, p) => s + p.mins, 0);
@@ -2041,7 +2094,8 @@ const getFacultyReport = async (req, res, next) => {
         { nature: 'No. of Tasks Completed', particulars: sections.includes('tasks') ? (staffData.tasks?.tasks || []).filter((t) => t.status === 'COMPLETED').length : '-' },
         { nature: 'Attendance Marked Count', particulars: staffData.attendanceMarked?.count ?? '-' },
         { nature: 'Attendance Not Marked Count', particulars: staffData.attendanceNotMarked?.count ?? '-' },
-        { nature: 'Enabled Assignment Count', particulars: staffData.assignments?.count ?? '-' }
+        { nature: 'Enabled Assignment Count', particulars: staffData.assignments?.count ?? '-' },
+        { nature: 'Invigilation Count', particulars: staffData.invigilation?.count ?? '-' }
       ].filter((row) => row.particulars !== '-');
     }
     return res.status(200).json({

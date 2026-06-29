@@ -10,6 +10,7 @@ import { syncOnMockPublish } from '../helpers/performanceSync.helper.js';
 import StudentProfile from '../models/studentProfile.model.js';
 import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
 import { evalAnswer } from './mockExamResult.controller.js';
+import Counter from '../models/counter.model.js';
 
 const safeTrim = (v) => (v == null ? '' : String(v)).trim();
 const toNum = (v) => {
@@ -29,6 +30,12 @@ const round2 = (n) => Math.round(Number(n) * 100) / 100;
 const isValidClassNo = (n) => {
   const v = toNum(n);
   return Number.isFinite(v) && v >= 6 && v <= 13;
+};
+
+const generateExamCode = async (tenantId) => {
+  const counter = await Counter.findOneAndUpdate({ tenantId, key: 'examCode' }, { $inc: { seq: 1 } }, { new: true, upsert: true }).lean();
+  const seq = counter.seq;
+  return String(100000 + seq);
 };
 
 const buildSections = (raw = []) =>
@@ -227,7 +234,6 @@ const createExam = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     const userId = pickUid(req);
-    const examCode = safeTrim(req.body?.examCode);
     const examName = safeTrim(req.body?.examName);
     const password = safeTrim(req.body?.password);
     const duration = toNum(req.body?.duration) || 180;
@@ -239,16 +245,20 @@ const createExam = async (req, res, next) => {
     }
     const autoPublishAt = req.body?.autoPublishAt ? toNum(req.body.autoPublishAt) : null;
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-    if (!examCode) return res.status(400).json({ status: false, message: 'examCode is required' });
     if (!examName) return res.status(400).json({ status: false, message: 'examName is required' });
     if (!password) return res.status(400).json({ status: false, message: 'password is required' });
+    let examCode = safeTrim(req.body?.examCode);
+    if (!examCode) {
+      examCode = await generateExamCode(tenantId);
+    } else {
+      const dup = await MockExam.findOne({ tenantId, examCode, isdeleted: false }, { examId: 1 }).lean();
+      if (dup) return res.status(409).json({ status: false, message: 'Exam with this examCode already exists' });
+    }
     if (startTime && endTime && startTime >= endTime) return res.status(400).json({ status: false, message: 'startTime must be before endTime' });
     if (autoPublishAt && endTime && autoPublishAt < endTime) return res.status(400).json({ status: false, message: 'autoPublishAt should be after endTime' });
     if (req.body?.instructionId && !mustObjId(req.body.instructionId)) return res.status(400).json({ status: false, message: 'Invalid instructionId' });
     let sections = [];
     if (Array.isArray(req.body?.sections)) sections = buildSections(req.body.sections);
-    const dup = await MockExam.findOne({ tenantId, examCode, isdeleted: false }, { examId: 1 }).lean();
-    if (dup) return res.status(409).json({ status: false, message: 'Exam with this examCode already exists' });
     const totalQ = sections.reduce((s, sec) => s + sec.numberOfQuestions, 0) || toNum(req.body?.totalQuestions);
     const doc = await MockExam.create({
       tenantId,
@@ -510,7 +520,7 @@ const listExamsForStudent = async (req, res, next) => {
     const assigns = await MockExamBatchAssign.find({ tenantId, batchId, isdeleted: false, status: 'enabled' }, { examId: 1, students: 1 }).lean();
     if (!assigns.length) return res.status(200).json({ status: true, message: 'No exams assigned', data: [], count: 0 });
     const examIds = assigns.map((a) => a.examId);
-    const exams = await MockExam.find({ tenantId, examId: { $in: examIds }, isdeleted: false, status: { $ne: 'draft' } }, { password: 0 })
+    const exams = await MockExam.find({ tenantId, examId: { $in: examIds }, isdeleted: false, status: { $ne: ['draft', 'disabled'] } }, { password: 0 })
       .sort({ startTime: 1 })
       .lean();
     let attemptedIds = new Set();
@@ -563,12 +573,14 @@ const duplicateExam = async (req, res, next) => {
     const refExamId = safeTrim(req.body?.refExamId);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
     if (!refExamId) return res.status(400).json({ status: false, message: 'refExamId is required' });
-    const examCode = safeTrim(req.body?.examCode);
     const examName = safeTrim(req.body?.examName);
     const password = safeTrim(req.body?.password);
-    if (!examCode) return res.status(400).json({ status: false, message: 'examCode is required' });
     if (!examName) return res.status(400).json({ status: false, message: 'examName is required' });
     if (!password) return res.status(400).json({ status: false, message: 'password is required' });
+    let examCode = safeTrim(req.body?.examCode);
+    if (!examCode) {
+      examCode = await generateExamCode(tenantId);
+    }
     const duration = toNum(req.body?.duration) || 180;
     const startTime = req.body?.startTime ? toNum(req.body.startTime) : null;
     const endTime = req.body?.endTime ? toNum(req.body.endTime) : null;
@@ -587,10 +599,12 @@ const duplicateExam = async (req, res, next) => {
       await session.abortTransaction();
       return res.status(404).json({ status: false, message: `Source exam not found: ${refExamId}` });
     }
-    const dupCheck = await MockExam.findOne({ tenantId, examCode, isdeleted: false }, { examId: 1 }).session(session).lean();
-    if (dupCheck) {
-      await session.abortTransaction();
-      return res.status(409).json({ status: false, message: 'Exam with this examCode already exists' });
+    if (req.body?.examCode) {
+      const dupCheck = await MockExam.findOne({ tenantId, examCode, isdeleted: false }, { examId: 1 }).session(session).lean();
+      if (dupCheck) {
+        await session.abortTransaction();
+        return res.status(409).json({ status: false, message: 'Exam with this examCode already exists' });
+      }
     }
     const sourceSections = sourceExam.sections || [];
     const sections = sourceSections.map((s, idx) => ({
@@ -1080,6 +1094,48 @@ const bulkUploadHistorical = async (req, res, next) => {
   }
 };
 
+const getNextExamCode = async (req, res, next) => {
+  try {
+    const tenantId = pickTid(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+    const examCode = await generateExamCode(tenantId);
+    return res.status(200).json({ status: true, examCode });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const disableExam = async (req, res, next) => {
+  try {
+    const tenantId = pickTid(req);
+    const examId = safeTrim(req.body?.examId);
+    const userId = pickUid(req);
+    if (!tenantId || !examId) return res.status(400).json({ status: false, message: 'tenantId and examId are required' });
+    const doc = await MockExam.findOneAndUpdate({ tenantId, examId, isdeleted: false, status: { $ne: 'disabled' } }, { $set: { previousStatus: null } }, { new: false });
+    if (!doc) return res.status(404).json({ status: false, message: 'Exam not found or already disabled' });
+    const updated = await MockExam.findOneAndUpdate({ tenantId, examId, isdeleted: false }, { $set: { status: 'disabled', previousStatus: doc.status, updatedBy: userId || null } }, { new: true }).lean();
+    return res.status(200).json({ status: true, message: 'Exam disabled successfully', data: { examId, status: 'disabled', previousStatus: doc.status } });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const enableExam = async (req, res, next) => {
+  try {
+    const tenantId = pickTid(req);
+    const examId = safeTrim(req.body?.examId);
+    const userId = pickUid(req);
+    if (!tenantId || !examId) return res.status(400).json({ status: false, message: 'tenantId and examId are required' });
+    const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false, status: 'disabled' }).lean();
+    if (!exam) return res.status(404).json({ status: false, message: 'Exam not found or not disabled' });
+    const restoreStatus = safeTrim(exam.previousStatus) || 'published';
+    const doc = await MockExam.findOneAndUpdate({ tenantId, examId, isdeleted: false }, { $set: { status: restoreStatus, previousStatus: null, updatedBy: userId || null } }, { new: true }).lean();
+    return res.status(200).json({ status: true, message: `Exam enabled as ${restoreStatus}`, data: { examId, status: restoreStatus } });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   createExam,
   updateExam,
@@ -1094,5 +1150,8 @@ export default {
   addGrace,
   removeGrace,
   reevaluate,
-  bulkUploadHistorical
+  bulkUploadHistorical,
+  getNextExamCode,
+  disableExam,
+  enableExam
 };

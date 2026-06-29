@@ -1763,6 +1763,58 @@ const getBatchSubjectStats = async (req, res, next) => {
   }
 };
 
+const getParticipantReport = async (req, res, next) => {
+  try {
+    const tenantId = pickTid(req);
+    const examId = safeTrim(req.body?.examId);
+    if (!tenantId || !examId) return res.status(400).json({ status: false, message: 'tenantId and examId are required' });
+    const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }, { sections: 1, examName: 1, totalMarks: 1 }).lean();
+    if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
+    const results = await MockExamResult.find({ tenantId, examId, isdeleted: false }, { admissionNo: 1, studentId: 1, obtainedMarks: 1, totalMarks: 1, rank: 1, sectionResults: 1 }).lean();
+    if (!results.length) return res.status(200).json({ status: true, data: [], sections: [], examName: exam.examName });
+    const admissionNos = results.map((r) => r.admissionNo).filter(Boolean);
+    const profiles = await StudentProfile.find({ tenantId, admissionNo: { $in: admissionNos }, isdeleted: false }, { admissionNo: 1, 'student.name': 1 }).lean();
+    const profileMap = new Map(profiles.map((p) => [p.admissionNo, p.student?.name || '']));
+    const sectionMap = new Map((exam.sections || []).map((s) => [safeTrim(s.sectionId), safeTrim(s.sectionName)]));
+    const data = results.map((r) => {
+      const pct = r.totalMarks > 0 ? round2((r.obtainedMarks / r.totalMarks) * 100) : 0;
+      const sectionData = {};
+      for (const sec of r.sectionResults || []) {
+        const sid = safeTrim(sec.sectionId);
+        const sname = sectionMap.get(sid) || sid;
+        sectionData[sname] = {
+          obtainedMarks: sec.obtainedMarks || 0,
+          totalMarks: sec.totalMarks || 0,
+          correctCount: sec.correctCount || 0,
+          wrongCount: sec.wrongCount || 0,
+          skippedCount: sec.skippedCount || 0
+        };
+      }
+      return {
+        admissionNo: r.admissionNo,
+        studentName: profileMap.get(r.admissionNo) || '—',
+        obtainedMarks: r.obtainedMarks || 0,
+        totalMarks: r.totalMarks || 0,
+        percentage: pct,
+        rank: r.rank || null,
+        sections: sectionData
+      };
+    });
+    data.sort((a, b) => (a.rank || 999) - (b.rank || 999));
+    const sections = Array.from(sectionMap.values());
+    return res.status(200).json({
+      status: true,
+      examName: exam.examName,
+      totalMarks: exam.totalMarks,
+      sections,
+      data,
+      count: data.length
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export { evalAnswer };
 
 export default {
@@ -1782,5 +1834,6 @@ export default {
   getExamQuestionWiseReport,
   getExamParticipantsReport,
   getStudentResultAdmin,
-  getBatchSubjectStats
+  getBatchSubjectStats,
+  getParticipantReport
 };
