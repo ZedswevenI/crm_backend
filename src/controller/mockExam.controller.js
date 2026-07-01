@@ -520,7 +520,8 @@ const listExamsForStudent = async (req, res, next) => {
     const assigns = await MockExamBatchAssign.find({ tenantId, batchId, isdeleted: false, status: 'enabled' }, { examId: 1, students: 1 }).lean();
     if (!assigns.length) return res.status(200).json({ status: true, message: 'No exams assigned', data: [], count: 0 });
     const examIds = assigns.map((a) => a.examId);
-    const exams = await MockExam.find({ tenantId, examId: { $in: examIds }, isdeleted: false, status: { $ne: ['draft', 'disabled'] } }, { password: 0 })
+    console.log({ tenantId, examId: { $in: examIds }, isdeleted: false, status: { $ne: ['draft', 'disabled'] } });
+    const exams = await MockExam.find({ tenantId, examId: { $in: examIds }, isdeleted: false, status: { $nin: ['draft', 'disabled'] } }, { password: 0 })
       .sort({ startTime: 1 })
       .lean();
     let attemptedIds = new Set();
