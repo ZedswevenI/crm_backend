@@ -555,6 +555,45 @@ const getQuestionsByCode = async (req, res, next) => {
   }
 };
 
+const getExamQuestionsWithAnswers = async (req, res, next) => {
+  try {
+    const tenantId = safeTrim(req.body?.tenantId || req.body?.entiId);
+    const examId = safeTrim(req.body?.examId);
+    const examCode = safeTrim(req.body?.examCode);
+
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+    if (!examId && !examCode) return res.status(400).json({ status: false, message: 'examId or examCode is required' });
+
+    // Resolve exam
+    const examQuery = { tenantId, isdeleted: false };
+    if (examId) examQuery.examId = examId;
+    else examQuery.examCode = examCode;
+
+    const exam = await MockExam.findOne(examQuery, { examId: 1, examName: 1, examCode: 1, sections: 1, totalMarks: 1, totalQuestions: 1, duration: 1 }).lean();
+    if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
+
+    // Fetch all questions with answers
+    const questions = await MockExamQns.find({ tenantId, examId: exam.examId, isdeleted: false }, { __v: 0 }).sort({ sortOrder: 1 }).lean();
+
+    return res.status(200).json({
+      status: true,
+      data: {
+        examId: exam.examId,
+        examCode: exam.examCode,
+        examName: exam.examName,
+        totalQuestions: exam.totalQuestions,
+        totalMarks: exam.totalMarks,
+        duration: exam.duration,
+        sections: exam.sections || [],
+        questions,
+        count: questions.length
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 // ─── VIEW SINGLE QUESTION (admin) ─────────────────────────────────────────────
 const viewQuestion = async (req, res, next) => {
   try {
@@ -1198,5 +1237,6 @@ export default {
   unmapQuestionFromExam,
   bulkMapQuestionsToExam,
   bulkUploadAnswers,
-  previewNextQuestionNo
+  previewNextQuestionNo,
+  getExamQuestionsWithAnswers
 };
