@@ -46,6 +46,7 @@ routes.post('/questions/delete', validatetoken, mockExamQnsController.deleteQues
 routes.post('/questions/bulk-delete-section', validatetoken, mockExamQnsController.bulkDeleteBySection);
 routes.post('/questions/list-by-section', validatetoken, mockExamQnsController.listQuestionsBySection);
 routes.post('/questions/get-questions', mockExamQnsController.getQuestionsByCode);
+routes.post('/questions/get-questions/absent', mockExamQnsController.getExamQuestionsWithAnswers);
 routes.post('/questions/getallquestions', mockExamQnsController.getQuestionsByExam);
 routes.post('/questions/view', validatetoken, mockExamQnsController.viewQuestion);
 routes.post('/questions/sort-order', validatetoken, mockExamQnsController.updateSortOrder);
