@@ -555,26 +555,105 @@ const getQuestionsByCode = async (req, res, next) => {
   }
 };
 
+// const getExamQuestionsWithAnswers = async (req, res, next) => {
+//   try {
+//     const tenantId = safeTrim(req.body?.tenantId || req.body?.entiId);
+//     const examId = safeTrim(req.body?.examId);
+//     const examCode = safeTrim(req.body?.examCode);
+//     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+//     if (!examId && !examCode) return res.status(400).json({ status: false, message: 'examId or examCode is required' });
+//     const examQuery = { tenantId, isdeleted: false };
+//     if (examId) examQuery.examId = examId;
+//     else examQuery.examCode = examCode;
+//     const exam = await MockExam.findOne(examQuery, { examId: 1, examName: 1, examCode: 1, sections: 1, totalMarks: 1, totalQuestions: 1, duration: 1 }).lean();
+//     if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
+//     const questions = await MockExamQns.find({ tenantId, examId: exam.examId, isdeleted: false }, { __v: 0 }).sort({ sortOrder: 1 }).lean();
+//     return res.status(200).json({
+//       status: true,
+//       data: {
+//         examId: exam.examId,
+//         examCode: exam.examCode,
+//         examName: exam.examName,
+//         totalQuestions: exam.totalQuestions,
+//         totalMarks: exam.totalMarks,
+//         duration: exam.duration,
+//         sections: exam.sections || [],
+//         questions,
+//         count: questions.length
+//       }
+//     });
+//   } catch (err) {
+//     return next(err);
+//   }
+// };
+
+// ─── VIEW SINGLE QUESTION (admin) ─────────────────────────────────────────────
+
 const getExamQuestionsWithAnswers = async (req, res, next) => {
   try {
     const tenantId = safeTrim(req.body?.tenantId || req.body?.entiId);
     const examId = safeTrim(req.body?.examId);
     const examCode = safeTrim(req.body?.examCode);
-
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
     if (!examId && !examCode) return res.status(400).json({ status: false, message: 'examId or examCode is required' });
-
-    // Resolve exam
     const examQuery = { tenantId, isdeleted: false };
     if (examId) examQuery.examId = examId;
     else examQuery.examCode = examCode;
-
-    const exam = await MockExam.findOne(examQuery, { examId: 1, examName: 1, examCode: 1, sections: 1, totalMarks: 1, totalQuestions: 1, duration: 1 }).lean();
+    const exam = await MockExam.findOne(examQuery, {
+      examId: 1,
+      examName: 1,
+      examCode: 1,
+      sections: 1,
+      totalMarks: 1,
+      totalQuestions: 1,
+      duration: 1,
+      startTime: 1,
+      endTime: 1,
+      classNo: 1
+    }).lean();
     if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
-
-    // Fetch all questions with answers
-    const questions = await MockExamQns.find({ tenantId, examId: exam.examId, isdeleted: false }, { __v: 0 }).sort({ sortOrder: 1 }).lean();
-
+    const questions = await MockExamQns.find({ tenantId, examId: exam.examId, isdeleted: false }, { __v: 0 }).sort({ sectionId: 1, sortOrder: 1 }).populate('subjectId', 'subjectName subjectCode _id').lean();
+    const passageIds = [...new Set(questions.filter((q) => q.passageId).map((q) => String(q.passageId)))];
+    let passageMap = new Map();
+    if (passageIds.length) {
+      const passages = await ExamPassage.find({ _id: { $in: passageIds }, isdeleted: false }, { passageHtml: 1, title: 1, language: 1 }).lean();
+      passageMap = new Map(passages.map((p) => [String(p._id), p]));
+    }
+    const enriched = questions.map((q) => {
+      const passageData = q.passageId ? passageMap.get(String(q.passageId)) || null : null;
+      return {
+        ...q,
+        passageData: passageData
+          ? {
+              title: passageData.title || null,
+              passageHtml: passageData.passageHtml || null,
+              language: passageData.language || null
+            }
+          : q.enablePassage && q.passageHtml
+            ? { title: null, passageHtml: q.passageHtml, language: null }
+            : null,
+        solutionHtml: q.enableSolution ? q.solutionHtml || null : null,
+        instructionHtml: q.enableInstruction ? q.instructionHtml || null : null
+      };
+    });
+    const secMap = new Map((exam.sections || []).map((s) => [safeTrim(s.sectionId), s]));
+    const grouped = {};
+    for (const q of enriched) {
+      const sid = safeTrim(q.sectionId);
+      if (!grouped[sid]) {
+        const sec = secMap.get(sid) || {};
+        grouped[sid] = {
+          sectionId: sid,
+          sectionCode: sec.sectionCode || sid,
+          sectionName: sec.sectionName || sid,
+          subjectId: sec.subjectId || null,
+          sortOrder: sec.sortOrder || 0,
+          questions: []
+        };
+      }
+      grouped[sid].questions.push(q);
+    }
+    const sections = Object.values(grouped).sort((a, b) => a.sortOrder - b.sortOrder);
     return res.status(200).json({
       status: true,
       data: {
@@ -584,9 +663,13 @@ const getExamQuestionsWithAnswers = async (req, res, next) => {
         totalQuestions: exam.totalQuestions,
         totalMarks: exam.totalMarks,
         duration: exam.duration,
+        startTime: exam.startTime || null,
+        endTime: exam.endTime || null,
+        classNo: exam.classNo || null,
         sections: exam.sections || [],
-        questions,
-        count: questions.length
+        groupedSections: sections,
+        questions: enriched,
+        count: enriched.length
       }
     });
   } catch (err) {
@@ -594,7 +677,6 @@ const getExamQuestionsWithAnswers = async (req, res, next) => {
   }
 };
 
-// ─── VIEW SINGLE QUESTION (admin) ─────────────────────────────────────────────
 const viewQuestion = async (req, res, next) => {
   try {
     const recId = safeTrim(req.body?.recId);
