@@ -562,7 +562,6 @@ const _runSyncAssignment = async (tenantId, studentId, academicYear) => {
 const _runSyncMock = async (tenantId, studentId, academicYear) => {
   const profile = await getProfile(tenantId, studentId);
   if (!profile) return;
-
   const results = await MockExamResult.find({ tenantId, admissionNo: profile.admissionNo, isdeleted: false }).lean();
   if (!results.length) return;
   const examIds = [...new Set(results.map((r) => r.examId))];
@@ -573,13 +572,9 @@ const _runSyncMock = async (tenantId, studentId, academicYear) => {
   const uniqSubs = [...new Set(allSubIds)].filter((id) => mongoose.Types.ObjectId.isValid(id));
   const subDocs = await Subject.find({ _id: { $in: uniqSubs } }, { subjectName: 1 }).lean();
   const subNames = new Map(subDocs.map((s) => [s._id.toString(), s.subjectName]));
-
-  // A student's mock exam history can span multiple years — only sync exams that actually
-  // resolve to the requested academicYear, using each result's own batchId/classNo.
   const resultBatchIds = [...new Set(results.map((r) => r.batchId).filter(Boolean))];
   const resultBatches = resultBatchIds.length ? await Batch.find({ tenantId, batchId: { $in: resultBatchIds }, isdeleted: false }, { batchId: 1, academicYear: 1 }).lean() : [];
   const batchYearMap = new Map(resultBatches.map((b) => [b.batchId, b.academicYear]));
-
   for (const r of results) {
     const viaBatch = r.batchId ? batchYearMap.get(r.batchId) : undefined;
     const resolvedYear = viaBatch || resolveAcademicYear(profile, examClassNo.get(r.examId));
@@ -600,6 +595,7 @@ const _runSyncMock = async (tenantId, studentId, academicYear) => {
           totalMarks: r.totalMarks || 0,
           percentage: pct,
           rank: r.rank || null,
+          subjectId: null,
           sectionResults: (r.sectionResults || []).map((s) => ({
             sectionId: s.sectionId || null,
             subjectId: s.subjectId?.toString() || null,
@@ -621,69 +617,25 @@ const _runSyncMock = async (tenantId, studentId, academicYear) => {
   }
 };
 
-// const _runSyncSchool = async (tenantId, studentId, academicYear) => {
-//   const profile = await getProfile(tenantId, studentId);
-//   if (!profile) return;
-//   const results = await SchoolExamResult.find({ tenantId, studentId, isdeleted: false }).lean();
-//   if (!results.length) return;
-//   const examIds = [...new Set(results.map((r) => r.examId))];
-//   const examDocs = await SchoolExam.find({ examLogId: { $in: examIds }, tenantId }, { examLogId: 1, examName: 1, examDate: 1 }).lean();
-//   const examMap = new Map(examDocs.map((e) => [e.examLogId, e]));
-//   for (const r of results) {
-//     const exam = examMap.get(r.examId) || {};
-//     const pct = r.totalMaxMarks > 0 ? round2((r.totalObtainedMarks / r.totalMaxMarks) * 100) : null;
-//     await upsertPerf(
-//       { tenantId, studentId, examId: r.examId, performanceType: 'SCHOOL_EXAM' },
-//       {
-//         admissionNo: profile.admissionNo,
-//         batchId: profile.batchId,
-//         batchCode: profile.batchCode,
-//         programId: profile.programId,
-//         centerId: profile.centerId,
-//         academicYear,
-//         examName: exam.examName || null,
-//         examDate: exam.examDate || null,
-//         obtainedMarks: r.totalObtainedMarks || 0,
-//         totalMarks: r.totalMaxMarks || 0,
-//         percentage: pct,
-//         subjects: (r.subjects || []).map((s) => ({
-//           subjectName: s.subjectName || null,
-//           maxMarks: s.maxMarks || 0,
-//           obtainedMarks: s.obtainedMarks || 0,
-//           percentage: s.maxMarks > 0 ? round2((s.obtainedMarks / s.maxMarks) * 100) : null,
-//           grade: s.grade || null
-//         })),
-//         syncedAt: Date.now()
-//       },
-//       { tenantId, studentId, examId: r.examId, performanceType: 'SCHOOL_EXAM', academicYear }
-//     );
-//   }
-// };
-
 const _runSyncSchool = async (tenantId, studentId, academicYear) => {
   const profile = await getProfile(tenantId, studentId);
   if (!profile) return;
-
   const examLogs = await SchoolExamLog.find({
     tenantId,
     academicYear,
     isdeleted: false,
     'results.studentId': studentId
   }).lean();
-
   if (!examLogs.length) return;
-
   for (const examLog of examLogs) {
     const studentResult = (examLog.results || []).find((r) => r.studentId === studentId);
     if (!studentResult) continue;
-
     const subjectsWithMarks = (studentResult.subjects || []).filter((s) => s.marks != null && !s.isAbsent);
     const totalObtained = subjectsWithMarks.reduce((s, sub) => s + (toNum(sub.marks) || 0), 0);
     const hasMaxMarks = (studentResult.subjects || []).some((s) => s.maxMarks != null);
     const totalMaxFromSubjects = hasMaxMarks ? subjectsWithMarks.reduce((s, sub) => s + (toNum(sub.maxMarks) || 0), 0) : null;
     const totalMax = totalMaxFromSubjects || toNum(studentResult.totalMarks) || null;
     const pct = totalMax > 0 ? round2((totalObtained / totalMax) * 100) : null;
-
     try {
       await upsertPerf(
         { tenantId, studentId, examId: examLog.examLogId, academicYear, performanceType: 'SCHOOL_EXAM' },
@@ -699,6 +651,7 @@ const _runSyncSchool = async (tenantId, studentId, academicYear) => {
           obtainedMarks: totalObtained,
           totalMarks: totalMax,
           percentage: pct,
+          subjectId: null,
           subjects: (studentResult.subjects || []).map((s) => {
             const sMax = toNum(s.maxMarks);
             const sObtained = s.isAbsent ? 0 : toNum(s.marks) || 0;
