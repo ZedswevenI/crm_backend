@@ -30,6 +30,7 @@ import FeedbackResponse from '../models/feedbackResponse.model.js';
 import StudentAlumni from '../models/studentAlumni.model.js';
 import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
 import AdmZip from 'adm-zip';
+import StudentPerformance from '../models/studentperformance.model.js';
 
 const QUESTION_BUCKET = process.env.AWS_S3_QUESTION_BUCKET;
 const REGION = process.env.AWS_REGION || 'ap-south-1';
@@ -2076,6 +2077,109 @@ const getAlumniData = async (req, res, next) => {
   }
 };
 
+const getStudentPerformance = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const identifier = safeTrim(req.body?.studentId || req.body?.studentNo);
+    const academicYear = safeTrim(req.body?.academicYear);
+    if (!tenantId || !identifier || !academicYear) {
+      return res.status(400).json({ status: false, message: 'tenantId, studentId and academicYear are required' });
+    }
+    const student = await StudentProfile.findOne(
+      {
+        tenantId,
+        isdeleted: false,
+        status: 'ACTIVE',
+        $or: [{ studentId: identifier }, { admissionNo: identifier }, { registrationNumber: identifier }]
+      },
+      { studentId: 1, admissionNo: 1, 'student.name': 1, batchCode: 1, batchId: 1 }
+    ).lean();
+    if (!student) return res.status(404).json({ status: false, message: 'Student not found' });
+
+    const records = await StudentPerformance.find({
+      tenantId,
+      studentId: student.studentId,
+      academicYear,
+      isdeleted: false
+    }).lean();
+
+    const summary = records.find((r) => r.performanceType === 'SUMMARY') || null;
+    const assignments = records
+      .filter((r) => r.performanceType === 'ASSIGNMENT')
+      .map((r) => ({
+        subjectId: r.subjectId,
+        subjectName: r.subjectName,
+        cgpa: r.cgpa,
+        attempts: r.attempts,
+        obtainedMarks: r.obtainedMarks,
+        totalMarks: r.totalMarks,
+        percentage: r.percentage
+      }));
+    const mockExams = records
+      .filter((r) => r.performanceType === 'MOCK_EXAM')
+      .sort((a, b) => (b.syncedAt || 0) - (a.syncedAt || 0))
+      .map((r) => ({
+        examId: r.examId,
+        examName: r.examName,
+        obtainedMarks: r.obtainedMarks,
+        totalMarks: r.totalMarks,
+        percentage: r.percentage,
+        rank: r.rank,
+        sectionResults: r.sectionResults || []
+      }));
+    const schoolExams = records
+      .filter((r) => r.performanceType === 'SCHOOL_EXAM')
+      .sort((a, b) => (b.examDate || 0) - (a.examDate || 0))
+      .map((r) => ({
+        examId: r.examId,
+        examName: r.examName,
+        examDate: r.examDate,
+        obtainedMarks: r.obtainedMarks,
+        totalMarks: r.totalMarks,
+        percentage: r.percentage,
+        subjects: r.subjects || []
+      }));
+
+    return res.status(200).json({
+      status: true,
+      data: {
+        studentId: student.studentId,
+        admissionNo: student.admissionNo,
+        studentName: student.student?.name || null,
+        academicYear,
+        summary: summary
+          ? {
+              assignmentAvgCgpa: summary.summary?.assignmentAvgCgpa ?? null,
+              assignmentAvgPct: summary.summary?.assignmentAvgPct ?? null,
+              assignmentSubjectCount: summary.summary?.assignmentSubjectCount ?? 0,
+              mockAvgPct: summary.summary?.mockAvgPct ?? null,
+              mockBestPct: summary.summary?.mockBestPct ?? null,
+              mockBestRank: summary.summary?.mockBestRank ?? null,
+              mockExamCount: summary.summary?.mockExamCount ?? 0,
+              schoolAvgPct: summary.summary?.schoolAvgPct ?? null,
+              schoolBestPct: summary.summary?.schoolBestPct ?? null,
+              schoolExamCount: summary.summary?.schoolExamCount ?? 0,
+              combinedScore: summary.summary?.combinedScore ?? null,
+              batchRank: summary.summary?.batchRank ?? null
+            }
+          : null,
+        staffRemarks: (summary?.staffFeedback || []).map((f) => ({
+          feedbackId: f.feedbackId,
+          staffId: f.staffId,
+          staffName: f.staffName,
+          remarks: f.remarks,
+          addedAt: f.addedAt
+        })),
+        assignments,
+        mockExams,
+        schoolExams
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   listStudents,
   viewProfile,
@@ -2102,5 +2206,6 @@ export default {
   importBoardExamMarks,
   importAlumniData,
   bulkUploadZipPhotos,
-  getAlumniData
+  getAlumniData,
+  getStudentPerformance
 };

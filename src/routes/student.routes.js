@@ -27,6 +27,7 @@ routes.post('/remark/add', studentCtrl.addStudentRemark);
 routes.post('/remark/list', studentCtrl.getStudentRemarks);
 routes.post('/basic-details/update', studentCtrl.updateBasicDetails);
 routes.post('/tablet-access/toggle', studentCtrl.toggleTabletAccess);
+routes.post('/my-performance', studentCtrl.getStudentPerformance);
 // routes.post('/school-exam/marks/add', studentCtrl.addSchoolExamMarks);
 routes.post('/bulk-update', studentCtrl.bulkUpdateStudents);
 routes.post('/bulk-image-upload', upload.array('images', 100), studentCtrl.bulkUploadPhotos);
