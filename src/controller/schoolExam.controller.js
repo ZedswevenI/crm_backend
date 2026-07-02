@@ -93,6 +93,7 @@ const uploadExamMarks = async (req, res, next) => {
             return {
               subjectName: safeTrim(s.subjectName),
               marks: s.isAbsent ? null : s.marks != null ? toNum(s.marks) : null,
+              maxMarks: s.maxMarks != null ? toNum(s.maxMarks) : null,
               isAbsent: !!s.isAbsent
             };
           })

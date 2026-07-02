@@ -876,14 +876,129 @@ const getSectionAnalytics = async (req, res, next) => {
   }
 };
 
+// const getMyResultWithAnswers = async (req, res, next) => {
+//   try {
+//     const tenantId = pickTid(req);
+//     const admissionNo = safeTrim(req.body?.admissionNo);
+//     const examId = safeTrim(req.body?.examId);
+//     if (!tenantId || !admissionNo || !examId) return res.status(400).json({ status: false, message: 'tenantId, admissionNo, examId are required' });
+//     const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }, { status: 1, autoPublishAt: 1, resultPublishedAt: 1 }).lean();
+//     if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
+//     const now = Date.now();
+//     const manuallyPublished = !!exam.resultPublishedAt;
+//     const autoPublishPassed = exam.autoPublishAt && now >= exam.autoPublishAt;
+//     const resultReady = exam.status === 'result_published' && (manuallyPublished || autoPublishPassed);
+//     if (!resultReady) {
+//       return res.status(403).json({
+//         status: false,
+//         message: 'Result not published yet',
+//         autoPublishAt: exam.autoPublishAt || null
+//       });
+//     }
+//     const result = await MockExamResult.findOne({ tenantId, examId, admissionNo, isdeleted: false }).populate('sectionResults.subjectId', 'subjectName').lean();
+//     if (!result) return res.status(404).json({ status: false, message: 'Result not found for this student' });
+//     const studentProfile = await StudentProfile.findOne(
+//       {
+//         tenantId,
+//         $or: [{ studentId: result.studentId }, { admissionNo: result.admissionNo }]
+//       },
+//       { 'student.name': 1 }
+//     ).lean();
+//     result.studentName = studentProfile?.student?.name || 'Unknown';
+//     if (!result.isResultVisible) return res.status(403).json({ status: false, message: 'Result is not visible yet' });
+//     const questions = await MockExamQns.find(
+//       { tenantId, examId, isdeleted: false },
+//       {
+//         questionId: 1,
+//         sectionId: 1,
+//         questionType: 1,
+//         difficulty: 1,
+//         questionHtml: 1,
+//         questionOptions: 1,
+//         correctAnswer: 1,
+//         solutionHtml: 1,
+//         enableSolution: 1,
+//         positiveMarks: 1,
+//         negativeMarks: 1,
+//         hasPartialMarking: 1,
+//         numericMin: 1,
+//         numericMax: 1,
+//         passageId: 1,
+//         passageHtml: 1,
+//         topicId: 1,
+//         subTopicId: 1,
+//         tags: 1,
+//         sortOrder: 1,
+//         leftColumn: 1,
+//         rightColumn: 1
+//       }
+//     )
+//       .sort({ sectionId: 1, sortOrder: 1 })
+//       .populate('passageId', 'title passageHtml')
+//       .lean();
+//     const qMap = new Map(questions.map((q) => [safeTrim(q.questionId), q]));
+//     const answers = (result.answers || []).map((a) => {
+//       const q = qMap.get(safeTrim(a.questionId)) || null;
+//       return {
+//         questionId: a.questionId,
+//         sectionId: a.sectionId,
+//         answerRaw: a.answerRaw,
+//         correctAnswer: q ? (buildCorrectAnswer(q) ?? q.correctAnswer ?? null) : null,
+//         isCorrect: a.isCorrect,
+//         isSkipped: a.isSkipped,
+//         marksAwarded: a.marksAwarded,
+//         timeTaken: a.timeTaken || 0,
+//         positiveMarks: a.positiveMarks,
+//         negativeMarks: a.negativeMarks,
+//         hasPartialMarking: a.hasPartialMarking,
+//         questionType: q?.questionType || null,
+//         difficulty: q?.difficulty || null,
+//         questionHtml: q?.questionHtml || null,
+//         questionOptions: q?.questionOptions || [],
+//         solutionHtml: q?.enableSolution || !!q?.solutionHtml ? q?.solutionHtml || null : null,
+//         numericMin: q?.numericMin ?? null,
+//         numericMax: q?.numericMax ?? null,
+//         topicId: q?.topicId || null,
+//         subTopicId: q?.subTopicId || null,
+//         leftColumn: q?.leftColumn || [],
+//         rightColumn: q?.rightColumn || [],
+//         tags: q?.tags || [],
+//         sortOrder: q?.sortOrder ?? null,
+//         passage: q?.passageId ? { title: q.passageId?.title || null, passageHtml: q.passageId?.passageHtml || null } : q?.passageHtml ? { title: null, passageHtml: q.passageHtml } : null
+//       };
+//     });
+//     return res.status(200).json({
+//       status: true,
+//       message: 'Result with answers loaded',
+//       data: {
+//         examId,
+//         admissionNo,
+//         obtainedMarks: result.obtainedMarks,
+//         totalMarks: result.totalMarks,
+//         rank: result.rank,
+//         percentile: result.percentile,
+//         timeTaken: result.timeTaken,
+//         isLate: result.isLate,
+//         sectionResults: result.sectionResults,
+//         graceLogs: result.graceLogs,
+//         answers
+//       }
+//     });
+//   } catch (err) {
+//     return next(err);
+//   }
+// };
+
 const getMyResultWithAnswers = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     const admissionNo = safeTrim(req.body?.admissionNo);
     const examId = safeTrim(req.body?.examId);
     if (!tenantId || !admissionNo || !examId) return res.status(400).json({ status: false, message: 'tenantId, admissionNo, examId are required' });
-    const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }, { status: 1, autoPublishAt: 1, resultPublishedAt: 1 }).lean();
+
+    const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }, { status: 1, autoPublishAt: 1, resultPublishedAt: 1, examName: 1, examCode: 1, totalMarks: 1, totalQuestions: 1, sections: 1 }).lean();
     if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
+
     const now = Date.now();
     const manuallyPublished = !!exam.resultPublishedAt;
     const autoPublishPassed = exam.autoPublishAt && now >= exam.autoPublishAt;
@@ -895,8 +1010,12 @@ const getMyResultWithAnswers = async (req, res, next) => {
         autoPublishAt: exam.autoPublishAt || null
       });
     }
+
     const result = await MockExamResult.findOne({ tenantId, examId, admissionNo, isdeleted: false }).populate('sectionResults.subjectId', 'subjectName').lean();
     if (!result) return res.status(404).json({ status: false, message: 'Result not found for this student' });
+    if (!result.isResultVisible) return res.status(403).json({ status: false, message: 'Result is not visible yet' });
+
+    // Fetch student name
     const studentProfile = await StudentProfile.findOne(
       {
         tenantId,
@@ -904,12 +1023,14 @@ const getMyResultWithAnswers = async (req, res, next) => {
       },
       { 'student.name': 1 }
     ).lean();
-    result.studentName = studentProfile?.student?.name || 'Unknown';
-    if (!result.isResultVisible) return res.status(403).json({ status: false, message: 'Result is not visible yet' });
+    const studentName = studentProfile?.student?.name || 'Unknown';
+
+    // Fetch all questions with all required fields
     const questions = await MockExamQns.find(
       { tenantId, examId, isdeleted: false },
       {
         questionId: 1,
+        questionNo: 1,
         sectionId: 1,
         questionType: 1,
         difficulty: 1,
@@ -918,29 +1039,47 @@ const getMyResultWithAnswers = async (req, res, next) => {
         correctAnswer: 1,
         solutionHtml: 1,
         enableSolution: 1,
+        instructionHtml: 1,
+        enableInstruction: 1,
+        passageHtml: 1,
+        passageId: 1,
+        enablePassage: 1,
         positiveMarks: 1,
         negativeMarks: 1,
         hasPartialMarking: 1,
         numericMin: 1,
         numericMax: 1,
-        passageId: 1,
-        passageHtml: 1,
+        leftColumn: 1,
+        rightColumn: 1,
         topicId: 1,
         subTopicId: 1,
         tags: 1,
-        sortOrder: 1,
-        leftColumn: 1,
-        rightColumn: 1
+        sortOrder: 1
       }
     )
       .sort({ sectionId: 1, sortOrder: 1 })
-      .populate('passageId', 'title passageHtml')
+      .populate('passageId', 'title passageHtml language')
       .lean();
+
     const qMap = new Map(questions.map((q) => [safeTrim(q.questionId), q]));
+
     const answers = (result.answers || []).map((a) => {
       const q = qMap.get(safeTrim(a.questionId)) || null;
+
+      // Resolve passage
+      const passage = q?.passageId
+        ? {
+            title: q.passageId?.title || null,
+            passageHtml: q.passageId?.passageHtml || null,
+            language: q.passageId?.language || null
+          }
+        : q?.enablePassage && q?.passageHtml
+          ? { title: null, passageHtml: q.passageHtml, language: null }
+          : null;
+
       return {
         questionId: a.questionId,
+        questionNo: q?.questionNo || null,
         sectionId: a.sectionId,
         answerRaw: a.answerRaw,
         correctAnswer: q ? (buildCorrectAnswer(q) ?? q.correctAnswer ?? null) : null,
@@ -951,36 +1090,66 @@ const getMyResultWithAnswers = async (req, res, next) => {
         positiveMarks: a.positiveMarks,
         negativeMarks: a.negativeMarks,
         hasPartialMarking: a.hasPartialMarking,
+        // Question details
         questionType: q?.questionType || null,
         difficulty: q?.difficulty || null,
         questionHtml: q?.questionHtml || null,
         questionOptions: q?.questionOptions || [],
-        solutionHtml: q?.enableSolution || !!q?.solutionHtml ? q?.solutionHtml || null : null,
+        // Solution — only if enabled
+        solutionHtml: q?.enableSolution ? q?.solutionHtml || null : null,
+        // Instruction — only if enabled
+        instructionHtml: q?.enableInstruction ? q?.instructionHtml || null : null,
+        // Passage
+        passage,
+        // Numeric
         numericMin: q?.numericMin ?? null,
         numericMax: q?.numericMax ?? null,
-        topicId: q?.topicId || null,
-        subTopicId: q?.subTopicId || null,
+        // Matrix
         leftColumn: q?.leftColumn || [],
         rightColumn: q?.rightColumn || [],
+        // Meta
+        topicId: q?.topicId || null,
+        subTopicId: q?.subTopicId || null,
         tags: q?.tags || [],
-        sortOrder: q?.sortOrder ?? null,
-        passage: q?.passageId ? { title: q.passageId?.title || null, passageHtml: q.passageId?.passageHtml || null } : q?.passageHtml ? { title: null, passageHtml: q.passageHtml } : null
+        sortOrder: q?.sortOrder ?? null
       };
     });
+
     return res.status(200).json({
       status: true,
       message: 'Result with answers loaded',
       data: {
         examId,
         admissionNo,
+        studentName,
         obtainedMarks: result.obtainedMarks,
         totalMarks: result.totalMarks,
+        totalQuestions: result.totalQuestions,
         rank: result.rank,
         percentile: result.percentile,
         timeTaken: result.timeTaken,
         isLate: result.isLate,
+        correctCount: result.correctCount ?? null,
+        wrongCount: result.wrongCount ?? null,
+        skippedCount: result.skippedCount ?? null,
+        partialCount: result.partialCount ?? null,
+        answeredCount: result.answeredCount ?? null,
+        status: result.status,
+        isResultVisible: result.isResultVisible,
         sectionResults: result.sectionResults,
-        graceLogs: result.graceLogs,
+        graceLogs: result.graceLogs || [],
+        publishHistory: result.publishHistory || [],
+        exam: {
+          examId: exam.examId,
+          examName: exam.examName,
+          examCode: exam.examCode,
+          totalMarks: exam.totalMarks,
+          totalQuestions: exam.totalQuestions,
+          sections: exam.sections || [],
+          status: exam.status,
+          resultPublishedAt: exam.resultPublishedAt || null,
+          autoPublishAt: exam.autoPublishAt || null
+        },
         answers
       }
     });

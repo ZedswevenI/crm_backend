@@ -100,8 +100,8 @@ const studentPerformanceSchema = new mongoose.Schema(
 
 studentPerformanceSchema.index({ tenantId: 1, studentId: 1, academicYear: 1, performanceType: 1 }, { unique: true, partialFilterExpression: { performanceType: 'SUMMARY', isdeleted: false }, name: 'uniq_perf_summary' });
 studentPerformanceSchema.index({ tenantId: 1, studentId: 1, academicYear: 1, subjectId: 1 }, { unique: true, partialFilterExpression: { performanceType: 'ASSIGNMENT', isdeleted: false }, name: 'uniq_perf_assignment' });
-studentPerformanceSchema.index({ tenantId: 1, studentId: 1, examId: 1 }, { unique: true, partialFilterExpression: { performanceType: 'MOCK_EXAM', isdeleted: false }, name: 'uniq_perf_mock' });
-studentPerformanceSchema.index({ tenantId: 1, studentId: 1, examId: 1 }, { unique: true, partialFilterExpression: { performanceType: 'SCHOOL_EXAM', isdeleted: false }, name: 'uniq_perf_school' });
+studentPerformanceSchema.index({ tenantId: 1, studentId: 1, examId: 1, academicYear: 1, performanceType: 1 }, { unique: true, partialFilterExpression: { performanceType: 'MOCK_EXAM', isdeleted: false }, name: 'uniq_perf_mock' });
+studentPerformanceSchema.index({ tenantId: 1, studentId: 1, examId: 1, academicYear: 1, performanceType: 1 }, { unique: true, partialFilterExpression: { performanceType: 'SCHOOL_EXAM', isdeleted: false }, name: 'uniq_perf_school' });
 studentPerformanceSchema.index({ tenantId: 1, batchId: 1, academicYear: 1, performanceType: 1, isdeleted: 1 });
 studentPerformanceSchema.index({ tenantId: 1, batchId: 1, academicYear: 1, 'summary.combinedScore': -1 });
 

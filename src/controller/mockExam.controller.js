@@ -1137,6 +1137,23 @@ const enableExam = async (req, res, next) => {
   }
 };
 
+const deleteimportExam = async (req, res, next) => {
+  try {
+    const tenantId = pickTid(req);
+    const examId = safeTrim(req.body?.examId);
+    const userId = pickUid(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    if (!examId) return res.status(400).json({ status: false, message: 'examId is required' });
+    const doc = await MockExam.findOneAndUpdate({ tenantId, examId, isdeleted: false }, { $set: { isdeleted: true, updatedBy: userId || null } }, { new: true }).lean();
+    if (!doc) return res.status(404).json({ status: false, message: 'Exam not found or already deleted' });
+    await MockExamResult.updateMany({ tenantId, examId, isdeleted: false }, { $set: { isdeleted: true, updatedBy: userId || null } });
+
+    return res.status(200).json({ status: true, message: 'Exam and results deleted successfully' });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   createExam,
   updateExam,
@@ -1154,5 +1171,6 @@ export default {
   bulkUploadHistorical,
   getNextExamCode,
   disableExam,
-  enableExam
+  enableExam,
+  deleteimportExam
 };

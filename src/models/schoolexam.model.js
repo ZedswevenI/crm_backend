@@ -5,6 +5,7 @@ const SubjectMarkSchema = new mongoose.Schema(
   {
     subjectName: { type: String, trim: true, default: null },
     marks: { type: Number, default: null },
+    maxMarks: { type: Number, default: null },
     isAbsent: { type: Boolean, default: false }
   },
   { _id: false }
