@@ -24,6 +24,7 @@ routes.post('/fcm/register', validatetoken, userCtrl.registerFcmToken);
 routes.post('/fcm/remove', validatetoken, userCtrl.removeFcmToken);
 routes.post('/fcm/register', validatetoken, userCtrl.registerFcmToken);
 routes.post('/fcm/remove', validatetoken, userCtrl.removeFcmToken);
+routes.post('/fcm/test', userCtrl.testFcmNotification);
 
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Teacher routes' }));
 

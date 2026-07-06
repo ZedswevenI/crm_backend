@@ -270,6 +270,11 @@ const logout = async (req, res, next) => {
       sameSite: 'Strict'
     });
     if (rt) await Token.deleteOne({ token: hashToken(rt) });
+    const fcmToken = safeTrim(req.body?.fcmToken);
+    if (fcmToken && req.body?.userId) {
+      const userId = safeTrim(req.body?.userId);
+      await User.updateOne({ userId }, { $pull: { fcmTokens: { token: fcmToken } } });
+    }
     return res.status(200).json({ status: true, message: 'User Logged out successfully' });
   } catch (err) {
     return next(err);
@@ -614,6 +619,31 @@ const removeFcmToken = async (req, res, next) => {
   }
 };
 
+const testFcmNotification = async (req, res, next) => {
+  try {
+    const token = safeTrim(req.body?.token);
+    const title = safeTrim(req.body?.title) || 'Test Notification';
+    const body = safeTrim(req.body?.body) || 'This is a test push notification from Z7I';
+    if (!token) return res.status(400).json({ status: false, message: 'token is required' });
+
+    const { sendPushToUsers } = await import('../helpers/firebase.helper.js');
+
+    // Temporarily inject token directly
+    const admin = (await import('firebase-admin')).default;
+    const message = {
+      notification: { title, body },
+      data: { type: 'TEST' },
+      android: { priority: 'high', notification: { sound: 'default', channelId: 'default' } },
+      apns: { payload: { aps: { sound: 'default', badge: 1 } } },
+      token
+    };
+    const result = await admin.messaging().send(message);
+    return res.status(200).json({ status: true, message: 'Notification sent', messageId: result });
+  } catch (err) {
+    return res.status(500).json({ status: false, message: err?.message || 'Failed to send notification' });
+  }
+};
+
 export default {
   createUser,
   listUsers,
@@ -630,5 +660,6 @@ export default {
   verifyForgotOtp,
   resetPassword,
   registerFcmToken,
-  removeFcmToken
+  removeFcmToken,
+  testFcmNotification
 };
