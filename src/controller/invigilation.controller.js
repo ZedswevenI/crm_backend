@@ -1,5 +1,7 @@
 import Invigilation from '../models/invigilation.model.js';
 import Staff from '../models/staff.model.js';
+import { notifyStaff } from '../helpers/pushNotification.helper.js';
+import logger from '../helpers/logger.js';
 
 const pickTid = (req) => req.body?.entiId || req.query?.entiId || null;
 const safeTrim = (v) => (typeof v === 'string' ? v.trim() : String(v ?? '').trim());
@@ -95,6 +97,26 @@ const createInvigilation = async (req, res, next) => {
       slot2EndTime: slot2EndTime || null,
       rooms: resolvedRooms
     });
+    // Fire-and-forget push notification to assigned invigilators
+    (async () => {
+      try {
+        // slot1StaffId and slot2StaffId are Staff ObjectIds — resolve to staffId UUIDs
+        const assignedObjectIds = resolvedRooms.flatMap((r) => [r.slot1StaffId, r.slot2StaffId]).filter(Boolean);
+        if (assignedObjectIds.length) {
+          const staffDocs = await Staff.find({ _id: { $in: assignedObjectIds }, isdeleted: false }, { staffId: 1 }).lean();
+          const staffIds = staffDocs.map((s) => s.staffId).filter(Boolean);
+          await notifyStaff({
+            tenantId,
+            staffIds,
+            title: 'Invigilation Assigned',
+            body: `You have been assigned as invigilator for ${examName.trim()} on ${formatDate(epochDate)}`,
+            data: { type: 'INVIGILATION', invigilationId: String(record._id) }
+          });
+        }
+      } catch (e) {
+        logger.error('[Invigilation] push notification failed:', e?.message);
+      }
+    })();
     return res.status(201).json({ status: true, message: 'Invigilation created', data: record });
   } catch (err) {
     if (err.code === 11000) return res.status(409).json({ status: false, message: 'Duplicate invigilation entry' });

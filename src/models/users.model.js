@@ -39,6 +39,13 @@ const userSchema = new mongoose.Schema(
     centerName: { type: String, default: null, trim: true },
     status: { type: String, enum: ['Active', 'Inactive'], default: 'Active' },
     lastLoginAt: { type: Date, default: null },
+    fcmTokens: [
+      {
+        token: { type: String, required: true },
+        device: { type: String, default: null },
+        updatedAt: { type: Number, default: null }
+      }
+    ],
     isdeleted: { type: Boolean, required: true, default: false }
   },
   { timestamps: true }
