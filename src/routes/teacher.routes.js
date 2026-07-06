@@ -6,6 +6,7 @@ const upload = multer({ dest: 'uploads/' });
 import validatetoken from '../middlewares/auth.js';
 import taskCtrl from '../controller/task.controller.js';
 import staffCtrl from '../controller/staff.controller.js';
+import userCtrl from '../controller/user.controller.js';
 
 routes.post('/task/upload', validatetoken, upload.single('file'), taskCtrl.uploadTaskAttachment);
 routes.post('/task/create', validatetoken, taskCtrl.createTask);
@@ -19,6 +20,11 @@ routes.post('/list', validatetoken, staffCtrl.listTeachingStaff);
 routes.post('/view', validatetoken, staffCtrl.viewTeachingStaff);
 routes.post('/getstaffmaps', validatetoken, staffCtrl.getTeacherBatches);
 routes.post('/dashboard', validatetoken, staffCtrl.getTeacherDashboard);
+routes.post('/fcm/register', validatetoken, userCtrl.registerFcmToken);
+routes.post('/fcm/remove', validatetoken, userCtrl.removeFcmToken);
+routes.post('/fcm/register', validatetoken, userCtrl.registerFcmToken);
+routes.post('/fcm/remove', validatetoken, userCtrl.removeFcmToken);
+routes.post('/fcm/test', userCtrl.testFcmNotification);
 
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Teacher routes' }));
 

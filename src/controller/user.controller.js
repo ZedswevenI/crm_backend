@@ -270,6 +270,11 @@ const logout = async (req, res, next) => {
       sameSite: 'Strict'
     });
     if (rt) await Token.deleteOne({ token: hashToken(rt) });
+    const fcmToken = safeTrim(req.body?.fcmToken);
+    if (fcmToken && req.body?.userId) {
+      const userId = safeTrim(req.body?.userId);
+      await User.updateOne({ userId }, { $pull: { fcmTokens: { token: fcmToken } } });
+    }
     return res.status(200).json({ status: true, message: 'User Logged out successfully' });
   } catch (err) {
     return next(err);
@@ -578,6 +583,67 @@ const resetPassword = async (req, res, next) => {
   }
 };
 
+const registerFcmToken = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = safeTrim(req.body?.userId || req.user?.userId);
+    const token = safeTrim(req.body?.token);
+    const device = safeTrim(req.body?.device) || null;
+    if (!tenantId || !userId || !token) {
+      return res.status(400).json({ status: false, message: 'tenantId, userId and token are required' });
+    }
+    const user = await User.findOne({ tenantId, userId, isdeleted: false, roleLevel: { $in: ['L1', 'L4'] } }).lean();
+    if (!user) return res.status(403).json({ status: false, message: 'Not authorized to register FCM token' });
+
+    // Remove existing entry for same token, then push fresh
+    await User.updateOne({ tenantId, userId }, { $pull: { fcmTokens: { token } } });
+    await User.updateOne({ tenantId, userId }, { $push: { fcmTokens: { token, device, updatedAt: Date.now() } } });
+    return res.status(200).json({ status: true, message: 'FCM token registered' });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const removeFcmToken = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = safeTrim(req.body?.userId || req.user?.userId);
+    const token = safeTrim(req.body?.token);
+    if (!tenantId || !userId || !token) {
+      return res.status(400).json({ status: false, message: 'tenantId, userId and token are required' });
+    }
+    await User.updateOne({ tenantId, userId }, { $pull: { fcmTokens: { token } } });
+    return res.status(200).json({ status: true, message: 'FCM token removed' });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const testFcmNotification = async (req, res, next) => {
+  try {
+    const token = safeTrim(req.body?.token);
+    const title = safeTrim(req.body?.title) || 'Test Notification';
+    const body = safeTrim(req.body?.body) || 'This is a test push notification from Z7I';
+    if (!token) return res.status(400).json({ status: false, message: 'token is required' });
+
+    const { sendPushToUsers } = await import('../helpers/firebase.helper.js');
+
+    // Temporarily inject token directly
+    const admin = (await import('firebase-admin')).default;
+    const message = {
+      notification: { title, body },
+      data: { type: 'TEST' },
+      android: { priority: 'high', notification: { sound: 'default', channelId: 'default' } },
+      apns: { payload: { aps: { sound: 'default', badge: 1 } } },
+      token
+    };
+    const result = await admin.messaging().send(message);
+    return res.status(200).json({ status: true, message: 'Notification sent', messageId: result });
+  } catch (err) {
+    return res.status(500).json({ status: false, message: err?.message || 'Failed to send notification' });
+  }
+};
+
 export default {
   createUser,
   listUsers,
@@ -592,5 +658,8 @@ export default {
   importUsers,
   forgotPassword,
   verifyForgotOtp,
-  resetPassword
+  resetPassword,
+  registerFcmToken,
+  removeFcmToken,
+  testFcmNotification
 };
