@@ -1751,9 +1751,7 @@ const getFacultyReport = async (req, res, next) => {
         if (toDate) invigiQuery.examDate.$lte = toDate;
       }
       const invigiRecords = await Invigilation.find(invigiQuery).sort({ examDate: 1, session: 1 }).lean();
-
       const allMongoIds = new Set(allStaff.map((s) => String(s._id)));
-
       for (const rec of invigiRecords) {
         for (const room of rec.rooms || []) {
           // Check slot1
@@ -1770,7 +1768,8 @@ const getFacultyReport = async (req, res, next) => {
                 roomNo: room.roomNo,
                 slot: 'SLOT1',
                 slotStartTime: rec.slot1StartTime || null,
-                slotEndTime: rec.slot1EndTime || null
+                slotEndTime: rec.slot1EndTime || null,
+                durationMinutes: calcDurationMinutes(rec.slot1StartTime, rec.slot1EndTime)
               });
             }
           }
@@ -1788,7 +1787,8 @@ const getFacultyReport = async (req, res, next) => {
                 roomNo: room.roomNo,
                 slot: 'SLOT2',
                 slotStartTime: rec.slot2StartTime || null,
-                slotEndTime: rec.slot2EndTime || null
+                slotEndTime: rec.slot2EndTime || null,
+                durationMinutes: calcDurationMinutes(rec.slot2StartTime, rec.slot2EndTime)
               });
             }
           }
@@ -2077,9 +2077,19 @@ const getFacultyReport = async (req, res, next) => {
         const rows = assignmentsByBatchStaff.get(sid) || [];
         staffData.assignments = { count: rows.length, rows };
       }
+      // if (sections.includes('invigilation')) {
+      //   const duties = (invigilationByStaff.get(sid) || []).sort((a, b) => a.examDate - b.examDate);
+      //   staffData.invigilation = { count: duties.length, duties };
+      // }
       if (sections.includes('invigilation')) {
         const duties = (invigilationByStaff.get(sid) || []).sort((a, b) => a.examDate - b.examDate);
-        staffData.invigilation = { count: duties.length, duties };
+        const totalMins = duties.reduce((sum, d) => sum + (d.durationMinutes || 0), 0);
+        staffData.invigilation = {
+          count: duties.length,
+          totalMinutes: totalMins,
+          totalFormatted: formatHoursFromMins(totalMins),
+          duties
+        };
       }
       data.push(staffData);
       const teachingPeriods = staffData.teaching?.periods || [];
@@ -2095,7 +2105,8 @@ const getFacultyReport = async (req, res, next) => {
         { nature: 'Attendance Marked Count', particulars: staffData.attendanceMarked?.count ?? '-' },
         { nature: 'Attendance Not Marked Count', particulars: staffData.attendanceNotMarked?.count ?? '-' },
         { nature: 'Enabled Assignment Count', particulars: staffData.assignments?.count ?? '-' },
-        { nature: 'Invigilation Count', particulars: staffData.invigilation?.count ?? '-' }
+        { nature: 'Invigilation Count', particulars: staffData.invigilation?.count ?? '-' },
+        { nature: 'Invigilation Hours', particulars: staffData.invigilation?.totalFormatted ?? '-' }
       ].filter((row) => row.particulars !== '-');
     }
     return res.status(200).json({
@@ -2109,6 +2120,25 @@ const getFacultyReport = async (req, res, next) => {
   } catch (err) {
     return next(err);
   }
+};
+
+const parseTimeToMinutes = (timeStr) => {
+  if (!timeStr) return null;
+  const match = timeStr.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?$/i);
+  if (!match) return null;
+  let h = parseInt(match[1]);
+  const m = parseInt(match[2]);
+  const meridiem = match[3]?.toUpperCase();
+  if (meridiem === 'PM' && h !== 12) h += 12;
+  if (meridiem === 'AM' && h === 12) h = 0;
+  return h * 60 + m;
+};
+const calcDurationMinutes = (startStr, endStr) => {
+  const start = parseTimeToMinutes(startStr);
+  const end = parseTimeToMinutes(endStr);
+  if (start === null || end === null) return null;
+  const diff = end - start;
+  return diff > 0 ? diff : null;
 };
 
 export default {
