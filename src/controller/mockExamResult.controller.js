@@ -1894,7 +1894,10 @@ const getBatchSubjectStats = async (req, res, next) => {
     if (!tenantId || !examId || !batchId) return res.status(400).json({ status: false, message: 'tenantId, examId and batchId are required' });
     const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }, { sections: 1 }).lean();
     if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
-    const batchResults = await MockExamResult.find({ tenantId, examId, batchId, isdeleted: false }, { sectionResults: 1 }).lean();
+    // const batchResults = await MockExamResult.find({ tenantId, examId, batchId, isdeleted: false }, { sectionResults: 1 }).lean();
+    const batchStudents = await StudentProfile.find({ tenantId, batchId, isdeleted: false, status: 'ACTIVE' }, { admissionNo: 1 }).lean();
+    const batchAdmissionNos = batchStudents.map((s) => s.admissionNo).filter(Boolean);
+    const batchResults = await MockExamResult.find({ tenantId, examId, admissionNo: { $in: batchAdmissionNos }, isdeleted: false }, { sectionResults: 1 }).lean();
     const sectionNameMap = new Map((exam.sections || []).map((s) => [safeTrim(s.sectionId), s.sectionName || null]));
     const sectionStatsMap = new Map();
     for (const [sid, sname] of sectionNameMap.entries()) {
