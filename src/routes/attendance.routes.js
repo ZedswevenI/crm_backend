@@ -12,5 +12,7 @@ routes.post('/schedule/student', validatetoken, attendanceController.getStudentS
 routes.post('/students/list', validatetoken, attendanceController.getStudentsForAttendance);
 routes.post('/list', validatetoken, attendanceController.listAttendanceByDate);
 routes.post('/schedule/withattendance', validatetoken, attendanceController.getScheduleWithAttendance);
+routes.post('/remarks/period', validatetoken, attendanceController.updatePeriodAttendanceRemarks);
+routes.post('/remarks/school', validatetoken, attendanceController.updateSchoolAttendanceRemarks);
 
 export default routes;

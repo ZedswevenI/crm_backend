@@ -757,6 +757,7 @@ const getDashboardSummary = async (req, res, next) => {
         if (s.status === 'ABSENT') {
           todayAbsent++;
           todayAbsentList.push({
+            attendanceId: rec.attendanceId,
             studentId: s.studentId,
             admissionNo: s.admissionNo,
             remarks: s.remarks || null,
@@ -772,6 +773,7 @@ const getDashboardSummary = async (req, res, next) => {
       (rec.students || []).forEach((s) => {
         if (s.status === 'ABSENT') {
           todayPeriodAbsentList.push({
+            attendanceId: rec.attendanceId,
             studentId: s.studentId,
             admissionNo: s.admissionNo,
             remarks: s.remarks || null,
@@ -886,13 +888,30 @@ const getDashboardSummary = async (req, res, next) => {
       return { departmentId: d._id, departmentName: dept?.departmentName || 'Unknown', departmentCode: dept?.departmentCode || null, count: d.count, teaching: d.teaching, nonTeaching: d.nonTeaching, pct: totalStaffForDept > 0 ? Math.round((d.count / totalStaffForDept) * 100) : 0 };
     });
     const absentStudentIds = [...new Set([...todayAbsentList.map((s) => s.studentId), ...todayPeriodAbsentList.map((s) => s.studentId)])];
-    const absentStudentProfiles = await StudentProfile.find({ studentId: { $in: absentStudentIds }, isdeleted: false }, { studentId: 1, 'student.name': 1 }).lean();
-    const studentNameMap = new Map(absentStudentProfiles.map((s) => [s.studentId, s.student?.name]));
+    // const absentStudentProfiles = await StudentProfile.find({ studentId: { $in: absentStudentIds }, isdeleted: false }, { studentId: 1, 'student.name': 1 }).lean();
+    // const studentNameMap = new Map(absentStudentProfiles.map((s) => [s.studentId, s.student?.name]));
+    // todayAbsentList.forEach((s) => {
+    //   s.studentName = studentNameMap.get(s.studentId) || null;
+    // });
+    // todayPeriodAbsentList.forEach((s) => {
+    //   s.studentName = studentNameMap.get(s.studentId) || null;
+    const absentStudentProfiles = await StudentProfile.find({ studentId: { $in: absentStudentIds }, isdeleted: false }, { studentId: 1, 'student.name': 1, 'student.phone': 1, 'student.phone1': 1, 'student.phone2': 1, 'student.parentPhone': 1 }).lean();
+    const studentProfileMap = new Map(absentStudentProfiles.map((s) => [s.studentId, s]));
     todayAbsentList.forEach((s) => {
-      s.studentName = studentNameMap.get(s.studentId) || null;
+      const p = studentProfileMap.get(s.studentId);
+      s.studentName = p?.student?.name || null;
+      s.studentPhone = p?.student?.phone || null;
+      s.studentPhone1 = p?.student?.phone1 || null;
+      s.studentPhone2 = p?.student?.phone2 || null;
+      s.parentPhone = p?.student?.parentPhone || null;
     });
     todayPeriodAbsentList.forEach((s) => {
-      s.studentName = studentNameMap.get(s.studentId) || null;
+      const p = studentProfileMap.get(s.studentId);
+      s.studentName = p?.student?.name || null;
+      s.studentPhone = p?.student?.phone || null;
+      s.studentPhone1 = p?.student?.phone1 || null;
+      s.studentPhone2 = p?.student?.phone2 || null;
+      s.parentPhone = p?.student?.parentPhone || null;
     });
     return res.status(200).json({
       status: true,

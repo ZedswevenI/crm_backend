@@ -19,6 +19,17 @@ const WEIGHTS = { assignment: 0.4, mock: 0.3, school: 0.3 };
 
 export const resolveAcademicYear = (profile, classNo) => {
   if (!profile) return null;
+  // if (classNo != null) {
+  //   const matches = (profile.ayHistory || []).filter((h) => h.classNo === classNo);
+  //   if (matches.length) {
+  //     matches.sort((a, b) => (b.changedOn || 0) - (a.changedOn || 0));
+  //     if (matches[0].academicYear) return matches[0].academicYear;
+  //   }
+  //   if (profile.classNo === classNo) {
+  //     return profile.currentAcademicYear || profile.academicYear || null;
+  //   }
+  //   return null;
+  // }
   if (classNo != null) {
     const matches = (profile.ayHistory || []).filter((h) => h.classNo === classNo);
     if (matches.length) {
@@ -28,7 +39,7 @@ export const resolveAcademicYear = (profile, classNo) => {
     if (profile.classNo === classNo) {
       return profile.currentAcademicYear || profile.academicYear || null;
     }
-    return null;
+    return profile.currentAcademicYear || profile.academicYear || null;
   }
   return profile.currentAcademicYear || profile.academicYear || null;
 };
@@ -255,7 +266,6 @@ export const syncOnSchoolExamUpload = async ({ tenantId, examLogId, academicYear
     const studentIds = matchedResults.map((r) => r.studentId).filter(Boolean);
     const profiles = await StudentProfile.find({ tenantId, studentId: { $in: studentIds }, isdeleted: false }, { studentId: 1, admissionNo: 1, batchId: 1, batchCode: 1, programId: 1, centerId: 1, academicYear: 1, currentAcademicYear: 1, classNo: 1, ayHistory: 1 }).lean();
     const profileMap = new Map(profiles.map((p) => [p.studentId, p]));
-
     for (const r of matchedResults) {
       try {
         const profile = profileMap.get(r.studentId) || null;
@@ -279,7 +289,7 @@ export const syncOnSchoolExamUpload = async ({ tenantId, examLogId, academicYear
             batchCode: examLog.batchCode || profile?.batchCode || null,
             programId: profile?.programId || null,
             centerId: examLog.centerId || profile?.centerId || null,
-            academicYear: resolvedYear,
+            // academicYear: resolvedYear,
             examName: examLog.examName || null,
             examDate: examLog.examDate || null,
             obtainedMarks: totalObtained,
