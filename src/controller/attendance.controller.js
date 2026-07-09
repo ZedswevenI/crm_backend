@@ -643,6 +643,51 @@ const getScheduleWithAttendance = async (req, res, next) => {
   }
 };
 
+const updatePeriodAttendanceRemarks = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const attendanceId = safeTrim(req.body?.attendanceId);
+    const studentId = safeTrim(req.body?.studentId);
+    const remarks = safeTrim(req.body?.remarks);
+    if (!tenantId || !attendanceId || !studentId) {
+      return res.status(400).json({ status: false, message: 'tenantId, attendanceId and studentId are required' });
+    }
+    const record = await Attendance.findOne({ tenantId, attendanceId, isdeleted: false }).lean();
+    if (!record) return res.status(404).json({ status: false, message: 'Attendance record not found' });
+    const student = (record.students || []).find((s) => s.studentId === studentId);
+    if (!student) return res.status(404).json({ status: false, message: 'Student not found in this attendance record' });
+    if (student.status !== 'ABSENT') return res.status(400).json({ status: false, message: 'Remarks can only be added for absent students' });
+    const updated = await Attendance.findOneAndUpdate({ tenantId, attendanceId, isdeleted: false, 'students.studentId': studentId }, { $set: { 'students.$.remarks': remarks || null } }, { new: true }).lean();
+    if (!updated) return res.status(404).json({ status: false, message: 'Failed to update remarks' });
+    return res.status(200).json({ status: true, message: 'Remarks updated successfully' });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const updateSchoolAttendanceRemarks = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const attendanceId = safeTrim(req.body?.attendanceId);
+    const studentId = safeTrim(req.body?.studentId);
+    const remarks = safeTrim(req.body?.remarks);
+    if (!tenantId || !attendanceId || !studentId) {
+      return res.status(400).json({ status: false, message: 'tenantId, attendanceId and studentId are required' });
+    }
+    const SchoolAttendance = (await import('../models/schoolAttendance.model.js')).default;
+    const record = await SchoolAttendance.findOne({ tenantId, attendanceId, isdeleted: false }).lean();
+    if (!record) return res.status(404).json({ status: false, message: 'School attendance record not found' });
+    const student = (record.students || []).find((s) => s.studentId === studentId);
+    if (!student) return res.status(404).json({ status: false, message: 'Student not found in this attendance record' });
+    if (student.status !== 'ABSENT') return res.status(400).json({ status: false, message: 'Remarks can only be added for absent students' });
+    const updated = await SchoolAttendance.findOneAndUpdate({ tenantId, attendanceId, isdeleted: false, 'students.studentId': studentId }, { $set: { 'students.$.remarks': remarks || null } }, { new: true }).lean();
+    if (!updated) return res.status(404).json({ status: false, message: 'Failed to update remarks' });
+    return res.status(200).json({ status: true, message: 'Remarks updated successfully' });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   markAttendance,
   getAbsenteesReport,
@@ -651,5 +696,7 @@ export default {
   getStudentSchedule,
   getStudentsForAttendance,
   listAttendanceByDate,
-  getScheduleWithAttendance
+  getScheduleWithAttendance,
+  updatePeriodAttendanceRemarks,
+  updateSchoolAttendanceRemarks
 };

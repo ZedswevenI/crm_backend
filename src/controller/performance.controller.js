@@ -645,7 +645,7 @@ const _runSyncSchool = async (tenantId, studentId, academicYear) => {
           batchCode: examLog.batchCode || profile.batchCode || null,
           programId: profile.programId || null,
           centerId: examLog.centerId || profile.centerId || null,
-          academicYear,
+          // academicYear,
           examName: examLog.examName || null,
           examDate: examLog.examDate || null,
           obtainedMarks: totalObtained,
