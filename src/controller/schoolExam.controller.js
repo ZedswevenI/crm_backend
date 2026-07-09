@@ -173,11 +173,12 @@ const uploadExamMarks = async (req, res, next) => {
       },
       { new: true, upsert: true }
     );
-    syncOnSchoolExamUpload({
-      tenantId,
-      examLogId: doc.examLogId,
-      academicYear
-    }).catch(() => {});
+    // syncOnSchoolExamUpload({
+    //   tenantId,
+    //   examLogId: doc.examLogId,
+    //   academicYear
+    // }).catch(() => {});
+    syncOnSchoolExamUpload({ tenantId, examLogId: doc.examLogId, academicYear }).catch((e) => logger.error('[SchoolExam] syncOnSchoolExamUpload failed:', e?.message));
     return res.status(200).json({
       status: true,
       message: 'Exam marks imported successfully',
