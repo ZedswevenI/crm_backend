@@ -13,6 +13,14 @@ export const ROLE_MAP = {
   L7: 'EDP'
 };
 
+const UserCenterSchema = new mongoose.Schema(
+  {
+    centerId: { type: String, trim: true },
+    centerName: { type: String, trim: true, default: null }
+  },
+  { _id: false }
+);
+
 const userSchema = new mongoose.Schema(
   {
     tenantId: { type: String, required: true, ref: 'tenant', trim: true, index: true },
@@ -35,8 +43,7 @@ const userSchema = new mongoose.Schema(
     password: { type: String, required: true },
     roleLevel: { type: String, required: true, enum: ROLE_LEVELS, default: 'L4' },
     roleLabel: { type: String, required: true, default: 'Teacher', trim: true },
-    centerId: { type: String, default: null, trim: true },
-    centerName: { type: String, default: null, trim: true },
+    centers: { type: [UserCenterSchema], default: [] },
     status: { type: String, enum: ['Active', 'Inactive'], default: 'Active' },
     lastLoginAt: { type: Date, default: null },
     fcmTokens: [
@@ -65,6 +72,7 @@ userSchema.index(
 );
 userSchema.index({ tenantId: 1, roleLevel: 1, isdeleted: 1, createdAt: -1 });
 userSchema.index({ tenantId: 1, name: 1, isdeleted: 1 });
+userSchema.index({ tenantId: 1, 'centers.centerId': 1, isdeleted: 1 });
 
 // ── Pre-validate: only sync roleLabel from roleLevel ──────────────────────────
 // FIX: removed manual duplicate email/phone checks — unique indexes handle this.

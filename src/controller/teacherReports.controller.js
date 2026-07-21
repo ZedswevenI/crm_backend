@@ -19,13 +19,29 @@ import { triggerCommunicationEventSafe } from '../services/communicationEvent.se
 const pickTid = (req) => String(req?.body?.entiId || req?.body?.tenantId || '').trim();
 const safeTrim = (v) => (v === undefined || v === null ? '' : String(v).trim());
 
-const pickBatchIds = (req) => {
+const pickBatchIds = async (req) => {
   const arr = req.body?.batchIds;
-  return Array.isArray(arr) && arr.length ? arr.map(safeTrim).filter(Boolean) : [];
+  let batchIds = Array.isArray(arr) && arr.length ? arr.map(safeTrim).filter(Boolean) : [];
+  const centerId = safeTrim(req.body?.centerId);
+  if (centerId) {
+    const tenantId = pickTid(req);
+    const centerBatches = await Batch.find({ tenantId, centerId, isdeleted: false }, { batchId: 1 }).lean();
+    const centerBatchIds = new Set(centerBatches.map((b) => b.batchId));
+    batchIds = batchIds.length ? batchIds.filter((id) => centerBatchIds.has(id)) : [...centerBatchIds];
+  }
+  return batchIds;
 };
-const pickBatchCodes = (req) => {
+const pickBatchCodes = async (req) => {
   const arr = req.body?.batchCodes;
-  return Array.isArray(arr) && arr.length ? arr.map(safeTrim).filter(Boolean) : [];
+  let batchCodes = Array.isArray(arr) && arr.length ? arr.map(safeTrim).filter(Boolean) : [];
+  const centerId = safeTrim(req.body?.centerId);
+  if (centerId) {
+    const tenantId = pickTid(req);
+    const centerBatches = await Batch.find({ tenantId, centerId, isdeleted: false }, { batchCode: 1 }).lean();
+    const centerBatchCodes = new Set(centerBatches.map((b) => b.batchCode));
+    batchCodes = batchCodes.length ? batchCodes.filter((c) => centerBatchCodes.has(c)) : [...centerBatchCodes];
+  }
+  return batchCodes;
 };
 const applyBatchIdFilter = (query, ids) => {
   if (ids.length === 1) query.batchId = ids[0];
@@ -300,7 +316,7 @@ const getStaffLateEntryReport = async (req, res, next) => {
     if (!fromDate) return res.status(400).json({ status: false, message: 'fromDate is required' });
     if (!toDate) return res.status(400).json({ status: false, message: 'toDate is required' });
 
-    const lateBatchCodes = pickBatchCodes(req);
+    const lateBatchCodes = await pickBatchCodes(req);
     const lateQuery = { tenantId, type: 'STAFF', entryType: 'LATE', personId: staffId, isdeleted: false, date: { $gte: fromDate, $lte: toDate } };
     applyBatchCodeFilter(lateQuery, lateBatchCodes);
 
@@ -364,7 +380,7 @@ const getStaffEarlyLeavingReport = async (req, res, next) => {
     if (!fromDate) return res.status(400).json({ status: false, message: 'fromDate is required' });
     if (!toDate) return res.status(400).json({ status: false, message: 'toDate is required' });
 
-    const earlyBatchCodes = pickBatchCodes(req);
+    const earlyBatchCodes = await pickBatchCodes(req);
     const earlyQuery = { tenantId, type: 'STAFF', entryType: 'EARLY_LEAVE', personId: staffId, isdeleted: false, date: { $gte: fromDate, $lte: toDate } };
     applyBatchCodeFilter(earlyQuery, earlyBatchCodes);
 
@@ -417,7 +433,7 @@ const getStaffAssignmentReport = async (req, res, next) => {
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
     if (!staffId) return res.status(400).json({ status: false, message: 'staffId is required' });
 
-    const asnBatchIds = pickBatchIds(req);
+    const asnBatchIds = await pickBatchIds(req);
     const batchQuery = { tenantId, isdeleted: false };
     applyBatchIdFilter(batchQuery, asnBatchIds);
     const batches = await Batch.find(batchQuery).lean();
@@ -567,7 +583,7 @@ const getStaffAttendanceReport = async (req, res, next) => {
     }
 
     // Fetch all active timetables for these weeks
-    const attBatchCodes = pickBatchCodes(req);
+    const attBatchCodes = await pickBatchCodes(req);
     const ttQuery = { tenantId, wkStartOn: { $in: [...weekStarts] }, status: 'Active', isdeleted: false };
     applyBatchCodeFilter(ttQuery, attBatchCodes);
     const timetables = await TimeTable.find(ttQuery).lean();
@@ -704,7 +720,7 @@ const getStaffFeedbackReport = async (req, res, next) => {
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
     if (!staffId) return res.status(400).json({ status: false, message: 'staffId is required' });
 
-    const fbBatchCodes = pickBatchCodes(req);
+    const fbBatchCodes = await pickBatchCodes(req);
     const query = { tenantId, isdeleted: false, 'staffRemarks.staffId': staffId };
     if (fromDate) query.ptmDate = { $gte: fromDate };
     if (toDate) query.ptmDate = { ...(query.ptmDate || {}), $lte: toDate };
@@ -787,7 +803,7 @@ const getStaffExamReport = async (req, res, next) => {
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
     if (!staffId) return res.status(400).json({ status: false, message: 'staffId is required' });
 
-    const exBatchIds = pickBatchIds(req);
+    const exBatchIds = await pickBatchIds(req);
     const batchQuery = { tenantId, isdeleted: false };
     applyBatchIdFilter(batchQuery, exBatchIds);
     const batches = await Batch.find(batchQuery).lean();
@@ -1475,12 +1491,14 @@ const getFacultyReport = async (req, res, next) => {
     const fromDate = toInt(req.body?.fromDate, 0);
     const toDate = toInt(req.body?.toDate, 0);
     const filterStaffIds = Array.isArray(req.body?.staffIds) ? req.body.staffIds.map(safeTrim).filter(Boolean) : [];
+    const centerId = safeTrim(req.body?.centerId);
     const staffQuery = {
       tenantId,
       isdeleted: false,
       status: { $in: ['ACTIVE', 'active', 'Active'] }
     };
     if (filterStaffIds.length) staffQuery.staffId = { $in: filterStaffIds };
+    if (centerId) staffQuery.centerId = centerId;
     const allStaff = await Staff.find(staffQuery, {
       staffId: 1,
       staffName: 1,

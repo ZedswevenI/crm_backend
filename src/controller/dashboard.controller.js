@@ -43,37 +43,40 @@ const getKpis = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    const centerId = safeTrim(req.body?.centerId);
     const todayMs = startOfTodayMs();
     const threeDaysAgo = daysAgoMs(3);
+    const batchCodesForCenter = centerId ? (await Batch.find({ tenantId, centerId, isdeleted: false }, { batchCode: 1 }).lean()).map((b) => b.batchCode) : null;
+    const studentQuery = { tenantId, isdeleted: false, status: 'ACTIVE' };
+    if (centerId) studentQuery.centerId = centerId;
+    const staffMatch = { tenantId, isdeleted: false, status: 'Active' };
+    if (centerId) staffMatch.centerId = centerId;
+    const userMatch = { tenantId, isdeleted: false, status: 'Active' };
+    if (centerId) userMatch['centers.centerId'] = centerId;
+    const batchQuery = { tenantId, isdeleted: false, status: 'ACTIVE' };
+    if (centerId) batchQuery.centerId = centerId;
+    const schoolAttQuery = { tenantId, date: { $gte: todayMs, $lt: todayMs + 86400000 }, isdeleted: false };
+    const periodAttQuery = { tenantId, date: { $gte: todayMs, $lt: todayMs + 86400000 }, isdeleted: false };
+    const ptmQuery = { tenantId, ptmDate: { $gte: todayMs }, status: { $in: ['SCHEDULED', 'COMPLETED'] }, isdeleted: false };
+    if (batchCodesForCenter) {
+      schoolAttQuery.batchCode = { $in: batchCodesForCenter };
+      periodAttQuery.batchCode = { $in: batchCodesForCenter };
+      ptmQuery.batchCode = { $in: batchCodesForCenter };
+    }
     const [totalStudents, staffData, usersData, totalBatches, todayAttendance, upcomingPtmCount] = await Promise.all([
-      StudentProfile.countDocuments({ tenantId, isdeleted: false, status: 'ACTIVE' }),
-      Staff_model.aggregate([{ $match: { tenantId, isdeleted: false, status: 'Active' } }, { $group: { _id: '$facultyType', count: { $sum: 1 } } }]),
+      StudentProfile.countDocuments(studentQuery),
+      Staff_model.aggregate([{ $match: staffMatch }, { $group: { _id: '$facultyType', count: { $sum: 1 } } }]),
       Promise.all([
-        User.countDocuments({ tenantId, isdeleted: false, status: 'Active' }),
+        User.countDocuments(userMatch),
         User.countDocuments({
-          tenantId,
-          isdeleted: false,
-          status: 'Active',
+          ...userMatch,
           $or: [{ lastLoginAt: null }, { lastLoginAt: { $lt: new Date(threeDaysAgo) } }]
         })
       ]),
-      Batch.countDocuments({ tenantId, isdeleted: false, status: 'ACTIVE' }),
-      SchoolAttendance.find({
-        tenantId,
-        date: { $gte: todayMs, $lt: todayMs + 86400000 },
-        isdeleted: false
-      }).lean(),
-      Attendance.find({
-        tenantId,
-        date: { $gte: todayMs, $lt: todayMs + 86400000 },
-        isdeleted: false
-      }).lean(),
-      PTM.countDocuments({
-        tenantId,
-        ptmDate: { $gte: todayMs },
-        status: { $in: ['SCHEDULED', 'COMPLETED'] },
-        isdeleted: false
-      })
+      Batch.countDocuments(batchQuery),
+      SchoolAttendance.find(schoolAttQuery).lean(),
+      Attendance.find(periodAttQuery).lean(),
+      PTM.countDocuments(ptmQuery)
     ]);
     const staffBreakdown = { TEACHING: 0, NON_TEACHING: 0, total: 0 };
     staffData.forEach(({ _id, count }) => {
@@ -171,11 +174,14 @@ const getAttendanceTrend = async (req, res, next) => {
     const period = safeTrim(req.body?.period) || 'week';
     const attendanceType = safeTrim(req.body?.attendanceType) || 'school';
     const batchCode = safeTrim(req.body?.batchCode) || null;
+    const centerId = safeTrim(req.body?.centerId) || null;
     const { from, to, prevFrom, prevTo } = getPeriodRange(period);
+    const batchCodesForCenter = centerId && !batchCode ? (await Batch.find({ tenantId, centerId, isdeleted: false }, { batchCode: 1 }).lean()).map((b) => b.batchCode) : null;
 
     if (attendanceType === 'period') {
       const matchBase = { tenantId, date: { $gte: from, $lte: to }, isdeleted: false };
       if (batchCode) matchBase.batchCode = batchCode;
+      else if (batchCodesForCenter) matchBase.batchCode = { $in: batchCodesForCenter };
       const matchPrev = { ...matchBase, date: { $gte: prevFrom, $lte: prevTo } };
 
       const [currentRecs, prevRecs] = await Promise.all([Attendance.find(matchBase).lean(), Attendance.find(matchPrev).lean()]);
@@ -209,10 +215,13 @@ const getAttendanceTrend = async (req, res, next) => {
     // School attendance
     const matchBase = { tenantId, date: { $gte: from, $lte: to }, isdeleted: false };
     if (batchCode) matchBase.batchCode = batchCode;
+    else if (batchCodesForCenter) matchBase.batchCode = { $in: batchCodesForCenter };
     const matchPrev = { ...matchBase, date: { $gte: prevFrom, $lte: prevTo } };
 
     // Get all active batches for marked/not marked
-    const activeBatches = await Batch.find({ tenantId, isdeleted: false, status: 'ACTIVE' }, { batchCode: 1 }).lean();
+    const activeBatchQuery = { tenantId, isdeleted: false, status: 'ACTIVE' };
+    if (centerId) activeBatchQuery.centerId = centerId;
+    const activeBatches = await Batch.find(activeBatchQuery, { batchCode: 1 }).lean();
     const allBatchCodes = activeBatches.map((b) => b.batchCode);
 
     const [currentRecs, prevRecs] = await Promise.all([SchoolAttendance.find(matchBase).lean(), SchoolAttendance.find(matchPrev).lean()]);
@@ -256,8 +265,11 @@ const getStudentsByProgram = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    const centerId = safeTrim(req.body?.centerId);
+    const spMatch = { tenantId, isdeleted: false, status: 'ACTIVE' };
+    if (centerId) spMatch.centerId = centerId;
     const data = await StudentProfile.aggregate([
-      { $match: { tenantId, isdeleted: false, status: 'ACTIVE' } },
+      { $match: spMatch },
       {
         $group: {
           _id: { programId: '$programId', programName: '$programName', programCode: '$programCode' },
@@ -289,10 +301,18 @@ const getBatchPerformance = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    const centerId = safeTrim(req.body?.centerId);
     const limit = Math.min(toInt(req.body?.limit, 10), 20);
+    const batchIdsForCenter = centerId ? (await Batch.find({ tenantId, centerId, isdeleted: false }, { batchId: 1 }).lean()).map((b) => b.batchId) : null;
+    const examMatch = { tenantId, isdeleted: false, status: { $in: ['evaluated', 'result_published'] }, batchId: { $ne: null } };
+    const assignMatch = { tenantId, isdeleted: false, status: { $in: ['completed', 'evaluated'] }, batchId: { $ne: null } };
+    if (batchIdsForCenter) {
+      examMatch.batchId = { $in: batchIdsForCenter };
+      assignMatch.batchId = { $in: batchIdsForCenter };
+    }
     const [examPerf, assignPerf] = await Promise.all([
       MockExamResult.aggregate([
-        { $match: { tenantId, isdeleted: false, status: { $in: ['evaluated', 'result_published'] }, batchId: { $ne: null } } },
+        { $match: examMatch },
         {
           $group: {
             _id: '$batchId',
@@ -313,7 +333,7 @@ const getBatchPerformance = async (req, res, next) => {
         }
       ]),
       AssignmentResult.aggregate([
-        { $match: { tenantId, isdeleted: false, status: { $in: ['completed', 'evaluated'] }, batchId: { $ne: null } } },
+        { $match: assignMatch },
         {
           $group: {
             _id: '$batchId',
@@ -362,9 +382,12 @@ const getTopPerformers = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    const centerId = safeTrim(req.body?.centerId);
     const limit = Math.min(toInt(req.body?.limit, 5), 20);
+    const perfMatch = { tenantId, isdeleted: false };
+    if (centerId) perfMatch.centerId = centerId;
     const performers = await StudentPerformance.aggregate([
-      { $match: { tenantId, isdeleted: false } },
+      { $match: perfMatch },
       {
         $group: {
           _id: '$studentId',
@@ -428,6 +451,7 @@ const getInactiveUsers = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    const centerId = safeTrim(req.body?.centerId);
     const days = toInt(req.body?.days, 3);
     const limit = Math.min(toInt(req.body?.limit, 10), 50);
     const cutoff = new Date(daysAgoMs(days));
@@ -437,6 +461,7 @@ const getInactiveUsers = async (req, res, next) => {
       status: 'Active',
       $or: [{ lastLoginAt: null }, { lastLoginAt: { $lt: cutoff } }]
     };
+    if (centerId) query['centers.centerId'] = centerId;
     const [users, totalInactiveCount] = await Promise.all([
       User.find(query, {
         userId: 1,
@@ -444,8 +469,7 @@ const getInactiveUsers = async (req, res, next) => {
         email: 1,
         roleLevel: 1,
         roleLabel: 1,
-        centerId: 1,
-        centerName: 1,
+        centers: 1,
         lastLoginAt: 1,
         createdAt: 1
       })
@@ -460,8 +484,7 @@ const getInactiveUsers = async (req, res, next) => {
       email: u.email,
       roleLevel: u.roleLevel,
       roleLabel: u.roleLabel,
-      centerId: u.centerId || null,
-      centerName: u.centerName || null,
+      centers: u.centers || [],
       lastLoginAt: u.lastLoginAt || null,
       neverLoggedIn: !u.lastLoginAt,
       daysSinceLogin: u.lastLoginAt ? Math.floor((Date.now() - new Date(u.lastLoginAt).getTime()) / 86400000) : null,
@@ -488,14 +511,20 @@ const getUpcomingPtms = async (req, res, next) => {
     const tenantId = pickTenantId(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
     const limit = Math.min(toInt(req.body?.limit, 5), 20);
+    const centerId = safeTrim(req.body?.centerId);
     const todayMs = startOfTodayMs();
+    const ptmQuery = {
+      tenantId,
+      ptmDate: { $gte: todayMs },
+      status: { $in: ['SCHEDULED', 'COMPLETED'] },
+      isdeleted: false
+    };
+    if (centerId) {
+      const batchCodesForCenter = (await Batch.find({ tenantId, centerId, isdeleted: false }, { batchCode: 1 }).lean()).map((b) => b.batchCode);
+      ptmQuery.batchCode = { $in: batchCodesForCenter };
+    }
     const ptms = await PTM.find(
-      {
-        tenantId,
-        ptmDate: { $gte: todayMs },
-        status: { $in: ['SCHEDULED', 'COMPLETED'] },
-        isdeleted: false
-      },
+      ptmQuery,
       {
         ptmId: 1,
         studentName: 1,
@@ -531,6 +560,7 @@ const getUpcomingActivities = async (req, res, next) => {
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
     const limit = Math.min(toInt(req.body?.limit, 5), 20);
     const batchCode = safeTrim(req.body?.batchCode) || null;
+    const centerId = safeTrim(req.body?.centerId) || null;
     const todayMs = startOfTodayMs();
     const query = {
       tenantId,
@@ -539,6 +569,10 @@ const getUpcomingActivities = async (req, res, next) => {
       isdeleted: false
     };
     if (batchCode) query.batchCode = batchCode;
+    else if (centerId) {
+      const batchCodesForCenter = (await Batch.find({ tenantId, centerId, isdeleted: false }, { batchCode: 1 }).lean()).map((b) => b.batchCode);
+      query.batchCode = { $in: batchCodesForCenter };
+    }
     const activities = await Activity.find(query, {
       activityId: 1,
       activityName: 1,
@@ -567,8 +601,11 @@ const getStaffByDepartment = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    const centerId = safeTrim(req.body?.centerId);
+    const staffDeptMatch = { tenantId, isdeleted: false, status: 'Active' };
+    if (centerId) staffDeptMatch.centerId = centerId;
     const data = await Staff_model.aggregate([
-      { $match: { tenantId, isdeleted: false, status: 'Active' } },
+      { $match: staffDeptMatch },
       {
         $group: {
           _id: '$department',
@@ -614,8 +651,11 @@ const getRecentUsers = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    const centerId = safeTrim(req.body?.centerId);
     const limit = Math.min(toInt(req.body?.limit, 5), 20);
-    const users = await User.find({ tenantId, isdeleted: false }, { userId: 1, name: 1, email: 1, roleLevel: 1, roleLabel: 1, status: 1, lastLoginAt: 1, createdAt: 1, centerId: 1, centerName: 1 }).sort({ createdAt: -1 }).limit(limit).lean();
+    const recentUsersQuery = { tenantId, isdeleted: false };
+    if (centerId) recentUsersQuery['centers.centerId'] = centerId;
+    const users = await User.find(recentUsersQuery, { userId: 1, name: 1, email: 1, roleLevel: 1, roleLabel: 1, status: 1, lastLoginAt: 1, createdAt: 1, centers: 1 }).sort({ createdAt: -1 }).limit(limit).lean();
     const data = users.map((u) => ({
       userId: u.userId,
       name: u.name,
@@ -624,8 +664,7 @@ const getRecentUsers = async (req, res, next) => {
       roleLabel: u.roleLabel,
       status: u.status,
       lastLoginAt: u.lastLoginAt || null,
-      centerId: u.centerId || null,
-      centerName: u.centerName || null,
+      centers: u.centers || [],
       avatar: (u.name || '')
         .split(' ')
         .slice(0, 2)
@@ -647,9 +686,62 @@ const getDashboardSummary = async (req, res, next) => {
     const tenantId = pickTenantId(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
     req.body.tenantId = tenantId;
+    const centerId = safeTrim(req.body?.centerId);
     const todayMs = startOfTodayMs();
     const threeDaysAgo = daysAgoMs(3);
     const { from, to, prevFrom, prevTo } = getPeriodRange(req.body?.period || 'week');
+    const centerBatches = centerId ? await Batch.find({ tenantId, centerId, isdeleted: false }, { batchCode: 1, batchId: 1 }).lean() : null;
+    const batchCodesForCenter = centerBatches ? centerBatches.map((b) => b.batchCode) : null;
+    const batchIdsForCenter = centerBatches ? centerBatches.map((b) => b.batchId) : null;
+
+    const studentByBatchMatch = { tenantId, isdeleted: false, status: 'ACTIVE', batchCode: { $ne: null } };
+    const staffMatch = { tenantId, isdeleted: false, status: 'Active' };
+    const userMatch = { tenantId, isdeleted: false, status: 'Active' };
+    const batchCountQuery = { tenantId, isdeleted: false, status: 'ACTIVE' };
+    const todayAttendanceQuery = { tenantId, date: { $gte: todayMs, $lt: todayMs + 86400000 }, isdeleted: false };
+    const ptmCountQuery = { tenantId, ptmDate: { $gte: todayMs }, status: { $in: ['SCHEDULED', 'COMPLETED'] }, isdeleted: false };
+    const studentsByProgramMatch = { tenantId, isdeleted: false, status: 'ACTIVE' };
+    const mockExamPerfMatch = { tenantId, isdeleted: false, batchId: { $ne: null } };
+    const assignPerfMatch = { tenantId, isdeleted: false, batchId: { $ne: null } };
+    const schoolExamMatch = { tenantId, isdeleted: false, batchCode: { $ne: null } };
+    const studentPerformanceMatch = { tenantId, isdeleted: false };
+    const inactiveUsersQuery = { tenantId, isdeleted: false, status: 'Active', $or: [{ lastLoginAt: null }, { lastLoginAt: { $lt: new Date(threeDaysAgo) } }] };
+    const upcomingPtmsQuery = { tenantId, ptmDate: { $gte: todayMs }, status: { $in: ['SCHEDULED', 'COMPLETED'] }, isdeleted: false };
+    const upcomingActivitiesQuery = { tenantId, startDate: { $gte: todayMs }, status: { $in: ['PLANNED', 'IN_PROGRESS'] }, isdeleted: false };
+    const staffByDeptMatch = { tenantId, isdeleted: false, status: 'Active' };
+    const recentUsersQuery = { tenantId, isdeleted: false };
+    const currentAttQuery = { tenantId, date: { $gte: from, $lte: to }, isdeleted: false };
+    const prevAttQuery = { tenantId, date: { $gte: prevFrom, $lte: prevTo }, isdeleted: false };
+    const activeBatchesQuery = { tenantId, isdeleted: false, status: 'ACTIVE' };
+    const todayPeriodAttendanceQuery = { tenantId, date: { $gte: todayMs, $lt: todayMs + 86400000 }, isdeleted: false };
+
+    if (centerId) {
+      staffMatch.centerId = centerId;
+      userMatch['centers.centerId'] = centerId;
+      batchCountQuery.centerId = centerId;
+      studentsByProgramMatch.centerId = centerId;
+      studentPerformanceMatch.centerId = centerId;
+      inactiveUsersQuery['centers.centerId'] = centerId;
+      staffByDeptMatch.centerId = centerId;
+      recentUsersQuery['centers.centerId'] = centerId;
+      activeBatchesQuery.centerId = centerId;
+    }
+    if (batchCodesForCenter) {
+      studentByBatchMatch.batchCode = { $in: batchCodesForCenter };
+      todayAttendanceQuery.batchCode = { $in: batchCodesForCenter };
+      ptmCountQuery.batchCode = { $in: batchCodesForCenter };
+      schoolExamMatch.batchCode = { $in: batchCodesForCenter };
+      upcomingPtmsQuery.batchCode = { $in: batchCodesForCenter };
+      upcomingActivitiesQuery.batchCode = { $in: batchCodesForCenter };
+      currentAttQuery.batchCode = { $in: batchCodesForCenter };
+      prevAttQuery.batchCode = { $in: batchCodesForCenter };
+      todayPeriodAttendanceQuery.batchCode = { $in: batchCodesForCenter };
+    }
+    if (batchIdsForCenter) {
+      mockExamPerfMatch.batchId = { $in: batchIdsForCenter };
+      assignPerfMatch.batchId = { $in: batchIdsForCenter };
+    }
+
     const [
       studentByBatch,
       staffData,
@@ -673,64 +765,60 @@ const getDashboardSummary = async (req, res, next) => {
       activeBatches,
       todayPeriodAttendance
     ] = await Promise.all([
-      StudentProfile.aggregate([{ $match: { tenantId, isdeleted: false, status: 'ACTIVE', batchCode: { $ne: null } } }, { $group: { _id: '$batchCode', count: { $sum: 1 } } }, { $sort: { count: -1 } }, { $project: { _id: 0, batchCode: '$_id', count: 1 } }]),
-      Staff_model.aggregate([{ $match: { tenantId, isdeleted: false, status: 'Active' } }, { $group: { _id: '$facultyType', count: { $sum: 1 } } }]),
-      Promise.all([User.countDocuments({ tenantId, isdeleted: false, status: 'Active' }), User.countDocuments({ tenantId, isdeleted: false, status: 'Active', $or: [{ lastLoginAt: null }, { lastLoginAt: { $lt: new Date(threeDaysAgo) } }] })]),
-      Batch.countDocuments({ tenantId, isdeleted: false, status: 'ACTIVE' }),
-      SchoolAttendance.find({ tenantId, date: { $gte: todayMs, $lt: todayMs + 86400000 }, isdeleted: false }).lean(),
-      PTM.countDocuments({ tenantId, ptmDate: { $gte: todayMs }, status: { $in: ['SCHEDULED', 'COMPLETED'] }, isdeleted: false }),
+      StudentProfile.aggregate([{ $match: studentByBatchMatch }, { $group: { _id: '$batchCode', count: { $sum: 1 } } }, { $sort: { count: -1 } }, { $project: { _id: 0, batchCode: '$_id', count: 1 } }]),
+      Staff_model.aggregate([{ $match: staffMatch }, { $group: { _id: '$facultyType', count: { $sum: 1 } } }]),
+      Promise.all([User.countDocuments(userMatch), User.countDocuments({ ...userMatch, $or: [{ lastLoginAt: null }, { lastLoginAt: { $lt: new Date(threeDaysAgo) } }] })]),
+      Batch.countDocuments(batchCountQuery),
+      SchoolAttendance.find(todayAttendanceQuery).lean(),
+      PTM.countDocuments(ptmCountQuery),
       StudentProfile.aggregate([
-        { $match: { tenantId, isdeleted: false, status: 'ACTIVE' } },
+        { $match: studentsByProgramMatch },
         { $group: { _id: { programId: '$programId', programName: '$programName', programCode: '$programCode' }, count: { $sum: 1 } } },
         { $sort: { count: -1 } },
         { $project: { _id: 0, programId: '$_id.programId', programName: { $ifNull: ['$_id.programName', 'Unknown'] }, programCode: { $ifNull: ['$_id.programCode', ''] }, count: 1 } }
       ]),
       MockExamResult.aggregate([
-        { $match: { tenantId, isdeleted: false, batchId: { $ne: null } } },
+        { $match: mockExamPerfMatch },
         { $group: { _id: '$batchId', avgObtained: { $avg: '$obtainedMarks' }, avgTotal: { $avg: '$totalMarks' }, studentCount: { $addToSet: '$admissionNo' } } },
         { $project: { _id: 0, batchId: '$_id', avgExamScore: { $cond: [{ $gt: ['$avgTotal', 0] }, { $round: [{ $multiply: [{ $divide: ['$avgObtained', '$avgTotal'] }, 100] }, 1] }, 0] }, studentCount: { $size: '$studentCount' } } }
       ]),
-      AssignmentResult.aggregate([{ $match: { tenantId, isdeleted: false, batchId: { $ne: null } } }, { $group: { _id: '$batchId', avgCgpa: { $avg: '$cgpa' } } }, { $project: { _id: 0, batchId: '$_id', avgAssignmentScore: { $round: [{ $multiply: ['$avgCgpa', 10] }, 1] } } }]),
+      AssignmentResult.aggregate([{ $match: assignPerfMatch }, { $group: { _id: '$batchId', avgCgpa: { $avg: '$cgpa' } } }, { $project: { _id: 0, batchId: '$_id', avgAssignmentScore: { $round: [{ $multiply: ['$avgCgpa', 10] }, 1] } } }]),
       SchoolExamLog.aggregate([
-        { $match: { tenantId, isdeleted: false, batchCode: { $ne: null } } },
+        { $match: schoolExamMatch },
         { $unwind: '$results' },
         { $group: { _id: '$batchCode', avgTotal: { $avg: '$results.totalMarks' }, studentCount: { $addToSet: '$results.studentId' } } },
         { $project: { _id: 0, batchCode: '$_id', avgSchoolExamScore: { $round: ['$avgTotal', 1] }, studentCount: { $size: '$studentCount' } } }
       ]),
       StudentPerformance.aggregate([
-        { $match: { tenantId, isdeleted: false } },
+        { $match: studentPerformanceMatch },
         { $group: { _id: '$studentId', admissionNo: { $first: '$admissionNo' }, batchId: { $first: '$batchId' }, score: { $avg: { $cond: [{ $gt: [{ $ifNull: ['$combinedScore', 0] }, 0] }, '$combinedScore', { $multiply: [{ $ifNull: ['$assignment.cgpa', 0] }, 10] }] } } } },
         { $sort: { score: -1 } },
         { $limit: 5 },
         { $project: { _id: 0, studentId: '$_id', admissionNo: 1, batchId: 1, score: { $round: ['$score', 1] } } }
       ]),
-      User.find({ tenantId, isdeleted: false, status: 'Active', $or: [{ lastLoginAt: null }, { lastLoginAt: { $lt: new Date(threeDaysAgo) } }] }, { userId: 1, name: 1, email: 1, roleLevel: 1, roleLabel: 1, centerId: 1, centerName: 1, lastLoginAt: 1 })
+      User.find(inactiveUsersQuery, { userId: 1, name: 1, email: 1, roleLevel: 1, roleLabel: 1, centers: 1, lastLoginAt: 1 })
         .sort({ lastLoginAt: 1 })
         .limit(10)
         .lean(),
-      PTM.find({ tenantId, ptmDate: { $gte: todayMs }, status: { $in: ['SCHEDULED', 'COMPLETED'] }, isdeleted: false }, { ptmId: 1, studentName: 1, admissionNo: 1, batchCode: 1, ptmDate: 1, startTime: 1, status: 1 })
+      PTM.find(upcomingPtmsQuery, { ptmId: 1, studentName: 1, admissionNo: 1, batchCode: 1, ptmDate: 1, startTime: 1, status: 1 })
         .sort({ ptmDate: 1, startTime: 1 })
         .limit(5)
         .lean(),
-      Activity.find({ tenantId, startDate: { $gte: todayMs }, status: { $in: ['PLANNED', 'IN_PROGRESS'] }, isdeleted: false }, { activityId: 1, activityName: 1, batchCode: 1, startDate: 1, endDate: 1, status: 1, remarks: 1 })
+      Activity.find(upcomingActivitiesQuery, { activityId: 1, activityName: 1, batchCode: 1, startDate: 1, endDate: 1, status: 1, remarks: 1 })
         .sort({ startDate: 1 })
         .limit(5)
         .lean(),
       Staff_model.aggregate([
-        { $match: { tenantId, isdeleted: false, status: 'Active' } },
+        { $match: staffByDeptMatch },
         { $group: { _id: '$department', count: { $sum: 1 }, teaching: { $sum: { $cond: [{ $eq: ['$facultyType', 'TEACHING'] }, 1, 0] } }, nonTeaching: { $sum: { $cond: [{ $eq: ['$facultyType', 'NON_TEACHING'] }, 1, 0] } } } },
         { $sort: { count: -1 } }
       ]),
-      User.find({ tenantId, isdeleted: false }, { userId: 1, name: 1, email: 1, roleLevel: 1, roleLabel: 1, status: 1, lastLoginAt: 1, createdAt: 1, centerId: 1, centerName: 1 }).sort({ createdAt: -1 }).limit(5).lean(),
-      SchoolAttendance.find({ tenantId, date: { $gte: from, $lte: to }, isdeleted: false }).lean(),
-      SchoolAttendance.find({ tenantId, date: { $gte: prevFrom, $lte: prevTo }, isdeleted: false }).lean(),
+      User.find(recentUsersQuery, { userId: 1, name: 1, email: 1, roleLevel: 1, roleLabel: 1, status: 1, lastLoginAt: 1, createdAt: 1, centers: 1 }).sort({ createdAt: -1 }).limit(5).lean(),
+      SchoolAttendance.find(currentAttQuery).lean(),
+      SchoolAttendance.find(prevAttQuery).lean(),
       MockExamQns.countDocuments({ tenantId, isdeleted: false }),
-      Batch.find({ tenantId, isdeleted: false, status: 'ACTIVE' }, { batchCode: 1 }).lean(),
-      Attendance.find({
-        tenantId,
-        date: { $gte: todayMs, $lt: todayMs + 86400000 },
-        isdeleted: false
-      }).lean()
+      Batch.find(activeBatchesQuery, { batchCode: 1 }).lean(),
+      Attendance.find(todayPeriodAttendanceQuery).lean()
     ]);
     const staffBreakdown = { TEACHING: 0, NON_TEACHING: 0, total: 0 };
     staffData.forEach(({ _id, count }) => {
@@ -868,8 +956,7 @@ const getDashboardSummary = async (req, res, next) => {
       email: u.email,
       roleLevel: u.roleLevel,
       roleLabel: u.roleLabel,
-      centerId: u.centerId || null,
-      centerName: u.centerName || null,
+      centers: u.centers || [],
       lastLoginAt: u.lastLoginAt || null,
       neverLoggedIn: !u.lastLoginAt,
       daysSinceLogin: u.lastLoginAt ? Math.floor((Date.now() - new Date(u.lastLoginAt).getTime()) / 86400000) : null,
@@ -942,8 +1029,7 @@ const getDashboardSummary = async (req, res, next) => {
           roleLabel: u.roleLabel,
           status: u.status,
           lastLoginAt: u.lastLoginAt || null,
-          centerId: u.centerId || null,
-          centerName: u.centerName || null,
+          centers: u.centers || [],
           avatar: (u.name || '')
             .split(' ')
             .slice(0, 2)

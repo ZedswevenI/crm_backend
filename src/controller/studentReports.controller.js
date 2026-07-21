@@ -384,12 +384,15 @@ const getStudentAttendanceBulkReport = async (req, res, next) => {
     }
     const fromDate = toInt(req.body?.fromDate, 0);
     const toDate = toInt(req.body?.toDate, 0);
+    const centerId = safeTrim(req.body?.centerId);
+    const studentQuery = {
+      tenantId,
+      admissionNo: { $in: admissionNos },
+      isdeleted: false
+    };
+    if (centerId) studentQuery.centerId = centerId;
     const students = await StudentProfile.find(
-      {
-        tenantId,
-        admissionNo: { $in: admissionNos },
-        isdeleted: false
-      },
+      studentQuery,
       {
         studentId: 1,
         admissionNo: 1,
@@ -522,14 +525,14 @@ const getStudentRemarksBulkReport = async (req, res, next) => {
     const toDate = toInt(req.body?.toDate, 0);
     const filterType = safeTrim(req.body?.type || '');
     const filterStatus = safeTrim(req.body?.status || '');
-    const students = await StudentProfile.find(
-      {
-        tenantId,
-        admissionNo: { $in: admissionNos },
-        isdeleted: false
-      },
-      { studentId: 1, admissionNo: 1, batchCode: 1, 'student.name': 1 }
-    ).lean();
+    const centerId = safeTrim(req.body?.centerId);
+    const remarksStudentQuery = {
+      tenantId,
+      admissionNo: { $in: admissionNos },
+      isdeleted: false
+    };
+    if (centerId) remarksStudentQuery.centerId = centerId;
+    const students = await StudentProfile.find(remarksStudentQuery, { studentId: 1, admissionNo: 1, batchCode: 1, 'student.name': 1 }).lean();
     const studentMap = new Map(students.map((s) => [s.admissionNo, s]));
     const remarkQuery = { tenantId, admissionNo: { $in: admissionNos }, isdeleted: false };
     if (filterType) remarkQuery.type = filterType;
@@ -597,16 +600,16 @@ const getStudentLateEntriesBulkReport = async (req, res, next) => {
     const fromDate = toInt(req.body?.fromDate, 0);
     const toDate = toInt(req.body?.toDate, 0);
     const filterEntryType = safeTrim(req.body?.entryType || '');
+    const centerId = safeTrim(req.body?.centerId);
 
     // Fetch students
-    const students = await StudentProfile.find(
-      {
-        tenantId,
-        admissionNo: { $in: admissionNos },
-        isdeleted: false
-      },
-      { studentId: 1, admissionNo: 1, batchCode: 1, 'student.name': 1 }
-    ).lean();
+    const lateStudentQuery = {
+      tenantId,
+      admissionNo: { $in: admissionNos },
+      isdeleted: false
+    };
+    if (centerId) lateStudentQuery.centerId = centerId;
+    const students = await StudentProfile.find(lateStudentQuery, { studentId: 1, admissionNo: 1, batchCode: 1, 'student.name': 1 }).lean();
 
     const studentMap = new Map(students.map((s) => [s.admissionNo, s]));
     const studentIds = students.map((s) => s.studentId).filter(Boolean);

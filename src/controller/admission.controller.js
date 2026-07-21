@@ -707,7 +707,9 @@ const listAdmissions = async (req, res, next) => {
     const admissionNo = safeTrim(q.admissionNo);
     const search = safeTrim(q.search);
     const statusFilter = safeTrim(q.status).toLowerCase();
+    const centerId = safeTrim(q.centerId || req.body?.centerId);
     const query = { tenantId, isdeleted: false };
+    if (centerId) query.centerId = centerId;
     if (safeTrim(q.includeInactive).toLowerCase() !== 'yes') {
       query.status = 'Active';
     }
@@ -1189,6 +1191,7 @@ const listConfirmedAdmissionsWithoutProfile = async (req, res, next) => {
     const limitNum = Math.min(Math.max(parseInt(req.query.limit || '20', 10), 1), 200);
     const skip = (pageNum - 1) * limitNum;
     const search = safeTrim(req.query.search);
+    const centerId = safeTrim(req.query.centerId || req.body?.centerId);
     const match = {
       tenantId,
       isdeleted: false,
@@ -1196,6 +1199,7 @@ const listConfirmedAdmissionsWithoutProfile = async (req, res, next) => {
       'workflow.stage': 'CONFIRMED',
       admissionNo: { $ne: null }
     };
+    if (centerId) match.centerId = centerId;
     if (search) {
       const rx = new RegExp(escapeRegex(search), 'i');
       match.$or = [{ admissionNo: rx }, { registrationNumber: rx }, { 'student.name': rx }, { 'student.phone': rx }];
