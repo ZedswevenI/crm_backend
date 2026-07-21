@@ -60,7 +60,7 @@ const listCheques = async (req, res, next) => {
     const search = safeTrim(q.search);
     const status = safeTrim(q.status).toUpperCase();
     const mode = safeTrim(q.mode).toUpperCase();
-    const centerId = safeTrim(q.centerId);
+    const centerId = safeTrim(q.centerId || req.body?.centerId);
     const programCode = safeTrim(q.programCode);
     const fromDueRaw = q.fromDue;
     const toDueRaw = q.toDue;
@@ -1130,7 +1130,7 @@ const listPayments = async (req, res, next) => {
     const toPaid = safeTrim(q.toPaid);
     const fromDeposit = safeTrim(q.fromDeposit);
     const toDeposit = safeTrim(q.toDeposit);
-    const centerId = safeTrim(q.centerId);
+    const centerId = safeTrim(q.centerId || req.body?.centerId);
     const programCode = safeTrim(q.programCode);
     const academicYear = safeTrim(q.academicYear);
     const query = { tenantId, isdeleted: false };

@@ -15,6 +15,7 @@ import ExamCategory from '../models/examcategory.model.js';
 import ExamSubCategory from '../models/examsubcategory.model.js';
 import Topic from '../models/topic.model.js';
 import SubTopic from '../models/subtopic.model.js';
+import Program from '../models/program.model.js';
 import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -110,14 +111,30 @@ const resolveBatch = async (tenantId, batchId, batchCode) => {
   return Batch.findOne(q).lean();
 };
 
-const pickBatchIds = (req) => {
+const pickBatchIds = async (req) => {
   const arr = req.body?.batchIds;
-  return Array.isArray(arr) && arr.length ? arr.map(safeTrim).filter(Boolean) : [];
+  let batchIds = Array.isArray(arr) && arr.length ? arr.map(safeTrim).filter(Boolean) : [];
+  const centerId = safeTrim(req.body?.centerId);
+  if (centerId) {
+    const tenantId = pickTid(req);
+    const centerBatches = await Batch.find({ tenantId, centerId, isdeleted: false }, { batchId: 1 }).lean();
+    const centerBatchIds = new Set(centerBatches.map((b) => b.batchId));
+    batchIds = batchIds.length ? batchIds.filter((id) => centerBatchIds.has(id)) : [...centerBatchIds];
+  }
+  return batchIds;
 };
 
-const pickBatchCodes = (req) => {
+const pickBatchCodes = async (req) => {
   const arr = req.body?.batchCodes;
-  return Array.isArray(arr) && arr.length ? arr.map(safeTrim).filter(Boolean) : [];
+  let batchCodes = Array.isArray(arr) && arr.length ? arr.map(safeTrim).filter(Boolean) : [];
+  const centerId = safeTrim(req.body?.centerId);
+  if (centerId) {
+    const tenantId = pickTid(req);
+    const centerBatches = await Batch.find({ tenantId, centerId, isdeleted: false }, { batchCode: 1 }).lean();
+    const centerBatchCodes = new Set(centerBatches.map((b) => b.batchCode));
+    batchCodes = batchCodes.length ? batchCodes.filter((c) => centerBatchCodes.has(c)) : [...centerBatchCodes];
+  }
+  return batchCodes;
 };
 
 const applyBatchIdFilter = (query, batchIds) => {
@@ -133,7 +150,7 @@ const applyBatchCodeFilter = (query, batchCodes) => {
 const getStudentListReport = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
-    const batchIds = pickBatchIds(req);
+    const batchIds = await pickBatchIds(req);
     const search = safeTrim(req.body?.search || '');
     const status = safeTrim(req.body?.status || 'ACTIVE');
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
@@ -175,7 +192,7 @@ const getStudentListReport = async (req, res, next) => {
 const getStaffListReport = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
-    const stBatchIds = pickBatchIds(req);
+    const stBatchIds = await pickBatchIds(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
     const batchQuery = { tenantId, isdeleted: false };
     if (stBatchIds.length) batchQuery.batchId = { $in: stBatchIds };
@@ -221,7 +238,7 @@ const getLateEntryReport = async (req, res, next) => {
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
     if (!fromDate) return res.status(400).json({ status: false, message: 'fromDate is required' });
     if (!toDate) return res.status(400).json({ status: false, message: 'toDate is required' });
-    const batchCodes = pickBatchCodes(req);
+    const batchCodes = await pickBatchCodes(req);
     const query = { tenantId, isdeleted: false, date: { $gte: fromDate, $lte: toDate } };
     applyBatchCodeFilter(query, batchCodes);
     if (type && ['STAFF', 'STUDENT'].includes(type.toUpperCase())) query.type = type.toUpperCase();
@@ -293,7 +310,7 @@ const getTimetableReport = async (req, res, next) => {
       weekStarts.add(getPreviousMonday(curr));
       curr += msPerDay;
     }
-    const batchCodes = pickBatchCodes(req);
+    const batchCodes = await pickBatchCodes(req);
     const ttQuery = { tenantId, wkStartOn: { $in: [...weekStarts] }, status: 'Active', isdeleted: false };
     applyBatchCodeFilter(ttQuery, batchCodes);
     const timetables = await TimeTable.find(ttQuery).lean();
@@ -643,7 +660,7 @@ const getPhaseAllotmentReport = async (req, res, next) => {
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
     const batch = batchId || batchCode ? await resolveBatch(tenantId, batchId, batchCode) : null;
     if ((batchId || batchCode) && !batch) return res.status(404).json({ status: false, message: 'Batch not found' });
-    const paBatchIds = pickBatchIds(req);
+    const paBatchIds = await pickBatchIds(req);
     const paBatches = paBatchIds.length ? await Batch.find({ tenantId, batchId: { $in: paBatchIds }, isdeleted: false }).lean() : batch ? [batch] : null;
     const ttFilter = { tenantId, isdeleted: false, status: 'Active' };
     if (paBatches)
@@ -883,7 +900,7 @@ const getAssignmentCompletionReport = async (req, res, next) => {
     const batch = batchId || batchCode ? await resolveBatch(tenantId, batchId, batchCode) : null;
     if ((batchId || batchCode) && !batch) return res.status(404).json({ status: false, message: 'Batch not found' });
 
-    const abBatchIds = pickBatchIds(req);
+    const abBatchIds = await pickBatchIds(req);
     const query = { tenantId, isdeleted: false, status: 'enabled' };
     applyBatchIdFilter(query, abBatchIds);
     if (subjectId) query.subjectId = subjectId;
@@ -975,7 +992,7 @@ const getExamCompletionReport = async (req, res, next) => {
     const batch = batchId || batchCode ? await resolveBatch(tenantId, batchId, batchCode) : null;
     if ((batchId || batchCode) && !batch) return res.status(404).json({ status: false, message: 'Batch not found' });
 
-    const exBatchIds = pickBatchIds(req);
+    const exBatchIds = await pickBatchIds(req);
     const assignQuery = { tenantId, isdeleted: false };
     applyBatchIdFilter(assignQuery, exBatchIds);
     const assigns = await MockExamBatchAssign.find(assignQuery).lean();
@@ -1346,7 +1363,7 @@ const getSubjectHoursReport = async (req, res, next) => {
     const toDate = toInt(req.body?.toDate, 0);
     const batch = batchId || batchCode ? await resolveBatch(tenantId, batchId, batchCode) : null;
     if ((batchId || batchCode) && !batch) return res.status(404).json({ status: false, message: 'Batch not found' });
-    const shBatchIds = pickBatchIds(req);
+    const shBatchIds = await pickBatchIds(req);
     const shBatches = shBatchIds.length ? await Batch.find({ tenantId, batchId: { $in: shBatchIds }, isdeleted: false }).lean() : batch ? [batch] : null;
     const shTtQuery = { tenantId, isdeleted: false, status: 'Active' };
     if (shBatches)
@@ -1590,7 +1607,7 @@ const getFeedbackReport = async (req, res, next) => {
     const fromDate = toInt(req.body?.fromDate, 0);
     const toDate = toInt(req.body?.toDate, 0);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-    const fbBatchCodes = pickBatchCodes(req);
+    const fbBatchCodes = await pickBatchCodes(req);
     const query = { tenantId, isdeleted: false };
     applyBatchCodeFilter(query, fbBatchCodes);
     if (fromDate) query.ptmDate = { $gte: fromDate };
@@ -1690,7 +1707,7 @@ const getBatchPtmReport = async (req, res, next) => {
     const toDate = toInt(req.body?.toDate, 0);
     const status = safeTrim(req.body?.status || '');
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-    const ptmBatchCodes = pickBatchCodes(req);
+    const ptmBatchCodes = await pickBatchCodes(req);
     const query = { tenantId, isdeleted: false };
     applyBatchCodeFilter(query, ptmBatchCodes);
     if (fromDate) query.ptmDate = { $gte: fromDate };
@@ -1788,7 +1805,7 @@ const getCgpaReport = async (req, res, next) => {
     const tenantId = pickTid(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
 
-    const cgBatchIds = pickBatchIds(req);
+    const cgBatchIds = await pickBatchIds(req);
     const subjectId = safeTrim(req.body?.subjectId || '');
 
     // Fetch batch docs for names
@@ -1952,7 +1969,7 @@ const getSlashReport = async (req, res, next) => {
     const tenantId = pickTid(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
 
-    const slBatchIds = pickBatchIds(req);
+    const slBatchIds = await pickBatchIds(req);
     const subjectId = safeTrim(req.body?.subjectId || '');
 
     // Fetch batch docs for names
@@ -1996,19 +2013,59 @@ const getSlashReport = async (req, res, next) => {
     ).lean();
     const subjectDocMap = new Map(subjectDocs.map((s) => [String(s._id), s]));
 
-    // Group by batchId + subjectId
-    // key: `${batchId}::${subjectId}`
+    // ── Fetch Assignment meta for category/subcategory ──
+    const testIdsForCat = [...new Set(enabledRows.map((r) => safeTrim(r.testId)).filter(Boolean))];
+    const catAssignments = await Assignment.find({ tenantId, testId: { $in: testIdsForCat }, isdeleted: false }, { testId: 1, categoryId: 1, subCategoryId: 1 }).lean();
+    const testCatMap = new Map(catAssignments.map((a) => [a.testId, a]));
+
+    const categoryIds = [...new Set(catAssignments.map((a) => safeTrim(a.categoryId)).filter(Boolean))];
+    const subCategoryIds = [...new Set(catAssignments.map((a) => safeTrim(a.subCategoryId)).filter(Boolean))];
+    const [catDocs, subCatDocs] = await Promise.all([
+      ExamCategory.find({ tenantId, categoryId: { $in: categoryIds }, isdeleted: false }, { categoryId: 1, categoryName: 1 }).lean(),
+      ExamSubCategory.find({ tenantId, subCategoryId: { $in: subCategoryIds }, isdeleted: false }, { subCategoryId: 1, subCategoryName: 1, sortOrder: 1 }).lean()
+    ]);
+    const catMap = new Map(catDocs.map((c) => [c.categoryId, c]));
+    const subCatMap = new Map(subCatDocs.map((s) => [s.subCategoryId, s]));
+
+    // ── Program-specific category/subcategory sort order (mirrors getAssignmentReport) ──
+    const programIds = [...new Set(batches.map((b) => safeTrim(b.programId)).filter(Boolean))];
+    const programDocs = programIds.length ? await Program.find({ tenantId, programId: { $in: programIds }, isdeleted: false }, { programId: 1, examMappings: 1 }).lean() : [];
+    const programSortMap = new Map(); // programId → Map("catId::subCatId" → sortOrder)
+    for (const p of programDocs) {
+      const m = new Map();
+      for (const em of p.examMappings || []) {
+        const key = `${safeTrim(em.categoryId)}::${safeTrim(em.subCategoryId)}`;
+        m.set(key, Number.isFinite(Number(em.sortOrder)) ? Number(em.sortOrder) : 0);
+      }
+      programSortMap.set(p.programId, m);
+    }
+    const resolveSortOrder = (programId, catId, subCatId) => {
+      const progMap = programSortMap.get(programId);
+      const key = `${catId}::${subCatId}`;
+      if (progMap && progMap.has(key)) return progMap.get(key);
+      const subCat = subCatMap.get(subCatId) || {};
+      return subCat.sortOrder || 0;
+    };
+
+    // Group by batchId + subjectId + categoryId + subCategoryId
+    // key: `${batchId}::${subjectId}::${categoryId}::${subCategoryId}`
     const groupMap = new Map();
 
     for (const row of enabledRows) {
       const bid = safeTrim(row.batchId);
       const sid = safeTrim(row.subjectId);
-      const key = `${bid}::${sid}`;
+      const testId = safeTrim(row.testId);
+      const asg = testCatMap.get(testId) || {};
+      const catId = safeTrim(asg.categoryId) || '';
+      const subCatId = safeTrim(asg.subCategoryId) || '';
+      const key = `${bid}::${sid}::${catId}::${subCatId}`;
 
       if (!groupMap.has(key)) {
         groupMap.set(key, {
           batchId: bid,
           subjectId: sid,
+          categoryId: catId,
+          subCategoryId: subCatId,
           testIds: new Set(),
           // studentId → { testIds completed }
           studentTestMap: new Map()
@@ -2016,7 +2073,6 @@ const getSlashReport = async (req, res, next) => {
       }
 
       const grp = groupMap.get(key);
-      const testId = safeTrim(row.testId);
       if (testId) grp.testIds.add(testId);
 
       // Track per-student per-test status
@@ -2045,6 +2101,8 @@ const getSlashReport = async (req, res, next) => {
     for (const [key, grp] of groupMap.entries()) {
       const batch = batchMap.get(grp.batchId) || {};
       const subDoc = subjectDocMap.get(grp.subjectId) || {};
+      const cat = catMap.get(grp.categoryId) || {};
+      const subCat = subCatMap.get(grp.subCategoryId) || {};
       const availableTests = grp.testIds.size;
       const allStudents = Array.from(grp.studentTestMap.values());
       const totalStudents = allStudents.length;
@@ -2065,6 +2123,11 @@ const getSlashReport = async (req, res, next) => {
         subjectId: grp.subjectId,
         subjectName: subDoc.subjectName || null,
         subjectCode: subDoc.subjectCode || null,
+        categoryId: grp.categoryId || null,
+        categoryName: cat.categoryName || null,
+        subCategoryId: grp.subCategoryId || null,
+        subCategoryName: subCat.subCategoryName || null,
+        sortOrder: resolveSortOrder(batch.programId, grp.categoryId, grp.subCategoryId),
         availableTests,
         totalStudents,
         fullyCompleted,
@@ -2074,10 +2137,11 @@ const getSlashReport = async (req, res, next) => {
       });
     }
 
-    // Sort by batchCode then subjectName
+    // Sort by batchCode → sortOrder → subjectName
     data.sort((a, b) => {
       const bc = (a.batchCode || '').localeCompare(b.batchCode || '');
       if (bc !== 0) return bc;
+      if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
       return (a.subjectName || '').localeCompare(b.subjectName || '');
     });
 
@@ -2103,7 +2167,7 @@ const getSubjectsByBatch = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-    const batchCodes = Array.isArray(req.body?.batchCodes) ? req.body.batchCodes.map(safeTrim).filter(Boolean) : [];
+    const batchCodes = await pickBatchCodes(req);
     const ttQuery = { tenantId, isdeleted: false, status: 'Active' };
     if (batchCodes.length) applyBatchCodeFilter(ttQuery, batchCodes);
     const timetables = await TimeTable.find(ttQuery, { week: 1 }).lean();
@@ -2409,7 +2473,7 @@ const getSlashDetailReport = async (req, res, next) => {
     const tenantId = pickTid(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
 
-    const batchIds = pickBatchIds(req);
+    const batchIds = await pickBatchIds(req);
     if (!batchIds.length) return res.status(400).json({ status: false, message: 'batchIds[] is required' });
 
     const filterSubjectId = safeTrim(req.body?.subjectId || '');
@@ -2597,7 +2661,7 @@ const getAssignmentReport = async (req, res, next) => {
     const filterSubjectId = safeTrim(req.body?.subjectId || '');
     const admissionNos = Array.isArray(req.body?.admissionNos) ? req.body.admissionNos.map(safeTrim).filter(Boolean) : [];
 
-    const batchIds = pickBatchIds(req);
+    const batchIds = await pickBatchIds(req);
     if (!batchIds.length) return res.status(400).json({ status: false, message: 'batchIds[] is required' });
 
     // ── Fetch batches ──
@@ -2634,6 +2698,29 @@ const getAssignmentReport = async (req, res, next) => {
     ]);
     const catMap = new Map(catDocs.map((c) => [c.categoryId, c]));
     const subCatMap = new Map(subCatDocs.map((s) => [s.subCategoryId, s]));
+
+    // ── Program-specific category/subcategory sort order (mirrors student.controller.js getAllClassSubjectTopics) ──
+    const programIds = [...new Set(batches.map((b) => safeTrim(b.programId)).filter(Boolean))];
+    const programDocs = programIds.length ? await Program.find({ tenantId, programId: { $in: programIds }, isdeleted: false }, { programId: 1, examMappings: 1 }).lean() : [];
+    const programSortMap = new Map(); // programId → Map("catId::subCatId" → sortOrder)
+    for (const p of programDocs) {
+      const m = new Map();
+      for (const em of p.examMappings || []) {
+        const key = `${safeTrim(em.categoryId)}::${safeTrim(em.subCategoryId)}`;
+        m.set(key, Number.isFinite(Number(em.sortOrder)) ? Number(em.sortOrder) : 0);
+      }
+      programSortMap.set(p.programId, m);
+    }
+    // Resolve sortOrder for a category/subcategory combo, scoped to a specific program.
+    // Falls back to the subcategory's own global sortOrder if the program has no explicit mapping for it.
+    const resolveSortOrder = (programId, catId, subCatId) => {
+      const progMap = programSortMap.get(programId);
+      const key = `${catId}::${subCatId}`;
+      if (progMap && progMap.has(key)) return progMap.get(key);
+      const subCat = subCatMap.get(subCatId) || {};
+      return subCat.sortOrder || 0;
+    };
+
     const subjectIds = [...new Set(enabledRows.map((r) => safeTrim(r.subjectId)).filter(Boolean))];
     const subjectDocs = await Subject.find(
       {
@@ -2713,12 +2800,12 @@ const getAssignmentReport = async (req, res, next) => {
               catName: cat.categoryName || catId,
               subCatName: subCat.subCategoryName || subCatId,
               colLabel: buildColLabel(catId, subCatId),
-              sortOrder: subCat.sortOrder || 0
+              sortOrder: resolveSortOrder(batch.programId, catId, subCatId)
             });
           }
         }
 
-        // Sort columns by subcategory sortOrder
+        // Sort columns by the batch's program-mapped sortOrder
         const columns = Array.from(colKeySet.values()).sort((a, b) => a.sortOrder - b.sortOrder);
 
         // Build testId → colKey map
@@ -2821,7 +2908,8 @@ const getAssignmentReport = async (req, res, next) => {
             colKey: c.colKey,
             colLabel: c.colLabel,
             catName: c.catName,
-            subCatName: c.subCatName
+            subCatName: c.subCatName,
+            sortOrder: c.sortOrder
           })),
           students: studentRows,
           batchAverage: avgRow,
@@ -2868,9 +2956,12 @@ const getAssignmentReport = async (req, res, next) => {
           const stuData = (row.students || []).find((s) => safeTrim(s.admissionNo) === admNo);
           const cgpa = stuData?.status === 'COMPLETED' && stuData?.cgpa !== null ? round2(Number(stuData.cgpa)) : 0;
           const status = stuData?.status || 'NOT_ASSIGNED';
-          const cat = catMap.get(safeTrim(asg.categoryId)) || {};
-          const subCat = subCatMap.get(safeTrim(asg.subCategoryId)) || {};
+          const catId = safeTrim(asg.categoryId);
+          const subCatId = safeTrim(asg.subCategoryId);
+          const cat = catMap.get(catId) || {};
+          const subCat = subCatMap.get(subCatId) || {};
           const subDoc = subjectDocMap.get(String(asg.subjectId)) || {};
+          const studentProgramId = batchMap.get(student.batchId)?.programId;
 
           testRows.push({
             testId,
@@ -2881,14 +2972,16 @@ const getAssignmentReport = async (req, res, next) => {
             subTopicName: subTopicMap.get(safeTrim(asg.subTopicId)) || null,
             categoryName: cat.categoryName || null,
             subCategoryName: subCat.subCategoryName || null,
-            colLabel: buildColLabel(safeTrim(asg.categoryId), safeTrim(asg.subCategoryId)),
+            colLabel: buildColLabel(catId, subCatId),
+            sortOrder: resolveSortOrder(studentProgramId, catId, subCatId),
             cgpa,
             status
           });
         }
 
-        // Sort by subject → topic
+        // Sort by the student's batch-program-mapped sortOrder, then subject → topic as a tiebreaker
         testRows.sort((a, b) => {
+          if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
           const s = (a.subjectName || '').localeCompare(b.subjectName || '');
           if (s !== 0) return s;
           return (a.topicName || '').localeCompare(b.topicName || '');

@@ -1043,11 +1043,16 @@ const listAllStaffPerf = async (req, res, next) => {
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
     const search = safeTrim(req.body?.search);
     const staffType = safeTrim(req.body?.staffType);
+    const centerId = safeTrim(req.body?.centerId);
     const page = Math.max(toInt(req.body?.page, 1), 1);
     const limit = Math.min(Math.max(toInt(req.body?.limit, 20), 1), 200);
     const skip = (page - 1) * limit;
     const matchBase = { tenantId, isdeleted: false };
     if (staffType) matchBase.staffType = staffType;
+    if (centerId) {
+      const staffIdsForCenter = (await Staff.find({ tenantId, centerId, isdeleted: false }, { staffId: 1 }).lean()).map((s) => s.staffId);
+      matchBase.staffId = { $in: staffIdsForCenter };
+    }
     if (search) {
       const rx = new RegExp(escapeRx(search), 'i');
       matchBase.$or = [{ staffName: rx }, { staffCode: rx }];
