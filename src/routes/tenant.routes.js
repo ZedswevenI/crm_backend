@@ -150,6 +150,7 @@ routes.post('/ptm/list', validatetoken, programCtrl.listPtmSessions);
 routes.post('/ptm/view', programCtrl.viewPTM);
 routes.post('/ptm/update', validatetoken, programCtrl.editPTM);
 routes.post('/ptm/remove', validatetoken, programCtrl.removePTM);
+routes.post('/ptm/session/remove', validatetoken, programCtrl.removePtmSession);
 routes.post('/ptm/togglepostfeedback', validatetoken, programCtrl.togglePostPtmFeedback);
 routes.post('/ptm/student/add', validatetoken, programCtrl.addStudentsToPTM);
 routes.post('/ptm/student/remove', validatetoken, programCtrl.removeStudentsFromPTM);

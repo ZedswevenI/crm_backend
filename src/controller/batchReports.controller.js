@@ -15,6 +15,7 @@ import ExamCategory from '../models/examcategory.model.js';
 import ExamSubCategory from '../models/examsubcategory.model.js';
 import Topic from '../models/topic.model.js';
 import SubTopic from '../models/subtopic.model.js';
+import Program from '../models/program.model.js';
 import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -2012,19 +2013,59 @@ const getSlashReport = async (req, res, next) => {
     ).lean();
     const subjectDocMap = new Map(subjectDocs.map((s) => [String(s._id), s]));
 
-    // Group by batchId + subjectId
-    // key: `${batchId}::${subjectId}`
+    // ── Fetch Assignment meta for category/subcategory ──
+    const testIdsForCat = [...new Set(enabledRows.map((r) => safeTrim(r.testId)).filter(Boolean))];
+    const catAssignments = await Assignment.find({ tenantId, testId: { $in: testIdsForCat }, isdeleted: false }, { testId: 1, categoryId: 1, subCategoryId: 1 }).lean();
+    const testCatMap = new Map(catAssignments.map((a) => [a.testId, a]));
+
+    const categoryIds = [...new Set(catAssignments.map((a) => safeTrim(a.categoryId)).filter(Boolean))];
+    const subCategoryIds = [...new Set(catAssignments.map((a) => safeTrim(a.subCategoryId)).filter(Boolean))];
+    const [catDocs, subCatDocs] = await Promise.all([
+      ExamCategory.find({ tenantId, categoryId: { $in: categoryIds }, isdeleted: false }, { categoryId: 1, categoryName: 1 }).lean(),
+      ExamSubCategory.find({ tenantId, subCategoryId: { $in: subCategoryIds }, isdeleted: false }, { subCategoryId: 1, subCategoryName: 1, sortOrder: 1 }).lean()
+    ]);
+    const catMap = new Map(catDocs.map((c) => [c.categoryId, c]));
+    const subCatMap = new Map(subCatDocs.map((s) => [s.subCategoryId, s]));
+
+    // ── Program-specific category/subcategory sort order (mirrors getAssignmentReport) ──
+    const programIds = [...new Set(batches.map((b) => safeTrim(b.programId)).filter(Boolean))];
+    const programDocs = programIds.length ? await Program.find({ tenantId, programId: { $in: programIds }, isdeleted: false }, { programId: 1, examMappings: 1 }).lean() : [];
+    const programSortMap = new Map(); // programId → Map("catId::subCatId" → sortOrder)
+    for (const p of programDocs) {
+      const m = new Map();
+      for (const em of p.examMappings || []) {
+        const key = `${safeTrim(em.categoryId)}::${safeTrim(em.subCategoryId)}`;
+        m.set(key, Number.isFinite(Number(em.sortOrder)) ? Number(em.sortOrder) : 0);
+      }
+      programSortMap.set(p.programId, m);
+    }
+    const resolveSortOrder = (programId, catId, subCatId) => {
+      const progMap = programSortMap.get(programId);
+      const key = `${catId}::${subCatId}`;
+      if (progMap && progMap.has(key)) return progMap.get(key);
+      const subCat = subCatMap.get(subCatId) || {};
+      return subCat.sortOrder || 0;
+    };
+
+    // Group by batchId + subjectId + categoryId + subCategoryId
+    // key: `${batchId}::${subjectId}::${categoryId}::${subCategoryId}`
     const groupMap = new Map();
 
     for (const row of enabledRows) {
       const bid = safeTrim(row.batchId);
       const sid = safeTrim(row.subjectId);
-      const key = `${bid}::${sid}`;
+      const testId = safeTrim(row.testId);
+      const asg = testCatMap.get(testId) || {};
+      const catId = safeTrim(asg.categoryId) || '';
+      const subCatId = safeTrim(asg.subCategoryId) || '';
+      const key = `${bid}::${sid}::${catId}::${subCatId}`;
 
       if (!groupMap.has(key)) {
         groupMap.set(key, {
           batchId: bid,
           subjectId: sid,
+          categoryId: catId,
+          subCategoryId: subCatId,
           testIds: new Set(),
           // studentId → { testIds completed }
           studentTestMap: new Map()
@@ -2032,7 +2073,6 @@ const getSlashReport = async (req, res, next) => {
       }
 
       const grp = groupMap.get(key);
-      const testId = safeTrim(row.testId);
       if (testId) grp.testIds.add(testId);
 
       // Track per-student per-test status
@@ -2061,6 +2101,8 @@ const getSlashReport = async (req, res, next) => {
     for (const [key, grp] of groupMap.entries()) {
       const batch = batchMap.get(grp.batchId) || {};
       const subDoc = subjectDocMap.get(grp.subjectId) || {};
+      const cat = catMap.get(grp.categoryId) || {};
+      const subCat = subCatMap.get(grp.subCategoryId) || {};
       const availableTests = grp.testIds.size;
       const allStudents = Array.from(grp.studentTestMap.values());
       const totalStudents = allStudents.length;
@@ -2081,6 +2123,11 @@ const getSlashReport = async (req, res, next) => {
         subjectId: grp.subjectId,
         subjectName: subDoc.subjectName || null,
         subjectCode: subDoc.subjectCode || null,
+        categoryId: grp.categoryId || null,
+        categoryName: cat.categoryName || null,
+        subCategoryId: grp.subCategoryId || null,
+        subCategoryName: subCat.subCategoryName || null,
+        sortOrder: resolveSortOrder(batch.programId, grp.categoryId, grp.subCategoryId),
         availableTests,
         totalStudents,
         fullyCompleted,
@@ -2090,10 +2137,11 @@ const getSlashReport = async (req, res, next) => {
       });
     }
 
-    // Sort by batchCode then subjectName
+    // Sort by batchCode → sortOrder → subjectName
     data.sort((a, b) => {
       const bc = (a.batchCode || '').localeCompare(b.batchCode || '');
       if (bc !== 0) return bc;
+      if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
       return (a.subjectName || '').localeCompare(b.subjectName || '');
     });
 
@@ -2650,6 +2698,29 @@ const getAssignmentReport = async (req, res, next) => {
     ]);
     const catMap = new Map(catDocs.map((c) => [c.categoryId, c]));
     const subCatMap = new Map(subCatDocs.map((s) => [s.subCategoryId, s]));
+
+    // ── Program-specific category/subcategory sort order (mirrors student.controller.js getAllClassSubjectTopics) ──
+    const programIds = [...new Set(batches.map((b) => safeTrim(b.programId)).filter(Boolean))];
+    const programDocs = programIds.length ? await Program.find({ tenantId, programId: { $in: programIds }, isdeleted: false }, { programId: 1, examMappings: 1 }).lean() : [];
+    const programSortMap = new Map(); // programId → Map("catId::subCatId" → sortOrder)
+    for (const p of programDocs) {
+      const m = new Map();
+      for (const em of p.examMappings || []) {
+        const key = `${safeTrim(em.categoryId)}::${safeTrim(em.subCategoryId)}`;
+        m.set(key, Number.isFinite(Number(em.sortOrder)) ? Number(em.sortOrder) : 0);
+      }
+      programSortMap.set(p.programId, m);
+    }
+    // Resolve sortOrder for a category/subcategory combo, scoped to a specific program.
+    // Falls back to the subcategory's own global sortOrder if the program has no explicit mapping for it.
+    const resolveSortOrder = (programId, catId, subCatId) => {
+      const progMap = programSortMap.get(programId);
+      const key = `${catId}::${subCatId}`;
+      if (progMap && progMap.has(key)) return progMap.get(key);
+      const subCat = subCatMap.get(subCatId) || {};
+      return subCat.sortOrder || 0;
+    };
+
     const subjectIds = [...new Set(enabledRows.map((r) => safeTrim(r.subjectId)).filter(Boolean))];
     const subjectDocs = await Subject.find(
       {
@@ -2729,12 +2800,12 @@ const getAssignmentReport = async (req, res, next) => {
               catName: cat.categoryName || catId,
               subCatName: subCat.subCategoryName || subCatId,
               colLabel: buildColLabel(catId, subCatId),
-              sortOrder: subCat.sortOrder || 0
+              sortOrder: resolveSortOrder(batch.programId, catId, subCatId)
             });
           }
         }
 
-        // Sort columns by subcategory sortOrder
+        // Sort columns by the batch's program-mapped sortOrder
         const columns = Array.from(colKeySet.values()).sort((a, b) => a.sortOrder - b.sortOrder);
 
         // Build testId → colKey map
@@ -2837,7 +2908,8 @@ const getAssignmentReport = async (req, res, next) => {
             colKey: c.colKey,
             colLabel: c.colLabel,
             catName: c.catName,
-            subCatName: c.subCatName
+            subCatName: c.subCatName,
+            sortOrder: c.sortOrder
           })),
           students: studentRows,
           batchAverage: avgRow,
@@ -2884,9 +2956,12 @@ const getAssignmentReport = async (req, res, next) => {
           const stuData = (row.students || []).find((s) => safeTrim(s.admissionNo) === admNo);
           const cgpa = stuData?.status === 'COMPLETED' && stuData?.cgpa !== null ? round2(Number(stuData.cgpa)) : 0;
           const status = stuData?.status || 'NOT_ASSIGNED';
-          const cat = catMap.get(safeTrim(asg.categoryId)) || {};
-          const subCat = subCatMap.get(safeTrim(asg.subCategoryId)) || {};
+          const catId = safeTrim(asg.categoryId);
+          const subCatId = safeTrim(asg.subCategoryId);
+          const cat = catMap.get(catId) || {};
+          const subCat = subCatMap.get(subCatId) || {};
           const subDoc = subjectDocMap.get(String(asg.subjectId)) || {};
+          const studentProgramId = batchMap.get(student.batchId)?.programId;
 
           testRows.push({
             testId,
@@ -2897,14 +2972,16 @@ const getAssignmentReport = async (req, res, next) => {
             subTopicName: subTopicMap.get(safeTrim(asg.subTopicId)) || null,
             categoryName: cat.categoryName || null,
             subCategoryName: subCat.subCategoryName || null,
-            colLabel: buildColLabel(safeTrim(asg.categoryId), safeTrim(asg.subCategoryId)),
+            colLabel: buildColLabel(catId, subCatId),
+            sortOrder: resolveSortOrder(studentProgramId, catId, subCatId),
             cgpa,
             status
           });
         }
 
-        // Sort by subject → topic
+        // Sort by the student's batch-program-mapped sortOrder, then subject → topic as a tiebreaker
         testRows.sort((a, b) => {
+          if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
           const s = (a.subjectName || '').localeCompare(b.subjectName || '');
           if (s !== 0) return s;
           return (a.topicName || '').localeCompare(b.topicName || '');

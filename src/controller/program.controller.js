@@ -1473,6 +1473,52 @@ const removePTM = async (req, res, next) => {
   }
 };
 
+const removePtmSession = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = safeTrim(req.body?.userId);
+    const batchCode = safeTrim(req.body?.batchCode);
+    const ptmDate = req.body?.ptmDate;
+    const startTime = req.body?.startTime;
+    const endTime = req.body?.endTime;
+    if (!tenantId || !batchCode || !ptmDate || !startTime || !endTime) {
+      return res.status(400).json({ status: false, message: 'tenantId, batchCode, ptmDate, startTime and endTime are required' });
+    }
+    const query = {
+      tenantId,
+      batchCode,
+      ptmDate: Number(ptmDate),
+      startTime: Number(startTime),
+      endTime: Number(endTime),
+      isdeleted: false
+    };
+    const existing = await PTM.find(query, { ptmId: 1 }).lean();
+    if (!existing.length) {
+      return res.status(404).json({ status: false, message: 'PTM session not found' });
+    }
+    const result = await PTM.updateMany(query, {
+      $set: {
+        isdeleted: true,
+        status: 'CANCELLED',
+        updatedBy: userId || null
+      }
+    });
+    return res.status(200).json({
+      status: true,
+      message: `PTM session removed — ${result.modifiedCount} student(s) cancelled.`,
+      data: {
+        removedCount: result.modifiedCount,
+        batchCode,
+        ptmDate: Number(ptmDate),
+        startTime: Number(startTime),
+        endTime: Number(endTime)
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 const addStudentsToPTM = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
@@ -1847,6 +1893,7 @@ export default {
   viewPTM,
   editPTM,
   removePTM,
+  removePtmSession,
   addStudentsToPTM,
   removeStudentsFromPTM,
   submitPrePtmFeedback,

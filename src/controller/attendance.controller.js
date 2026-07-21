@@ -662,6 +662,150 @@ const getScheduleWithAttendance = async (req, res, next) => {
   }
 };
 
+const getScheduleWithAttendanceRange = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const startDate = toInt(req.body?.startDate, 0);
+    const endDate = toInt(req.body?.endDate, 0);
+    const batchCode = safeTrim(req.body?.batchCode);
+    const centerId = safeTrim(req.body?.centerId);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+    if (!startDate || !endDate) return res.status(400).json({ status: false, message: 'startDate and endDate are required' });
+    if (endDate < startDate) return res.status(400).json({ status: false, message: 'endDate must be on or after startDate' });
+
+    let batchCodesForCenter = null;
+    if (!batchCode && centerId) {
+      batchCodesForCenter = (await Batch.find({ tenantId, centerId, isdeleted: false }, { batchCode: 1 }).lean()).map((b) => b.batchCode);
+    }
+
+    // Build the list of UTC-midnight dates in range (inclusive)
+    const startD = new Date(startDate);
+    const endD = new Date(endDate);
+    const startMid = Date.UTC(startD.getUTCFullYear(), startD.getUTCMonth(), startD.getUTCDate());
+    const endMid = Date.UTC(endD.getUTCFullYear(), endD.getUTCMonth(), endD.getUTCDate());
+    const dates = [];
+    for (let d = startMid; d <= endMid; d += 86400000) dates.push(d);
+
+    // Cache timetables per week (Monday) so the same week isn't re-queried for every date in it
+    const ttByMonday = new Map(); // mondayMs -> Map(batchCode -> tt doc)
+    const getTtForDate = async (dateMs) => {
+      const mondayMs = getPreviousMonday(dateMs);
+      if (ttByMonday.has(mondayMs)) return ttByMonday.get(mondayMs);
+      const ttQuery = { tenantId, isdeleted: false, status: 'Active', wkStartOn: mondayMs };
+      if (batchCode) ttQuery.batchCode = batchCode;
+      else if (batchCodesForCenter) ttQuery.batchCode = { $in: batchCodesForCenter };
+      const timetables = await TimeTable.find(ttQuery).lean();
+      const map = new Map();
+      for (const tt of timetables) {
+        const existing = map.get(tt.batchCode);
+        if (!existing || toInt(tt.wkStartOn) > toInt(existing.wkStartOn)) map.set(tt.batchCode, tt);
+      }
+      ttByMonday.set(mondayMs, map);
+      return map;
+    };
+
+    // Build effective periods per date
+    const perDatePeriods = new Map(); // dateMs -> [period,...]
+    const allBatchCodesSet = new Set();
+    const allPeriodNosSet = new Set();
+    for (const dateMs of dates) {
+      const ttMap = await getTtForDate(dateMs);
+      const periods = [];
+      for (const tt of ttMap.values()) {
+        const effPeriods = getEffectivePeriods(tt, dateMs);
+        for (const p of effPeriods) {
+          periods.push({ batchCode: tt.batchCode, timetableId: tt._id, ...p });
+          allBatchCodesSet.add(tt.batchCode);
+          allPeriodNosSet.add(p.periodNo);
+        }
+      }
+      perDatePeriods.set(dateMs, periods);
+    }
+
+    const totalPeriodCount = [...perDatePeriods.values()].reduce((s, arr) => s + arr.length, 0);
+    if (!totalPeriodCount) {
+      return res.status(200).json({ status: true, message: 'No periods scheduled for this date range', startDate, endDate, data: [], count: 0 });
+    }
+
+    const attRecords = await Attendance.find({
+      tenantId,
+      batchCode: { $in: [...allBatchCodesSet] },
+      periodNo: { $in: [...allPeriodNosSet] },
+      date: { $in: dates },
+      isdeleted: false
+    }).lean();
+    const attMap = new Map(attRecords.map((a) => [`${a.batchCode}_${a.periodNo}_${a.date}`, a]));
+
+    const buildAttendance = (attDoc) => {
+      const students = Array.isArray(attDoc?.students) ? attDoc.students : [];
+      return attDoc
+        ? {
+            isMarked: true,
+            attendanceId: attDoc._id,
+            markedAt: attDoc.updatedAt || attDoc.createdAt || null,
+            markedBy: attDoc.updatedBy || attDoc.createdBy || null,
+            topicTaught: attDoc.topicTaught || null,
+            feedback: attDoc.feedback || null,
+            totalCount: students.length,
+            presentCount: students.filter((s) => s.status === 'PRESENT').length,
+            absentCount: students.filter((s) => s.status === 'ABSENT').length,
+            lateCount: students.filter((s) => s.status === 'LATE').length
+          }
+        : {
+            isMarked: false,
+            attendanceId: null,
+            markedAt: null,
+            markedBy: null,
+            topicTaught: null,
+            feedback: null,
+            totalCount: null,
+            presentCount: null,
+            absentCount: null,
+            lateCount: null
+          };
+    };
+
+    const data = [];
+    for (const dateMs of dates) {
+      const periods = perDatePeriods.get(dateMs) || [];
+      if (!periods.length) continue;
+      const rows = periods.map((period) => ({
+        batchCode: period.batchCode,
+        timetableId: period.timetableId,
+        periodNo: period.periodNo,
+        periodType: period.periodType || null,
+        mode: period.mode || null,
+        time: period.time || null,
+        facultyId: period.replacementFacultyId || period.facultyId || null,
+        facultyName: period.facultyName || null,
+        subjectId: period.subjectId || null,
+        subjectName: period.subjectName || null,
+        subjectCode: period.subjectCode || null,
+        venue: period.venue || null,
+        topic: period.topic || null,
+        zoomUrl: period.zoomUrl || null,
+        phaseId: period.phaseId || null,
+        phaseName: period.phaseName || null,
+        attendance: buildAttendance(attMap.get(`${period.batchCode}_${period.periodNo}_${dateMs}`) || null)
+      }));
+      rows.sort((a, b) => a.batchCode.localeCompare(b.batchCode) || (a.periodNo || 0) - (b.periodNo || 0));
+      data.push({ date: dateMs, count: rows.length, periods: rows });
+    }
+
+    return res.status(200).json({
+      status: true,
+      message: 'Schedule with attendance loaded',
+      startDate,
+      endDate,
+      count: data.length,
+      totalPeriodCount,
+      data
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 const updatePeriodAttendanceRemarks = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
@@ -716,6 +860,7 @@ export default {
   getStudentsForAttendance,
   listAttendanceByDate,
   getScheduleWithAttendance,
+  getScheduleWithAttendanceRange,
   updatePeriodAttendanceRemarks,
   updateSchoolAttendanceRemarks
 };
