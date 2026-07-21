@@ -21,6 +21,18 @@ const pickTenantId = (req) => (req.body?.entiId || req.body?.tenantId || '').toS
 const safeLower = (v) => (v == null ? '' : String(v)).trim().toLowerCase();
 const safeTrim = (v) => (v == null ? '' : String(v)).trim();
 
+// Accepts centerIds: [] (preferred) or legacy single centerId string, resolves names, returns centers[] for the User doc.
+const resolveCenters = async (tenantId, body) => {
+  let ids = [];
+  if (Array.isArray(body.centerIds)) ids = body.centerIds.map(safeTrim).filter(Boolean);
+  else if (body.centerId) ids = [safeTrim(body.centerId)];
+  ids = [...new Set(ids)];
+  if (!ids.length) return [];
+  const centerDocs = await Center.find({ tenantId, centerId: { $in: ids }, isdeleted: false }, { centerId: 1, centerName: 1 }).lean();
+  const nameMap = new Map(centerDocs.map((c) => [c.centerId, c.centerName]));
+  return ids.map((id) => ({ centerId: id, centerName: nameMap.get(id) || null }));
+};
+
 const createUser = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
@@ -32,13 +44,8 @@ const createUser = async (req, res, next) => {
     const roleLevel = VALID_ROLES.includes(safeTrim(req.body.roleLevel)) ? safeTrim(req.body.roleLevel) : 'L4';
     const roleLabel = ROLE_MAP[roleLevel];
     const empCode = req.body.empCode ? safeTrim(req.body.empCode) : null;
-    const centerId = req.body.centerId ? safeTrim(req.body.centerId) : null;
     if (!name || !email || !phone || !password) return res.status(400).json({ status: false, message: 'name, email, phone and password are required' });
-    let centerName = req.body.centerName ? safeTrim(req.body.centerName) : null;
-    if (centerId && !centerName) {
-      const c = await Center.findOne({ centerId, tenantId, isdeleted: false }, { centerName: 1 }).lean();
-      centerName = c?.centerName || null;
-    }
+    const centers = await resolveCenters(tenantId, req.body);
     let mappedStaffId = null;
     if (empCode) {
       const escaped = empCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -71,8 +78,7 @@ const createUser = async (req, res, next) => {
       empCode,
       roleLevel,
       roleLabel,
-      centerId,
-      centerName,
+      centers,
       status: req.body.status || 'Active',
       isdeleted: false
     });
@@ -103,11 +109,11 @@ const listUsers = async (req, res, next) => {
     const search = safeTrim(req.query.search);
     const roleLevel = safeTrim(req.query.roleLevel);
     const status = safeTrim(req.query.status);
-    const centerId = safeTrim(req.query.centerId);
+    const centerId = safeTrim(req.query.centerId || req.body?.centerId);
     const query = { tenantId, isdeleted: false };
     if (roleLevel) query.roleLevel = roleLevel;
     if (status) query.status = status;
-    if (centerId) query.centerId = centerId;
+    if (centerId) query['centers.centerId'] = centerId;
     if (search) {
       query.$or = [{ name: { $regex: search, $options: 'i' } }, { email: { $regex: search, $options: 'i' } }, { phone: { $regex: search, $options: 'i' } }, { userId: { $regex: search, $options: 'i' } }];
     }
@@ -162,8 +168,9 @@ const updateUser = async (req, res, next) => {
     if (req.body.name !== undefined) updateDoc.name = safeTrim(req.body.name);
     if (req.body.email !== undefined) updateDoc.email = safeLower(req.body.email);
     if (req.body.phone !== undefined) updateDoc.phone = safeTrim(req.body.phone);
-    if (req.body.centerId !== undefined) updateDoc.centerId = req.body.centerId ? safeTrim(req.body.centerId) : null;
-    if (req.body.centerName !== undefined) updateDoc.centerName = req.body.centerName ? safeTrim(req.body.centerName) : null;
+    if (req.body.centerIds !== undefined || req.body.centerId !== undefined) {
+      updateDoc.centers = await resolveCenters(tenantId, req.body);
+    }
     if (req.body.status !== undefined) updateDoc.status = req.body.status;
     if (req.body.roleLevel !== undefined) {
       const lvl = VALID_ROLES.includes(safeTrim(req.body.roleLevel)) ? safeTrim(req.body.roleLevel) : existingUser.roleLevel;
@@ -439,6 +446,8 @@ const importUsers = async (req, res, next) => {
       const empCode = r.empCode ? safeTrim(r.empCode) : null;
       const centerId = r.centerId ? safeTrim(r.centerId) : null;
       const centerName = r.centerName ? safeTrim(r.centerName) : null;
+      // Bulk import stays single-center-per-row for now; wrapped to match the centers[] schema shape.
+      const centers = centerId ? [{ centerId, centerName }] : [];
       const rawPw = safeTrim(r.password) || 'Welcome@123';
       const rowErrors = [];
       if (!name) rowErrors.push('name required');
@@ -471,7 +480,7 @@ const importUsers = async (req, res, next) => {
             filter,
             update: {
               $set: { ...(empCode !== null ? { empCode } : {}), ...(mappedStaffId ? { staffId: mappedStaffId } : {}) },
-              $setOnInsert: { ...setOnInsertBase, name, phone, roleLevel, roleLabel, centerId, centerName, status: 'Active' }
+              $setOnInsert: { ...setOnInsertBase, name, phone, roleLevel, roleLabel, centers, status: 'Active' }
             },
             upsert: true
           }
@@ -481,7 +490,7 @@ const importUsers = async (req, res, next) => {
           updateOne: {
             filter,
             update: {
-              $set: { name, phone, empCode, staffId: mappedStaffId, roleLevel, roleLabel, centerId, centerName, status: 'Active' },
+              $set: { name, phone, empCode, staffId: mappedStaffId, roleLevel, roleLabel, centers, status: 'Active' },
               $setOnInsert: setOnInsertBase
             },
             upsert: true

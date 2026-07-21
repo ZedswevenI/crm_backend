@@ -379,7 +379,7 @@ const listBatches = async (req, res, next) => {
     const status = safeTrim(req.query.status);
     const academicYear = safeTrim(req.query.academicYear);
     const programId = safeTrim(req.query.programId);
-    const centerId = safeTrim(req.query.centerId);
+    const centerId = safeTrim(req.query.centerId || req.body?.centerId);
     const query = { tenantId, isdeleted: false };
     if (status && status !== 'ALL') query.status = status;
     if (academicYear) query.academicYear = academicYear;

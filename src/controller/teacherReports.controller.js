@@ -19,13 +19,29 @@ import { triggerCommunicationEventSafe } from '../services/communicationEvent.se
 const pickTid = (req) => String(req?.body?.entiId || req?.body?.tenantId || '').trim();
 const safeTrim = (v) => (v === undefined || v === null ? '' : String(v).trim());
 
-const pickBatchIds = (req) => {
+const pickBatchIds = async (req) => {
   const arr = req.body?.batchIds;
-  return Array.isArray(arr) && arr.length ? arr.map(safeTrim).filter(Boolean) : [];
+  let batchIds = Array.isArray(arr) && arr.length ? arr.map(safeTrim).filter(Boolean) : [];
+  const centerId = safeTrim(req.body?.centerId);
+  if (centerId) {
+    const tenantId = pickTid(req);
+    const centerBatches = await Batch.find({ tenantId, centerId, isdeleted: false }, { batchId: 1 }).lean();
+    const centerBatchIds = new Set(centerBatches.map((b) => b.batchId));
+    batchIds = batchIds.length ? batchIds.filter((id) => centerBatchIds.has(id)) : [...centerBatchIds];
+  }
+  return batchIds;
 };
-const pickBatchCodes = (req) => {
+const pickBatchCodes = async (req) => {
   const arr = req.body?.batchCodes;
-  return Array.isArray(arr) && arr.length ? arr.map(safeTrim).filter(Boolean) : [];
+  let batchCodes = Array.isArray(arr) && arr.length ? arr.map(safeTrim).filter(Boolean) : [];
+  const centerId = safeTrim(req.body?.centerId);
+  if (centerId) {
+    const tenantId = pickTid(req);
+    const centerBatches = await Batch.find({ tenantId, centerId, isdeleted: false }, { batchCode: 1 }).lean();
+    const centerBatchCodes = new Set(centerBatches.map((b) => b.batchCode));
+    batchCodes = batchCodes.length ? batchCodes.filter((c) => centerBatchCodes.has(c)) : [...centerBatchCodes];
+  }
+  return batchCodes;
 };
 const applyBatchIdFilter = (query, ids) => {
   if (ids.length === 1) query.batchId = ids[0];
@@ -135,15 +151,16 @@ const getEffectivePeriods = (tt, dateMs) => {
 const getFacultyBatchReport = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
-    const staffId = safeTrim(req.body?.staffId || '');
+    const staffIds = Array.isArray(req.body?.staffIds) ? req.body.staffIds.map(safeTrim).filter(Boolean) : safeTrim(req.body?.staffId) ? [safeTrim(req.body.staffId)] : [];
     const status = safeTrim(req.body?.status || '');
 
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-    if (!staffId) return res.status(400).json({ status: false, message: 'staffId is required' });
+    if (!staffIds.length) return res.status(400).json({ status: false, message: 'staffId or staffIds[] is required' });
 
     // Fetch staff details
-    const staff = await Staff.findOne({ tenantId, staffId, isdeleted: false }).lean();
-    if (!staff) return res.status(404).json({ status: false, message: 'Staff not found' });
+    const staffDocs = await Staff.find({ tenantId, staffId: { $in: staffIds }, isdeleted: false }).lean();
+    if (!staffDocs.length) return res.status(404).json({ status: false, message: 'Staff not found' });
+    const staffInfoMap = new Map(staffDocs.map((s) => [s.staffId, s]));
 
     const query = { tenantId, isdeleted: false };
     if (status && status !== 'ALL') query.status = status;
@@ -151,54 +168,62 @@ const getFacultyBatchReport = async (req, res, next) => {
     // All batches in tenant — filter in memory for both roles
     const allBatches = await Batch.find(query).lean();
 
-    const result = [];
+    const staffResults = staffIds.map((sid) => {
+      const staff = staffInfoMap.get(sid);
+      const result = [];
 
-    for (const b of allBatches) {
-      const isClassTeacher = safeTrim(b.classTeacherId) === staffId;
-      const staffMapEntry = (b.staffMap || []).find((s) => safeTrim(s.staffId) === staffId);
-      const isSubjectTeacher = !!staffMapEntry;
+      for (const b of allBatches) {
+        const isClassTeacher = safeTrim(b.classTeacherId) === sid;
+        const staffMapEntry = (b.staffMap || []).find((s) => safeTrim(s.staffId) === sid);
+        const isSubjectTeacher = !!staffMapEntry;
 
-      if (!isClassTeacher && !isSubjectTeacher) continue;
+        if (!isClassTeacher && !isSubjectTeacher) continue;
 
-      result.push({
-        batchId: b.batchId,
-        batchCode: b.batchCode,
-        batchName: b.batchName,
-        programName: b.programName || null,
-        programCode: b.programCode || null,
-        centerName: b.centerName || null,
-        academicYear: b.academicYear,
-        classNo: b.classNo,
-        yearNo: b.yearNo,
-        section: b.section || null,
-        status: b.status,
-        studentCount: b.studentCount || 0,
-        isClassTeacher,
-        isSubjectTeacher,
-        subjectId: staffMapEntry?.subjectId || null,
-        subjectName: staffMapEntry?.subjectName || null,
-        startDate: b.startDate || null,
-        endDate: b.endDate || null
-      });
-    }
+        result.push({
+          batchId: b.batchId,
+          batchCode: b.batchCode,
+          batchName: b.batchName,
+          programName: b.programName || null,
+          programCode: b.programCode || null,
+          centerName: b.centerName || null,
+          academicYear: b.academicYear,
+          classNo: b.classNo,
+          yearNo: b.yearNo,
+          section: b.section || null,
+          status: b.status,
+          studentCount: b.studentCount || 0,
+          isClassTeacher,
+          isSubjectTeacher,
+          subjectId: staffMapEntry?.subjectId || null,
+          subjectName: staffMapEntry?.subjectName || null,
+          startDate: b.startDate || null,
+          endDate: b.endDate || null
+        });
+      }
 
-    // Summary
-    const classTeacherBatches = result.filter((b) => b.isClassTeacher).length;
-    const subjectTeacherBatches = result.filter((b) => b.isSubjectTeacher).length;
+      const classTeacherBatches = result.filter((b) => b.isClassTeacher).length;
+      const subjectTeacherBatches = result.filter((b) => b.isSubjectTeacher).length;
+
+      return {
+        staffId: sid,
+        staffName: staff?.staffName || null,
+        staffCode: staff?.staffCode || null,
+        summary: {
+          totalBatches: result.length,
+          classTeacherBatches,
+          subjectTeacherBatches,
+          totalStudents: result.reduce((s, b) => s + b.studentCount, 0)
+        },
+        count: result.length,
+        batches: result
+      };
+    });
 
     return res.status(200).json({
       status: true,
-      staffId,
-      staffName: staff.staffName,
-      staffCode: staff.staffCode,
-      summary: {
-        totalBatches: result.length,
-        classTeacherBatches,
-        subjectTeacherBatches,
-        totalStudents: result.reduce((s, b) => s + b.studentCount, 0)
-      },
-      count: result.length,
-      data: result
+      staffIds,
+      count: staffResults.length,
+      data: staffResults
     });
   } catch (err) {
     return next(err);
@@ -212,73 +237,88 @@ const getFacultyBatchReport = async (req, res, next) => {
 const getTaskReport = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
-    const staffId = safeTrim(req.body?.staffId || '');
+    const staffIds = Array.isArray(req.body?.staffIds) ? req.body.staffIds.map(safeTrim).filter(Boolean) : safeTrim(req.body?.staffId) ? [safeTrim(req.body.staffId)] : [];
     const status = safeTrim(req.body?.status || ''); // PENDING|IN_PROGRESS|COMPLETED|NOT_COMPLETED|NEED_MORE_TIME
     const fromDate = toInt(req.body?.fromDate, 0);
     const toDate = toInt(req.body?.toDate, 0);
 
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-    if (!staffId) return res.status(400).json({ status: false, message: 'staffId is required' });
+    if (!staffIds.length) return res.status(400).json({ status: false, message: 'staffId or staffIds[] is required' });
 
-    const query = { tenantId, staffId, isdeleted: false };
+    const query = { tenantId, staffId: { $in: staffIds }, isdeleted: false };
     if (status && status !== 'ALL') query.status = status;
     if (fromDate) query.dueDate = { $gte: fromDate };
     if (toDate) query.dueDate = { ...(query.dueDate || {}), $lte: toDate };
 
     const tasks = await Task.find(query).sort({ dueDate: 1 }).lean();
-
     const now = Date.now();
 
-    const statusCount = {
-      PENDING: 0,
-      IN_PROGRESS: 0,
-      COMPLETED: 0,
-      NOT_COMPLETED: 0,
-      NEED_MORE_TIME: 0
-    };
-    let delayedCount = 0;
+    const tasksByStaff = new Map(staffIds.map((sid) => [sid, []]));
+    for (const t of tasks) {
+      const sid = safeTrim(t.staffId);
+      if (!tasksByStaff.has(sid)) tasksByStaff.set(sid, []);
+      tasksByStaff.get(sid).push(t);
+    }
 
-    const data = tasks.map((t, idx) => {
-      if (statusCount[t.status] !== undefined) statusCount[t.status]++;
+    const staffResults = staffIds.map((sid) => {
+      const staffTasks = tasksByStaff.get(sid) || [];
+      const statusCount = {
+        PENDING: 0,
+        IN_PROGRESS: 0,
+        COMPLETED: 0,
+        NOT_COMPLETED: 0,
+        NEED_MORE_TIME: 0
+      };
+      let delayedCount = 0;
 
-      // Delayed = dueDate passed and not completed
-      const isDelayed = t.dueDate < now && !['COMPLETED'].includes(t.status);
-      if (isDelayed) delayedCount++;
+      const data = staffTasks.map((t, idx) => {
+        if (statusCount[t.status] !== undefined) statusCount[t.status]++;
 
-      const daysOverdue = isDelayed ? Math.floor((now - t.dueDate) / 86400000) : 0;
+        // Delayed = dueDate passed and not completed
+        const isDelayed = t.dueDate < now && !['COMPLETED'].includes(t.status);
+        if (isDelayed) delayedCount++;
+
+        const daysOverdue = isDelayed ? Math.floor((now - t.dueDate) / 86400000) : 0;
+
+        return {
+          slNo: idx + 1,
+          taskId: t.taskId,
+          taskName: t.taskName,
+          description: t.description || null,
+          dueDate: t.dueDate,
+          dueDateFormatted: formatDate(t.dueDate),
+          status: t.status,
+          isDelayed,
+          daysOverdue,
+          remarks: t.remarks || null,
+          createdAt: t.createdAt
+        };
+      });
+
+      // Separate delayed list
+      const delayedTasks = data.filter((t) => t.isDelayed);
 
       return {
-        slNo: idx + 1,
-        taskId: t.taskId,
-        taskName: t.taskName,
-        description: t.description || null,
-        dueDate: t.dueDate,
-        dueDateFormatted: formatDate(t.dueDate),
-        status: t.status,
-        isDelayed,
-        daysOverdue,
-        remarks: t.remarks || null,
-        createdAt: t.createdAt
+        staffId: sid,
+        summary: {
+          total: staffTasks.length,
+          delayed: delayedCount,
+          byStatus: statusCount,
+          completionPct: staffTasks.length > 0 ? round2((statusCount.COMPLETED / staffTasks.length) * 100) : 0
+        },
+        delayedTasks,
+        count: data.length,
+        data
       };
     });
 
-    // Separate delayed list
-    const delayedTasks = data.filter((t) => t.isDelayed);
-
     return res.status(200).json({
       status: true,
-      staffId,
+      staffIds,
       fromDate: fromDate || null,
       toDate: toDate || null,
-      summary: {
-        total: tasks.length,
-        delayed: delayedCount,
-        byStatus: statusCount,
-        completionPct: tasks.length > 0 ? round2((statusCount.COMPLETED / tasks.length) * 100) : 0
-      },
-      delayedTasks,
-      count: data.length,
-      data
+      count: staffResults.length,
+      data: staffResults
     });
   } catch (err) {
     return next(err);
@@ -292,57 +332,73 @@ const getTaskReport = async (req, res, next) => {
 const getStaffLateEntryReport = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
-    const staffId = safeTrim(req.body?.staffId || '');
+    const staffIds = Array.isArray(req.body?.staffIds) ? req.body.staffIds.map(safeTrim).filter(Boolean) : safeTrim(req.body?.staffId) ? [safeTrim(req.body.staffId)] : [];
     const fromDate = toInt(req.body?.fromDate, 0);
     const toDate = toInt(req.body?.toDate, 0);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-    if (!staffId) return res.status(400).json({ status: false, message: 'staffId is required' });
+    if (!staffIds.length) return res.status(400).json({ status: false, message: 'staffId or staffIds[] is required' });
     if (!fromDate) return res.status(400).json({ status: false, message: 'fromDate is required' });
     if (!toDate) return res.status(400).json({ status: false, message: 'toDate is required' });
 
-    const lateBatchCodes = pickBatchCodes(req);
-    const lateQuery = { tenantId, type: 'STAFF', entryType: 'LATE', personId: staffId, isdeleted: false, date: { $gte: fromDate, $lte: toDate } };
+    const lateBatchCodes = await pickBatchCodes(req);
+    const lateQuery = { tenantId, type: 'STAFF', entryType: 'LATE', personId: { $in: staffIds }, isdeleted: false, date: { $gte: fromDate, $lte: toDate } };
     applyBatchCodeFilter(lateQuery, lateBatchCodes);
 
     const entries = await LateEntryLog.find(lateQuery).sort({ date: 1 }).lean();
 
-    const totalDelay = entries.reduce((s, e) => s + (e.delayMinutes || 0), 0);
-    const avgDelay = entries.length > 0 ? Math.round(totalDelay / entries.length) : 0;
-
-    // Group by batch
-    const byBatch = new Map();
+    const entriesByStaff = new Map(staffIds.map((sid) => [sid, []]));
     for (const e of entries) {
-      const key = e.batchCode || 'UNKNOWN';
-      if (!byBatch.has(key)) byBatch.set(key, { batchCode: key, count: 0, totalDelay: 0 });
-      byBatch.get(key).count++;
-      byBatch.get(key).totalDelay += e.delayMinutes || 0;
+      const sid = safeTrim(e.personId);
+      if (!entriesByStaff.has(sid)) entriesByStaff.set(sid, []);
+      entriesByStaff.get(sid).push(e);
     }
 
-    const data = entries.map((e, idx) => ({
-      slNo: idx + 1,
-      logId: e.logId,
-      date: e.date,
-      dateFormatted: formatDate(e.date),
-      batchCode: e.batchCode || null,
-      periodNo: e.periodNo,
-      scheduledStartMin: e.scheduledStartMin,
-      delayMinutes: e.delayMinutes,
-      reason: e.reason || null
-    }));
+    const staffResults = staffIds.map((sid) => {
+      const staffEntries = entriesByStaff.get(sid) || [];
+      const totalDelay = staffEntries.reduce((s, e) => s + (e.delayMinutes || 0), 0);
+      const avgDelay = staffEntries.length > 0 ? Math.round(totalDelay / staffEntries.length) : 0;
+
+      // Group by batch
+      const byBatch = new Map();
+      for (const e of staffEntries) {
+        const key = e.batchCode || 'UNKNOWN';
+        if (!byBatch.has(key)) byBatch.set(key, { batchCode: key, count: 0, totalDelay: 0 });
+        byBatch.get(key).count++;
+        byBatch.get(key).totalDelay += e.delayMinutes || 0;
+      }
+
+      const data = staffEntries.map((e, idx) => ({
+        slNo: idx + 1,
+        logId: e.logId,
+        date: e.date,
+        dateFormatted: formatDate(e.date),
+        batchCode: e.batchCode || null,
+        periodNo: e.periodNo,
+        scheduledStartMin: e.scheduledStartMin,
+        delayMinutes: e.delayMinutes,
+        reason: e.reason || null
+      }));
+
+      return {
+        staffId: sid,
+        summary: {
+          total: staffEntries.length,
+          totalDelayMinutes: totalDelay,
+          avgDelayMinutes: avgDelay
+        },
+        byBatch: Array.from(byBatch.values()),
+        count: data.length,
+        data
+      };
+    });
 
     return res.status(200).json({
       status: true,
-      staffId,
+      staffIds,
       fromDate,
       toDate,
-      summary: {
-        total: entries.length,
-        totalDelayMinutes: totalDelay,
-        avgDelayMinutes: avgDelay
-      },
-      byBatch: Array.from(byBatch.values()),
-      count: data.length,
-      data
+      count: staffResults.length,
+      data: staffResults
     });
   } catch (err) {
     return next(err);
@@ -356,47 +412,63 @@ const getStaffLateEntryReport = async (req, res, next) => {
 const getStaffEarlyLeavingReport = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
-    const staffId = safeTrim(req.body?.staffId || '');
+    const staffIds = Array.isArray(req.body?.staffIds) ? req.body.staffIds.map(safeTrim).filter(Boolean) : safeTrim(req.body?.staffId) ? [safeTrim(req.body.staffId)] : [];
     const fromDate = toInt(req.body?.fromDate, 0);
     const toDate = toInt(req.body?.toDate, 0);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-    if (!staffId) return res.status(400).json({ status: false, message: 'staffId is required' });
+    if (!staffIds.length) return res.status(400).json({ status: false, message: 'staffId or staffIds[] is required' });
     if (!fromDate) return res.status(400).json({ status: false, message: 'fromDate is required' });
     if (!toDate) return res.status(400).json({ status: false, message: 'toDate is required' });
 
-    const earlyBatchCodes = pickBatchCodes(req);
-    const earlyQuery = { tenantId, type: 'STAFF', entryType: 'EARLY_LEAVE', personId: staffId, isdeleted: false, date: { $gte: fromDate, $lte: toDate } };
+    const earlyBatchCodes = await pickBatchCodes(req);
+    const earlyQuery = { tenantId, type: 'STAFF', entryType: 'EARLY_LEAVE', personId: { $in: staffIds }, isdeleted: false, date: { $gte: fromDate, $lte: toDate } };
     applyBatchCodeFilter(earlyQuery, earlyBatchCodes);
 
     const entries = await LateEntryLog.find(earlyQuery).sort({ date: 1 }).lean();
 
-    const totalEarly = entries.reduce((s, e) => s + (e.delayMinutes || 0), 0);
-    const avgEarly = entries.length > 0 ? Math.round(totalEarly / entries.length) : 0;
+    const entriesByStaff = new Map(staffIds.map((sid) => [sid, []]));
+    for (const e of entries) {
+      const sid = safeTrim(e.personId);
+      if (!entriesByStaff.has(sid)) entriesByStaff.set(sid, []);
+      entriesByStaff.get(sid).push(e);
+    }
 
-    const data = entries.map((e, idx) => ({
-      slNo: idx + 1,
-      logId: e.logId,
-      date: e.date,
-      dateFormatted: formatDate(e.date),
-      batchCode: e.batchCode || null,
-      periodNo: e.periodNo,
-      scheduledStartMin: e.scheduledStartMin,
-      earlyByMinutes: e.delayMinutes,
-      reason: e.reason || null
-    }));
+    const staffResults = staffIds.map((sid) => {
+      const staffEntries = entriesByStaff.get(sid) || [];
+      const totalEarly = staffEntries.reduce((s, e) => s + (e.delayMinutes || 0), 0);
+      const avgEarly = staffEntries.length > 0 ? Math.round(totalEarly / staffEntries.length) : 0;
+
+      const data = staffEntries.map((e, idx) => ({
+        slNo: idx + 1,
+        logId: e.logId,
+        date: e.date,
+        dateFormatted: formatDate(e.date),
+        batchCode: e.batchCode || null,
+        periodNo: e.periodNo,
+        scheduledStartMin: e.scheduledStartMin,
+        earlyByMinutes: e.delayMinutes,
+        reason: e.reason || null
+      }));
+
+      return {
+        staffId: sid,
+        summary: {
+          total: staffEntries.length,
+          totalEarlyMinutes: totalEarly,
+          avgEarlyMinutes: avgEarly
+        },
+        count: data.length,
+        data
+      };
+    });
 
     return res.status(200).json({
       status: true,
-      staffId,
+      staffIds,
       fromDate,
       toDate,
-      summary: {
-        total: entries.length,
-        totalEarlyMinutes: totalEarly,
-        avgEarlyMinutes: avgEarly
-      },
-      count: data.length,
-      data
+      count: staffResults.length,
+      data: staffResults
     });
   } catch (err) {
     return next(err);
@@ -411,31 +483,34 @@ const getStaffEarlyLeavingReport = async (req, res, next) => {
 const getStaffAssignmentReport = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
-    const staffId = safeTrim(req.body?.staffId || '');
+    const staffIds = Array.isArray(req.body?.staffIds) ? req.body.staffIds.map(safeTrim).filter(Boolean) : safeTrim(req.body?.staffId) ? [safeTrim(req.body.staffId)] : [];
     const fromDate = toInt(req.body?.fromDate, 0);
     const toDate = toInt(req.body?.toDate, 0);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-    if (!staffId) return res.status(400).json({ status: false, message: 'staffId is required' });
+    if (!staffIds.length) return res.status(400).json({ status: false, message: 'staffId or staffIds[] is required' });
+    const staffIdSet = new Set(staffIds);
 
-    const asnBatchIds = pickBatchIds(req);
+    const asnBatchIds = await pickBatchIds(req);
     const batchQuery = { tenantId, isdeleted: false };
     applyBatchIdFilter(batchQuery, asnBatchIds);
     const batches = await Batch.find(batchQuery).lean();
-    const staffBatches = batches.filter((b) => (b.staffMap || []).some((s) => safeTrim(s.staffId) === staffId));
+    const staffBatches = batches.filter((b) => (b.staffMap || []).some((s) => staffIdSet.has(safeTrim(s.staffId))));
 
     if (!staffBatches.length) {
-      return res.status(200).json({ status: true, staffId, count: 0, data: [] });
+      return res.status(200).json({ status: true, staffIds, count: 0, data: [] });
     }
 
-    // Get subjects this staff teaches
-    const staffSubjectMap = new Map();
-    // batchId → subjectId[]
+    // Get subjects each requested staff teaches, per batch: key "staffId::batchId" → subjectId[]
+    const staffBatchSubjectMap = new Map();
     for (const b of staffBatches) {
-      const subjects = (b.staffMap || []).filter((s) => safeTrim(s.staffId) === staffId).map((s) => safeTrim(s.subjectId));
-      staffSubjectMap.set(b.batchId, subjects);
+      for (const sid of staffIds) {
+        const subjects = (b.staffMap || []).filter((s) => safeTrim(s.staffId) === sid).map((s) => safeTrim(s.subjectId));
+        if (subjects.length) staffBatchSubjectMap.set(`${sid}::${b.batchId}`, subjects);
+      }
     }
 
     const batchIds = staffBatches.map((b) => b.batchId);
+    const batchMap = new Map(staffBatches.map((b) => [b.batchId, b]));
 
     const assignQuery = { tenantId, batchId: { $in: batchIds }, isdeleted: false, status: 'enabled' };
     if (fromDate) assignQuery.enabledAt = { $gte: fromDate };
@@ -443,18 +518,12 @@ const getStaffAssignmentReport = async (req, res, next) => {
 
     const allEnabled = await BatchAssignEnable.find(assignQuery).lean();
 
-    // Filter to only assignments for subjects this staff teaches in that batch
-    const filtered = allEnabled.filter((t) => {
-      const subjects = staffSubjectMap.get(t.batchId) || [];
-      return subjects.includes(safeTrim(t.subjectId));
-    });
-
-    // Fetch subject names
-    const subjectIds = [...new Set(filtered.map((t) => t.subjectId).filter(Boolean))];
+    // Fetch subject names once (shared across every requested staff)
+    const allSubjectIds = [...new Set(allEnabled.map((t) => t.subjectId).filter(Boolean))];
     const subjectDocs = await Subject.find(
       {
         _id: {
-          $in: subjectIds
+          $in: allSubjectIds
             .map((id) => {
               try {
                 return new mongoose.Types.ObjectId(id);
@@ -469,69 +538,83 @@ const getStaffAssignmentReport = async (req, res, next) => {
     ).lean();
     const subjectDocMap = new Map(subjectDocs.map((s) => [String(s._id), s]));
 
-    const batchMap = new Map(staffBatches.map((b) => [b.batchId, b]));
+    const staffResults = staffIds.map((sid) => {
+      // Filter to only assignments for subjects this staff teaches in that batch
+      const filtered = allEnabled.filter((t) => {
+        const subjects = staffBatchSubjectMap.get(`${sid}::${t.batchId}`) || [];
+        return subjects.includes(safeTrim(t.subjectId));
+      });
 
-    const data = filtered.map((t, idx) => {
-      const students = Array.isArray(t.students) ? t.students : [];
-      const total = students.length;
-      const completed = students.filter((s) => s.status === 'COMPLETED').length;
-      const inProgress = students.filter((s) => s.status === 'IN_PROGRESS').length;
-      const assigned = students.filter((s) => s.status === 'ASSIGNED').length;
-      const batch = batchMap.get(t.batchId) || {};
-      const subDoc = subjectDocMap.get(t.subjectId) || {};
+      const data = filtered.map((t, idx) => {
+        const students = Array.isArray(t.students) ? t.students : [];
+        const total = students.length;
+        const completed = students.filter((s) => s.status === 'COMPLETED').length;
+        const inProgress = students.filter((s) => s.status === 'IN_PROGRESS').length;
+        const assigned = students.filter((s) => s.status === 'ASSIGNED').length;
+        const batch = batchMap.get(t.batchId) || {};
+        const subDoc = subjectDocMap.get(t.subjectId) || {};
+
+        return {
+          slNo: idx + 1,
+          testId: t.testId,
+          testNo: t.testNo || null,
+          batchId: t.batchId,
+          batchCode: batch.batchCode || null,
+          batchName: batch.batchName || null,
+          subjectId: t.subjectId,
+          subjectName: subDoc.subjectName || null,
+          subjectCode: subDoc.subjectCode || null,
+          enabledAt: t.enabledAt,
+          enabledAtFormatted: formatDate(t.enabledAt),
+          totalStudents: total,
+          completed,
+          inProgress,
+          assigned,
+          completionPct: total > 0 ? round2((completed / total) * 100) : 0
+        };
+      });
+
+      // Group by subject
+      const bySubject = new Map();
+      for (const d of data) {
+        const key = d.subjectId || 'UNKNOWN';
+        if (!bySubject.has(key)) {
+          bySubject.set(key, {
+            subjectId: d.subjectId,
+            subjectName: d.subjectName,
+            testCount: 0,
+            totalStudents: 0,
+            totalCompleted: 0
+          });
+        }
+        const e = bySubject.get(key);
+        e.testCount++;
+        e.totalStudents += d.totalStudents;
+        e.totalCompleted += d.completed;
+      }
+
+      const staffBatchCount = staffBatches.filter((b) => (b.staffMap || []).some((s) => safeTrim(s.staffId) === sid)).length;
 
       return {
-        slNo: idx + 1,
-        testId: t.testId,
-        testNo: t.testNo || null,
-        batchId: t.batchId,
-        batchCode: batch.batchCode || null,
-        batchName: batch.batchName || null,
-        subjectId: t.subjectId,
-        subjectName: subDoc.subjectName || null,
-        subjectCode: subDoc.subjectCode || null,
-        enabledAt: t.enabledAt,
-        enabledAtFormatted: formatDate(t.enabledAt),
-        totalStudents: total,
-        completed,
-        inProgress,
-        assigned,
-        completionPct: total > 0 ? round2((completed / total) * 100) : 0
+        staffId: sid,
+        summary: {
+          totalAssignments: data.length,
+          totalBatches: staffBatchCount
+        },
+        bySubject: Array.from(bySubject.values()).map((e) => ({
+          ...e,
+          avgCompletionPct: e.totalStudents > 0 ? round2((e.totalCompleted / e.totalStudents) * 100) : 0
+        })),
+        count: data.length,
+        data
       };
     });
 
-    // Group by subject
-    const bySubject = new Map();
-    for (const d of data) {
-      const key = d.subjectId || 'UNKNOWN';
-      if (!bySubject.has(key)) {
-        bySubject.set(key, {
-          subjectId: d.subjectId,
-          subjectName: d.subjectName,
-          testCount: 0,
-          totalStudents: 0,
-          totalCompleted: 0
-        });
-      }
-      const e = bySubject.get(key);
-      e.testCount++;
-      e.totalStudents += d.totalStudents;
-      e.totalCompleted += d.completed;
-    }
-
     return res.status(200).json({
       status: true,
-      staffId,
-      summary: {
-        totalAssignments: data.length,
-        totalBatches: staffBatches.length
-      },
-      bySubject: Array.from(bySubject.values()).map((e) => ({
-        ...e,
-        avgCompletionPct: e.totalStudents > 0 ? round2((e.totalCompleted / e.totalStudents) * 100) : 0
-      })),
-      count: data.length,
-      data
+      staffIds,
+      count: staffResults.length,
+      data: staffResults
     });
   } catch (err) {
     return next(err);
@@ -546,17 +629,25 @@ const getStaffAssignmentReport = async (req, res, next) => {
 const getStaffAttendanceReport = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
-    const staffId = safeTrim(req.body?.staffId || '');
+    const staffIds = Array.isArray(req.body?.staffIds) ? req.body.staffIds.map(safeTrim).filter(Boolean) : safeTrim(req.body?.staffId) ? [safeTrim(req.body.staffId)] : [];
     const fromDate = toInt(req.body?.fromDate, 0);
     const toDate = toInt(req.body?.toDate, fromDate); // default = same day
+    const statusFilter = safeTrim(req.body?.status || 'ALL').toUpperCase(); // MARKED | NOT_MARKED | ALL
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-    if (!staffId) return res.status(400).json({ status: false, message: 'staffId is required' });
+    if (!staffIds.length) return res.status(400).json({ status: false, message: 'staffId or staffIds[] is required' });
     if (!fromDate) return res.status(400).json({ status: false, message: 'fromDate is required' });
+    if (!['ALL', 'MARKED', 'NOT_MARKED'].includes(statusFilter)) {
+      return res.status(400).json({ status: false, message: 'status must be one of ALL, MARKED, NOT_MARKED' });
+    }
+    const staffIdSet = new Set(staffIds);
 
     const msPerDay = 86400000;
     if (toDate - fromDate > 31 * msPerDay) {
       return res.status(400).json({ status: false, message: 'Date range cannot exceed 31 days' });
     }
+
+    const staffDocs = await Staff.find({ tenantId, staffId: { $in: staffIds }, isdeleted: false }, { staffId: 1, staffName: 1, staffCode: 1 }).lean();
+    const staffInfoMap = new Map(staffDocs.map((s) => [s.staffId, s]));
 
     // Collect all week starts in range
     const weekStarts = new Set();
@@ -567,13 +658,13 @@ const getStaffAttendanceReport = async (req, res, next) => {
     }
 
     // Fetch all active timetables for these weeks
-    const attBatchCodes = pickBatchCodes(req);
+    const attBatchCodes = await pickBatchCodes(req);
     const ttQuery = { tenantId, wkStartOn: { $in: [...weekStarts] }, status: 'Active', isdeleted: false };
     applyBatchCodeFilter(ttQuery, attBatchCodes);
     const timetables = await TimeTable.find(ttQuery).lean();
 
-    // Build date → [ { batchCode, timetableId, period } ] for this staff
-    const scheduleByDate = new Map();
+    // Build staffId → date → [ { batchCode, timetableId, period } ]
+    const scheduleByStaffDate = new Map(staffIds.map((sid) => [sid, new Map()]));
     curr = fromDate;
     while (curr <= toDate) {
       const wkStart = getPreviousMonday(curr);
@@ -581,11 +672,14 @@ const getStaffAttendanceReport = async (req, res, next) => {
 
       for (const tt of dayTTs) {
         const periods = getEffectivePeriods(tt, curr);
-        const myPeriods = periods.filter((p) => safeTrim(p.facultyId) === staffId || safeTrim(p.replacementFacultyId) === staffId);
-
-        for (const p of myPeriods) {
-          if (!scheduleByDate.has(curr)) scheduleByDate.set(curr, []);
-          scheduleByDate.get(curr).push({
+        for (const p of periods) {
+          const fid = safeTrim(p.facultyId);
+          const rfid = safeTrim(p.replacementFacultyId);
+          const matchedStaffId = staffIdSet.has(fid) ? fid : staffIdSet.has(rfid) ? rfid : null;
+          if (!matchedStaffId) continue;
+          const dateMap = scheduleByStaffDate.get(matchedStaffId);
+          if (!dateMap.has(curr)) dateMap.set(curr, []);
+          dateMap.get(curr).push({
             batchCode: tt.batchCode,
             timetableId: String(tt._id),
             periodNo: p.periodNo,
@@ -600,81 +694,109 @@ const getStaffAttendanceReport = async (req, res, next) => {
       curr += msPerDay;
     }
 
-    // Fetch all attendance records in range for these batchCodes
-    const allBatchCodes = [...new Set([...scheduleByDate.values()].flat().map((p) => p.batchCode))];
+    // Fetch all attendance records in range for these batchCodes, across every requested staff
+    const allBatchCodes = [...new Set([...scheduleByStaffDate.values()].flatMap((dateMap) => [...dateMap.values()].flat().map((p) => p.batchCode)))];
 
     const attRecords = allBatchCodes.length
       ? await Attendance.find(
           {
             tenantId,
             batchCode: { $in: allBatchCodes },
-            facultyId: staffId,
+            facultyId: { $in: staffIds },
             date: { $gte: fromDate, $lte: toDate },
             isdeleted: false
           },
-          { batchCode: 1, date: 1, periodNo: 1, students: 1 }
+          { batchCode: 1, date: 1, periodNo: 1, facultyId: 1, students: 1 }
         ).lean()
       : [];
 
-    const markedSet = new Set(attRecords.map((a) => `${a.batchCode}_${a.date}_${a.periodNo}`));
+    const attByKey = new Map(attRecords.map((a) => [`${a.facultyId}_${a.batchCode}_${a.date}_${a.periodNo}`, a]));
 
-    // Build report per day
-    let totalPeriods = 0;
-    let markedCount = 0;
-    let notMarkedCount = 0;
+    let totalPeriods = 0,
+      markedCount = 0,
+      notMarkedCount = 0;
 
-    const dailyReport = [];
-    curr = fromDate;
-    while (curr <= toDate) {
-      const periods = scheduleByDate.get(curr) || [];
-      const dayData = periods.map((p) => {
-        const key = `${p.batchCode}_${curr}_${p.periodNo}`;
-        const isMarked = markedSet.has(key);
-        totalPeriods++;
-        if (isMarked) markedCount++;
-        else notMarkedCount++;
+    const staffReports = staffIds.map((sid) => {
+      const dateMap = scheduleByStaffDate.get(sid) || new Map();
+      let staffTotal = 0,
+        staffMarked = 0,
+        staffNotMarked = 0;
+      const dailyReport = [];
 
-        // Attendance stats if marked
-        const attRec = attRecords.find((a) => a.batchCode === p.batchCode && a.date === curr && a.periodNo === p.periodNo);
-        const students = Array.isArray(attRec?.students) ? attRec.students : [];
+      let d = fromDate;
+      while (d <= toDate) {
+        const periods = dateMap.get(d) || [];
+        const dayData = periods.map((p) => {
+          const key = `${sid}_${p.batchCode}_${d}_${p.periodNo}`;
+          const isMarked = attByKey.has(key);
+          staffTotal++;
+          if (isMarked) staffMarked++;
+          else staffNotMarked++;
 
-        return {
-          batchCode: p.batchCode,
-          timetableId: p.timetableId,
-          periodNo: p.periodNo,
-          subjectId: p.subjectId || null,
-          subjectName: p.subjectName || null,
-          startTime: p.startTime || null,
-          endTime: p.endTime || null,
-          periodType: p.periodType || null,
-          isMarked,
-          presentCount: isMarked ? students.filter((s) => s.status === 'PRESENT').length : null,
-          absentCount: isMarked ? students.filter((s) => s.status === 'ABSENT').length : null,
-          lateCount: isMarked ? students.filter((s) => s.status === 'LATE').length : null,
-          totalStudents: isMarked ? students.length : null
-        };
-      });
+          const attRec = attByKey.get(key);
+          const students = Array.isArray(attRec?.students) ? attRec.students : [];
 
-      if (dayData.length > 0) {
-        const d = new Date(curr);
-        dailyReport.push({
-          date: curr,
-          dateFormatted: formatDate(curr),
-          day: DAYS[d.getUTCDay()],
-          totalPeriods: dayData.length,
-          markedCount: dayData.filter((p) => p.isMarked).length,
-          notMarkedCount: dayData.filter((p) => !p.isMarked).length,
-          periods: dayData
+          return {
+            batchCode: p.batchCode,
+            timetableId: p.timetableId,
+            periodNo: p.periodNo,
+            subjectId: p.subjectId || null,
+            subjectName: p.subjectName || null,
+            startTime: p.startTime || null,
+            endTime: p.endTime || null,
+            periodType: p.periodType || null,
+            isMarked,
+            presentCount: isMarked ? students.filter((s) => s.status === 'PRESENT').length : null,
+            absentCount: isMarked ? students.filter((s) => s.status === 'ABSENT').length : null,
+            lateCount: isMarked ? students.filter((s) => s.status === 'LATE').length : null,
+            totalStudents: isMarked ? students.length : null
+          };
         });
+
+        const filteredDayData = statusFilter === 'MARKED' ? dayData.filter((p) => p.isMarked) : statusFilter === 'NOT_MARKED' ? dayData.filter((p) => !p.isMarked) : dayData;
+
+        if (filteredDayData.length > 0) {
+          const dObj = new Date(d);
+          dailyReport.push({
+            date: d,
+            dateFormatted: formatDate(d),
+            day: DAYS[dObj.getUTCDay()],
+            totalPeriods: filteredDayData.length,
+            markedCount: filteredDayData.filter((p) => p.isMarked).length,
+            notMarkedCount: filteredDayData.filter((p) => !p.isMarked).length,
+            periods: filteredDayData
+          });
+        }
+        d += msPerDay;
       }
-      curr += msPerDay;
-    }
+
+      totalPeriods += staffTotal;
+      markedCount += staffMarked;
+      notMarkedCount += staffNotMarked;
+
+      const info = staffInfoMap.get(sid) || {};
+      return {
+        staffId: sid,
+        staffName: info.staffName || null,
+        staffCode: info.staffCode || null,
+        summary: {
+          totalPeriods: staffTotal,
+          markedCount: staffMarked,
+          notMarkedCount: staffNotMarked,
+          markedPct: staffTotal > 0 ? round2((staffMarked / staffTotal) * 100) : 0,
+          notMarkedPct: staffTotal > 0 ? round2((staffNotMarked / staffTotal) * 100) : 0
+        },
+        count: dailyReport.length,
+        dailyReport
+      };
+    });
 
     return res.status(200).json({
       status: true,
-      staffId,
+      staffIds,
       fromDate,
       toDate,
+      statusFilter,
       summary: {
         totalPeriods,
         markedCount,
@@ -682,8 +804,8 @@ const getStaffAttendanceReport = async (req, res, next) => {
         markedPct: totalPeriods > 0 ? round2((markedCount / totalPeriods) * 100) : 0,
         notMarkedPct: totalPeriods > 0 ? round2((notMarkedCount / totalPeriods) * 100) : 0
       },
-      count: dailyReport.length,
-      data: dailyReport
+      count: staffReports.length,
+      data: staffReports
     });
   } catch (err) {
     return next(err);
@@ -698,14 +820,15 @@ const getStaffAttendanceReport = async (req, res, next) => {
 const getStaffFeedbackReport = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
-    const staffId = safeTrim(req.body?.staffId || '');
+    const staffIds = Array.isArray(req.body?.staffIds) ? req.body.staffIds.map(safeTrim).filter(Boolean) : safeTrim(req.body?.staffId) ? [safeTrim(req.body.staffId)] : [];
     const fromDate = toInt(req.body?.fromDate, 0);
     const toDate = toInt(req.body?.toDate, 0);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-    if (!staffId) return res.status(400).json({ status: false, message: 'staffId is required' });
+    if (!staffIds.length) return res.status(400).json({ status: false, message: 'staffId or staffIds[] is required' });
+    const staffIdSet = new Set(staffIds);
 
-    const fbBatchCodes = pickBatchCodes(req);
-    const query = { tenantId, isdeleted: false, 'staffRemarks.staffId': staffId };
+    const fbBatchCodes = await pickBatchCodes(req);
+    const query = { tenantId, isdeleted: false, 'staffRemarks.staffId': { $in: staffIds } };
     if (fromDate) query.ptmDate = { $gte: fromDate };
     if (toDate) query.ptmDate = { ...(query.ptmDate || {}), $lte: toDate };
     applyBatchCodeFilter(query, fbBatchCodes);
@@ -713,27 +836,38 @@ const getStaffFeedbackReport = async (req, res, next) => {
     const ptmDocs = await PTM.find(query).lean();
 
     if (!ptmDocs.length) {
-      return res.status(200).json({ status: true, staffId, count: 0, data: [] });
+      return res.status(200).json({ status: true, staffIds, count: 0, data: [] });
     }
 
-    // Per-subject summary of remarks
+    // Per-subject and per-staff summary of remarks
     const subjectSummary = new Map();
+    const staffSummary = new Map();
 
     const data = ptmDocs.map((p) => {
-      // Extract only this staff's remarks
-      const myRemarks = (Array.isArray(p.staffRemarks) ? p.staffRemarks : []).filter((r) => safeTrim(r.staffId) === staffId);
+      // Extract only the requested staff's remarks
+      const matchedRemarks = (Array.isArray(p.staffRemarks) ? p.staffRemarks : []).filter((r) => staffIdSet.has(safeTrim(r.staffId)));
 
-      for (const r of myRemarks) {
-        const key = safeTrim(r.subjectId || 'GENERAL');
-        if (!subjectSummary.has(key)) {
-          subjectSummary.set(key, {
+      for (const r of matchedRemarks) {
+        const subjectKey = safeTrim(r.subjectId || 'GENERAL');
+        if (!subjectSummary.has(subjectKey)) {
+          subjectSummary.set(subjectKey, {
             subjectId: r.subjectId || null,
             subjectName: r.subjectName || null,
             subjectCode: r.subjectCode || null,
             remarksCount: 0
           });
         }
-        subjectSummary.get(key).remarksCount++;
+        subjectSummary.get(subjectKey).remarksCount++;
+
+        const staffKey = safeTrim(r.staffId);
+        if (!staffSummary.has(staffKey)) {
+          staffSummary.set(staffKey, {
+            staffId: r.staffId,
+            staffName: r.staffName || null,
+            remarksCount: 0
+          });
+        }
+        staffSummary.get(staffKey).remarksCount++;
       }
 
       return {
@@ -745,7 +879,9 @@ const getStaffFeedbackReport = async (req, res, next) => {
         ptmDate: p.ptmDate,
         ptmDateFormatted: formatDate(p.ptmDate),
         ptmStatus: p.status,
-        myRemarks: myRemarks.map((r) => ({
+        remarks: matchedRemarks.map((r) => ({
+          staffId: r.staffId,
+          staffName: r.staffName || null,
           subjectId: r.subjectId || null,
           subjectName: r.subjectName || null,
           subjectCode: r.subjectCode || null,
@@ -757,13 +893,14 @@ const getStaffFeedbackReport = async (req, res, next) => {
 
     return res.status(200).json({
       status: true,
-      staffId,
+      staffIds,
       fromDate: fromDate || null,
       toDate: toDate || null,
       summary: {
         totalStudents: data.length,
-        totalRemarks: data.reduce((s, d) => s + d.myRemarks.length, 0),
-        bySubject: Array.from(subjectSummary.values())
+        totalRemarks: data.reduce((s, d) => s + d.remarks.length, 0),
+        bySubject: Array.from(subjectSummary.values()),
+        byStaff: Array.from(staffSummary.values())
       },
       count: data.length,
       data
@@ -781,20 +918,21 @@ const getStaffFeedbackReport = async (req, res, next) => {
 const getStaffExamReport = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
-    const staffId = safeTrim(req.body?.staffId || '');
+    const staffIds = Array.isArray(req.body?.staffIds) ? req.body.staffIds.map(safeTrim).filter(Boolean) : safeTrim(req.body?.staffId) ? [safeTrim(req.body.staffId)] : [];
     const fromDate = toInt(req.body?.fromDate, 0);
     const toDate = toInt(req.body?.toDate, 0);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-    if (!staffId) return res.status(400).json({ status: false, message: 'staffId is required' });
+    if (!staffIds.length) return res.status(400).json({ status: false, message: 'staffId or staffIds[] is required' });
+    const staffIdSet = new Set(staffIds);
 
-    const exBatchIds = pickBatchIds(req);
+    const exBatchIds = await pickBatchIds(req);
     const batchQuery = { tenantId, isdeleted: false };
     applyBatchIdFilter(batchQuery, exBatchIds);
     const batches = await Batch.find(batchQuery).lean();
-    const staffBatches = batches.filter((b) => safeTrim(b.classTeacherId) === staffId || (b.staffMap || []).some((s) => safeTrim(s.staffId) === staffId));
+    const staffBatches = batches.filter((b) => staffIdSet.has(safeTrim(b.classTeacherId)) || (b.staffMap || []).some((s) => staffIdSet.has(safeTrim(s.staffId))));
 
     if (!staffBatches.length) {
-      return res.status(200).json({ status: true, staffId, count: 0, data: [] });
+      return res.status(200).json({ status: true, staffIds, count: 0, data: [] });
     }
 
     const batchIds = staffBatches.map((b) => b.batchId);
@@ -808,7 +946,7 @@ const getStaffExamReport = async (req, res, next) => {
     }).lean();
 
     if (!assigns.length) {
-      return res.status(200).json({ status: true, staffId, count: 0, data: [] });
+      return res.status(200).json({ status: true, staffIds, count: 0, data: [] });
     }
 
     // Fetch exam details
@@ -877,7 +1015,7 @@ const getStaffExamReport = async (req, res, next) => {
 
     return res.status(200).json({
       status: true,
-      staffId,
+      staffIds,
       fromDate: fromDate || null,
       toDate: toDate || null,
       summary: {
@@ -1475,12 +1613,14 @@ const getFacultyReport = async (req, res, next) => {
     const fromDate = toInt(req.body?.fromDate, 0);
     const toDate = toInt(req.body?.toDate, 0);
     const filterStaffIds = Array.isArray(req.body?.staffIds) ? req.body.staffIds.map(safeTrim).filter(Boolean) : [];
+    const centerId = safeTrim(req.body?.centerId);
     const staffQuery = {
       tenantId,
       isdeleted: false,
       status: { $in: ['ACTIVE', 'active', 'Active'] }
     };
     if (filterStaffIds.length) staffQuery.staffId = { $in: filterStaffIds };
+    if (centerId) staffQuery.centerId = centerId;
     const allStaff = await Staff.find(staffQuery, {
       staffId: 1,
       staffName: 1,

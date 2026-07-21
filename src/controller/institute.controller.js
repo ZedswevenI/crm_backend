@@ -1536,8 +1536,7 @@ const createStaff = async (req, res, next) => {
         empCode: employeeId,
         roleLevel: autoRoleLevel,
         roleLabel: ROLE_MAP[autoRoleLevel],
-        centerId: centerId,
-        centerName: centerDoc ? centerDoc.centerName : null,
+        centers: [{ centerId, centerName: centerDoc ? centerDoc.centerName : null }],
         status: status,
         isdeleted: false
       });
@@ -1749,7 +1748,10 @@ const updateStaff = async (req, res, next) => {
       if (patch.staffName !== undefined) userPatch.name = doc.staffName;
       if (patch.phone !== undefined) userPatch.phone = doc.phone;
       if (patch.email !== undefined) userPatch.email = doc.email;
-      if (patch.centerId !== undefined) userPatch.centerId = doc.centerId;
+      if (patch.centerId !== undefined) {
+        const centerDoc = doc.centerId ? await Center.findOne({ tenantId, centerId: doc.centerId, isdeleted: false }, { centerName: 1 }).lean() : null;
+        userPatch.centers = doc.centerId ? [{ centerId: doc.centerId, centerName: centerDoc?.centerName || null }] : [];
+      }
       if (Object.keys(userPatch).length) {
         await User.updateOne({ tenantId, userId: doc.userId, isdeleted: false }, { $set: userPatch }).catch(() => {});
       }
@@ -1799,6 +1801,7 @@ const updateStaff = async (req, res, next) => {
       const newUserId = uuid();
       const hashedPassword = await bcrypt.hash('Welcome@123', Rounds);
       const roleLevel = 'L4';
+      const newAccessCenterDoc = doc.centerId ? await Center.findOne({ tenantId, centerId: doc.centerId, isdeleted: false }, { centerName: 1 }).lean() : null;
       await User.create({
         tenantId,
         userId: newUserId,
@@ -1810,7 +1813,7 @@ const updateStaff = async (req, res, next) => {
         empCode: doc.employeeId || null,
         roleLevel,
         roleLabel: ROLE_MAP[roleLevel] || 'Academic Operations',
-        centerId: doc.centerId || null,
+        centers: doc.centerId ? [{ centerId: doc.centerId, centerName: newAccessCenterDoc?.centerName || null }] : [],
         status: 'Active',
         isdeleted: false
       });
