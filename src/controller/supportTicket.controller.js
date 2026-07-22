@@ -2,6 +2,8 @@ import { v4 as uuid } from 'uuid';
 import constants from '../helpers/constants.js';
 import SupportTicket from '../models/supportTicket.model.js';
 import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
+import { notifyUsers } from '../helpers/pushNotification.helper.js';
+import logger from '../helpers/logger.js';
 
 const pickTenantId = (req) => String(req?.body?.tenantId || req?.body?.entiId || req?.query?.entiId || '').trim();
 const safeTrim = (v) => (v === undefined || v === null ? '' : String(v).trim());
@@ -260,6 +262,25 @@ const assignTicket = async (req, res, next) => {
     ticket.assignedAt = Date.now();
     ticket.updatedBy = userId;
     await ticket.save();
+
+    (async () => {
+      try {
+        await notifyUsers({
+          tenantId,
+          staffIds: [assignedStaffId],
+          title: 'Support Ticket Assigned',
+          body: `You have been assigned ticket: ${ticket.issueSubject}`,
+          type: 'SUPPORT_TICKET',
+          sourceModule: 'SUPPORT_TICKET',
+          sourceRefId: ticketId,
+          data: { type: 'SUPPORT_TICKET', ticketId },
+          createdBy: userId
+        });
+      } catch (e) {
+        logger.error('[SupportTicket] assignTicket notify failed:', e?.message);
+      }
+    })();
+
     return res.status(200).json({ status: true, message: 'Ticket assigned successfully', data: ticket });
   } catch (err) {
     return next(err);

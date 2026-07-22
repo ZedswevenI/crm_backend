@@ -9,6 +9,8 @@ import BatchAssignEnable from '../models/batchenabledAssignment.model.js';
 import Topic from '../models/topic.model.js';
 import Assignment from '../models/assignment.model.js';
 import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
+import { notifyUsers } from '../helpers/pushNotification.helper.js';
+import logger from '../helpers/logger.js';
 
 const pickTenantId = (req) => String(req?.body?.tenantId || req?.body?.entiId || '').trim();
 const safeTrim = (v) => (v === undefined || v === null ? '' : String(v).trim());
@@ -379,7 +381,7 @@ const listBatches = async (req, res, next) => {
     const status = safeTrim(req.query.status);
     const academicYear = safeTrim(req.query.academicYear);
     const programId = safeTrim(req.query.programId);
-    const centerId = safeTrim(req.query.centerId);
+    const centerId = safeTrim(req.query.centerId || req.body?.centerId);
     const query = { tenantId, isdeleted: false };
     if (status && status !== 'ALL') query.status = status;
     if (academicYear) query.academicYear = academicYear;
@@ -672,9 +674,32 @@ const saveBatchStaffMap = async (req, res, next) => {
     if (!b) return res.status(404).json({ status: false, message: 'Batch not found' });
     const guard = ensureBatchEditable(b);
     if (!guard.ok) return res.status(400).json({ status: false, message: guard.msg });
+    const previousStaffIds = new Set((b.staffMap || []).map((x) => safeTrim(x.staffId)).filter(Boolean));
+    const newlyAssignedStaffIds = [...new Set(staffMap.map((x) => x.staffId).filter((id) => !previousStaffIds.has(id)))];
     b.staffMap = staffMap;
     b.updatedBy = req.body.userId || null;
     await b.save();
+
+    if (newlyAssignedStaffIds.length) {
+      (async () => {
+        try {
+          await notifyUsers({
+            tenantId,
+            staffIds: newlyAssignedStaffIds,
+            title: 'Batch Assigned',
+            body: `You have been assigned to batch ${b.batchCode || b.batchName || batchId}`,
+            type: 'BATCH_ASSIGNMENT',
+            sourceModule: 'BATCH',
+            sourceRefId: batchId,
+            data: { type: 'BATCH_ASSIGNMENT', batchId, batchCode: b.batchCode || null },
+            createdBy: req.body.userId || null
+          });
+        } catch (e) {
+          logger.error('[Batch] saveBatchStaffMap notify failed:', e?.message);
+        }
+      })();
+    }
+
     return res.status(constants.HTTPS_SUCCESS).json({
       status: true,
       message: 'Staff mapping saved',

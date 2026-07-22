@@ -143,7 +143,7 @@ const listStudents = async (req, res, next) => {
     const programId = safeTrim(q.programId);
     const batchId = safeTrim(q.batchId);
     const batchCode = safeTrim(q.batchCode);
-    const centerId = safeTrim(q.centerId);
+    const centerId = safeTrim(q.centerId || req.body?.centerId);
     const academicYear = safeTrim(q.academicYear);
     const status = safeTrim(q.status);
     const query = { tenantId, isdeleted: false };

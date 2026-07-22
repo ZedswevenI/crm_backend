@@ -3,7 +3,7 @@ import constants from '../helpers/constants.js';
 import Task from '../models/task.model.js';
 import { uploadFileToS3 } from '../middlewares/s3.service.js';
 import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
-import { notifyStaff } from '../helpers/pushNotification.helper.js';
+import { notifyUsers } from '../helpers/pushNotification.helper.js';
 import logger from '../helpers/logger.js';
 
 const pickTenantId = (req) => String(req?.body?.tenantId || req?.body?.entiId || req?.query?.entiId || '').trim();
@@ -59,12 +59,16 @@ const createTask = async (req, res, next) => {
     (async () => {
       try {
         const dueDateStr = new Date(dueDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
-        await notifyStaff({
+        await notifyUsers({
           tenantId,
           staffIds: [safeTrim(staffId)],
           title: 'New Task Assigned',
           body: `${taskName} — Due: ${dueDateStr}`,
-          data: { type: 'TASK', taskId: String(task.taskId) }
+          type: 'TASK',
+          sourceModule: 'TASK',
+          sourceRefId: String(newTask.taskId),
+          data: { type: 'TASK', taskId: String(newTask.taskId) },
+          createdBy: userId
         });
       } catch (e) {
         logger.error('[Task] push notification failed:', e?.message);

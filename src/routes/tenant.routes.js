@@ -13,6 +13,7 @@ import academicYearCtrl from '../controller/academicyear.controller.js';
 import packageCtrl from '../controller/package.controller.js';
 import userCtrl from '../controller/user.controller.js';
 import schlexamCtrl from '../controller/schoolExam.controller.js';
+import notificationCtrl from '../controller/notification.controller.js';
 
 routes.post('/register', tenantCtrl.createInstitute);
 routes.post('/view', validatetoken, tenantCtrl.viewInstitute);
@@ -150,11 +151,18 @@ routes.post('/ptm/list', validatetoken, programCtrl.listPtmSessions);
 routes.post('/ptm/view', programCtrl.viewPTM);
 routes.post('/ptm/update', validatetoken, programCtrl.editPTM);
 routes.post('/ptm/remove', validatetoken, programCtrl.removePTM);
+routes.post('/ptm/session/remove', validatetoken, programCtrl.removePtmSession);
 routes.post('/ptm/togglepostfeedback', validatetoken, programCtrl.togglePostPtmFeedback);
 routes.post('/ptm/student/add', validatetoken, programCtrl.addStudentsToPTM);
 routes.post('/ptm/student/remove', validatetoken, programCtrl.removeStudentsFromPTM);
 routes.post('/ptm/preptm/submit', programCtrl.submitPrePtmFeedback);
 routes.post('/ptm/postptm/submit', programCtrl.submitPostPtmFeedback);
+
+routes.post('/notification/list', validatetoken, notificationCtrl.listNotifications);
+routes.post('/notification/unread-count', validatetoken, notificationCtrl.getUnreadCount);
+routes.post('/notification/mark-read', validatetoken, notificationCtrl.markAsRead);
+routes.post('/notification/mark-all-read', validatetoken, notificationCtrl.markAllAsRead);
+routes.post('/notification/remove', validatetoken, notificationCtrl.removeNotification);
 
 // Package Reports
 routes.post('/package/upload', validatetoken, upload.single('file'), packageCtrl.uploadPackageFile);

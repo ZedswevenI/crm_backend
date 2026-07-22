@@ -8,6 +8,8 @@ import Counter from '../models/counter.model.js';
 import FeePlan from '../models/feeplan.model.js';
 import StudentProfile from '../models/studentProfile.model.js';
 import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
+import { notifyUsers, getUserIdsByCenterAndRole } from '../helpers/pushNotification.helper.js';
+import logger from '../helpers/logger.js';
 import Program from '../models/program.model.js';
 import AcademicYearConfig from '../models/academicYear.model.js';
 import Batch from '../models/batch.model.js';
@@ -667,6 +669,30 @@ const submitForApproval = async (req, res, next) => {
     admission.workflow.approvalSentAt = Date.now();
     admission.updatedBy = userId;
     await admission.save();
+
+    // Notify L1 users mapped to this admission's center that an admission is waiting for their approval
+    (async () => {
+      try {
+        const centerId = safeTrim(admission.centerId);
+        if (!centerId) return;
+        const l1UserIds = await getUserIdsByCenterAndRole(tenantId, centerId, ['L1']);
+        if (!l1UserIds.length) return;
+        await notifyUsers({
+          tenantId,
+          userIds: l1UserIds,
+          title: 'Admission Sent for Approval',
+          body: `${safeTrim(admission.student?.name) || 'A student'}'s admission is waiting for your approval`,
+          type: 'ADMISSION_APPROVAL_PENDING',
+          sourceModule: 'ADMISSION',
+          sourceRefId: admissionId,
+          data: { type: 'ADMISSION_APPROVAL_PENDING', admissionId, centerId },
+          createdBy: userId
+        });
+      } catch (e) {
+        logger.error('[Admission] submitForApproval notify failed:', e?.message);
+      }
+    })();
+
     return res.status(200).json({ status: true, message: 'Sent for approval', data: { admissionId } });
   } catch (err) {
     return next(err);
@@ -707,7 +733,9 @@ const listAdmissions = async (req, res, next) => {
     const admissionNo = safeTrim(q.admissionNo);
     const search = safeTrim(q.search);
     const statusFilter = safeTrim(q.status).toLowerCase();
+    const centerId = safeTrim(q.centerId || req.body?.centerId);
     const query = { tenantId, isdeleted: false };
+    if (centerId) query.centerId = centerId;
     if (safeTrim(q.includeInactive).toLowerCase() !== 'yes') {
       query.status = 'Active';
     }
@@ -1167,6 +1195,28 @@ const approveAdmission = async (req, res, next) => {
         academicYear: safeTrim(admission.academicYear)
       }
     });
+
+    // Notify the person who originally entered this admission that it's approved & the student is mapped
+    (async () => {
+      try {
+        const enteredBy = safeTrim(admission.createdBy);
+        if (!enteredBy) return;
+        await notifyUsers({
+          tenantId,
+          userIds: [enteredBy],
+          title: 'Admission Approved',
+          body: `${safeTrim(admission.student?.name) || 'Student'} (${studentRegNo}) has been approved and mapped`,
+          type: 'ADMISSION_APPROVED',
+          sourceModule: 'ADMISSION',
+          sourceRefId: admissionId,
+          data: { type: 'ADMISSION_APPROVED', admissionId, admissionNo: studentRegNo },
+          createdBy: userId
+        });
+      } catch (e) {
+        logger.error('[Admission] approveAdmission notify failed:', e?.message);
+      }
+    })();
+
     return res.status(200).json({
       status: true,
       message: 'Admission approved',
@@ -1189,6 +1239,7 @@ const listConfirmedAdmissionsWithoutProfile = async (req, res, next) => {
     const limitNum = Math.min(Math.max(parseInt(req.query.limit || '20', 10), 1), 200);
     const skip = (pageNum - 1) * limitNum;
     const search = safeTrim(req.query.search);
+    const centerId = safeTrim(req.query.centerId || req.body?.centerId);
     const match = {
       tenantId,
       isdeleted: false,
@@ -1196,6 +1247,7 @@ const listConfirmedAdmissionsWithoutProfile = async (req, res, next) => {
       'workflow.stage': 'CONFIRMED',
       admissionNo: { $ne: null }
     };
+    if (centerId) match.centerId = centerId;
     if (search) {
       const rx = new RegExp(escapeRegex(search), 'i');
       match.$or = [{ admissionNo: rx }, { registrationNumber: rx }, { 'student.name': rx }, { 'student.phone': rx }];
