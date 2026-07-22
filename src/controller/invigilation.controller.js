@@ -1,6 +1,6 @@
 import Invigilation from '../models/invigilation.model.js';
 import Staff from '../models/staff.model.js';
-import { notifyStaff } from '../helpers/pushNotification.helper.js';
+import { notifyUsers } from '../helpers/pushNotification.helper.js';
 import logger from '../helpers/logger.js';
 
 const pickTid = (req) => req.body?.entiId || req.query?.entiId || null;
@@ -105,11 +105,14 @@ const createInvigilation = async (req, res, next) => {
         if (assignedObjectIds.length) {
           const staffDocs = await Staff.find({ _id: { $in: assignedObjectIds }, isdeleted: false }, { staffId: 1 }).lean();
           const staffIds = staffDocs.map((s) => s.staffId).filter(Boolean);
-          await notifyStaff({
+          await notifyUsers({
             tenantId,
             staffIds,
             title: 'Invigilation Assigned',
             body: `You have been assigned as invigilator for ${examName.trim()} on ${formatDate(epochDate)}`,
+            type: 'INVIGILATION',
+            sourceModule: 'INVIGILATION',
+            sourceRefId: String(record._id),
             data: { type: 'INVIGILATION', invigilationId: String(record._id) }
           });
         }

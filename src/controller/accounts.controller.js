@@ -823,6 +823,92 @@ const requestChequeReplacement = async (req, res, next) => {
   }
 };
 
+const requestNeftReplacementForCheque = async (req, res, next) => {
+  const session = await mongoose.startSession();
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = pickUserId(req);
+    const oldPaymentId = safeTrim(req.body?.oldPaymentId);
+    const neftDetails = req.body?.neft || {};
+    const remarks = safeTrim(req.body?.remarks);
+    const cancelReason = safeTrim(req.body?.cancelReason);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    if (!oldPaymentId) return res.status(400).json({ status: false, message: 'oldPaymentId is required' });
+    const utr = safeTrim(neftDetails?.utr);
+    const paidOn = toEpochDate(neftDetails?.paidOn, false);
+    const bankName = safeTrim(neftDetails?.bankName) || null;
+    const branchName = safeTrim(neftDetails?.branchName) || null;
+    const referenceNote = safeTrim(neftDetails?.referenceNote) || null;
+    const amount = toNum(req.body?.amount);
+    if (!utr || amount <= 0) {
+      return res.status(400).json({ status: false, message: 'neft.utr and amount are required' });
+    }
+    session.startTransaction();
+    const oldP = await Payment.findOne({ tenantId, paymentId: oldPaymentId, isdeleted: false, paymentType: 'CHEQUE' }).session(session);
+    if (!oldP) {
+      await session.abortTransaction();
+      return res.status(404).json({ status: false, message: 'Old cheque payment not found' });
+    }
+    if (String(oldP.status || '') === 'CLEARED') {
+      await session.abortTransaction();
+      return res.status(400).json({ status: false, message: 'CLEARED cheque cannot be replaced' });
+    }
+    const newDoc = await Payment.create(
+      [
+        {
+          tenantId,
+          admissionId: oldP.admissionId,
+          admissionNo: oldP.admissionNo || null,
+          academicYear: oldP.academicYear || null,
+          centerId: oldP.centerId || null,
+          centerName: oldP.centerName,
+          programId: oldP.programId || null,
+          programName: oldP.programName,
+          programCode: oldP.programCode || null,
+          studentName: oldP.studentName,
+          studentPhone: oldP.studentPhone || null,
+          registrationNumber: oldP.registrationNumber || null,
+          paymentType: 'NEFT',
+          amount,
+          remarks: remarks || oldP.remarks || null,
+          status: 'SUBMITTED',
+          neft: { utr, paidOn, bankName, branchName, referenceNote },
+          replacement: { replacesPaymentId: oldPaymentId },
+          batchId: oldP.batchId || null,
+          statusFlag: 'Active',
+          isdeleted: false,
+          createdBy: userId || null,
+          updatedBy: userId || null
+        }
+      ],
+      { session }
+    );
+    const created = newDoc?.[0];
+    oldP.status = 'CANCELLED';
+    oldP.failureReason = cancelReason || 'Cheque replaced with NEFT';
+    oldP.replacement = oldP.replacement || {};
+    oldP.replacement.replacedByPaymentId = created.paymentId;
+    oldP.replacement.reason = cancelReason || 'Cheque replaced with NEFT';
+    oldP.replacement.replacedAt = Date.now();
+    oldP.replacement.replacedBy = userId || null;
+    oldP.updatedBy = userId || null;
+    await oldP.save({ session });
+    await session.commitTransaction();
+    return res.status(200).json({
+      status: true,
+      message: 'Cheque replaced with NEFT',
+      data: { oldPaymentId, newPaymentId: created.paymentId }
+    });
+  } catch (err) {
+    try {
+      await session.abortTransaction();
+    } catch (_) {}
+    return next(err);
+  } finally {
+    session.endSession();
+  }
+};
+
 const replacementHistory = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
@@ -831,21 +917,21 @@ const replacementHistory = async (req, res, next) => {
     if (!paymentId) return res.status(400).json({ status: false, message: 'paymentId is required' });
     const seen = new Set();
     const chain = [];
-    let cur = await Payment.findOne({ tenantId, paymentId, isdeleted: false, paymentType: 'CHEQUE' }).lean();
-    if (!cur) return res.status(404).json({ status: false, message: 'Cheque not found' });
-    while (cur?.cheque?.replacementOf) {
-      const prevId = safeTrim(cur.cheque.replacementOf);
+    let cur = await Payment.findOne({ tenantId, paymentId, isdeleted: false }).lean();
+    if (!cur) return res.status(404).json({ status: false, message: 'Payment not found' });
+    while (true) {
+      const prevId = safeTrim(cur?.cheque?.replacementOf || cur?.replacement?.replacesPaymentId);
       if (!prevId || seen.has(prevId)) break;
-      const prev = await Payment.findOne({ tenantId, paymentId: prevId, isdeleted: false, paymentType: 'CHEQUE' }).lean();
+      const prev = await Payment.findOne({ tenantId, paymentId: prevId, isdeleted: false }).lean();
       if (!prev) break;
       cur = prev;
     }
     while (cur && !seen.has(cur.paymentId)) {
       seen.add(cur.paymentId);
       chain.push(cur);
-      const nextId = safeTrim(cur?.cheque?.replacedBy);
+      const nextId = safeTrim(cur?.cheque?.replacedBy || cur?.replacement?.replacedByPaymentId);
       if (!nextId) break;
-      const nxt = await Payment.findOne({ tenantId, paymentId: nextId, isdeleted: false, paymentType: 'CHEQUE' }).lean();
+      const nxt = await Payment.findOne({ tenantId, paymentId: nextId, isdeleted: false }).lean();
       if (!nxt) break;
       cur = nxt;
     }
@@ -1240,6 +1326,7 @@ export default {
   approveChequeExtension,
   rejectChequeExtension,
   requestChequeReplacement,
+  requestNeftReplacementForCheque,
   replacementHistory,
   createChequeMerge,
   viewChequeMerge,

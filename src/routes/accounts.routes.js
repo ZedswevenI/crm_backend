@@ -23,6 +23,7 @@ routes.post('/cheque/extension/view', validatetoken, accountsCtrl.viewChequeExte
 routes.post('/cheque/extension/approve', validatetoken, accountsCtrl.approveChequeExtension);
 routes.post('/cheque/extension/reject', validatetoken, accountsCtrl.rejectChequeExtension);
 routes.post('/cheque/replacement/request', validatetoken, accountsCtrl.requestChequeReplacement);
+routes.post('/cheque/replacement/request-neft', validatetoken, accountsCtrl.requestNeftReplacementForCheque);
 routes.post('/cheque/replacement/history', validatetoken, accountsCtrl.replacementHistory);
 routes.post('/cheque/merge/create', validatetoken, accountsCtrl.createChequeMerge);
 routes.post('/cheque/merge/view', validatetoken, accountsCtrl.viewChequeMerge);
