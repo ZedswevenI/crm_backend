@@ -4,6 +4,7 @@ import Payment from '../models/admissionpayments.model.js';
 import DepositBatch from '../models/depositbatch.model.js';
 import ChequeExtensionRequest from '../models/chequeextension.model.js';
 import ChequeMergeGroup from '../models/chequemerge.model.js';
+import Admission from '../models/admission.model.js';
 import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
 
 const pickTenantId = (req) => String(req.body?.entiId || req.body?.tenantId || '').trim();
@@ -45,6 +46,20 @@ const toEpochDate = (v, endOfDay = false) => {
   const d = endOfDay ? new Date(year, month - 1, day, 23, 59, 59, 999) : new Date(year, month - 1, day, 0, 0, 0, 0);
   const t = d.getTime();
   return Number.isFinite(t) ? t : null;
+};
+
+// Payments are submitted before an admission is approved, so admissionNo doesn't exist on
+// the Payment doc yet at creation time. Rather than backfill/store it, resolve it live here
+// via admissionId → Admission.admissionNo for any row missing it.
+const populateAdmissionNo = async (tenantId, rows) => {
+  const missingAdmissionIds = [...new Set(rows.filter((r) => !r.admissionNo && r.admissionId).map((r) => r.admissionId))];
+  if (!missingAdmissionIds.length) return rows;
+  const admissions = await Admission.find({ tenantId, admissionId: { $in: missingAdmissionIds }, isdeleted: false }, { admissionId: 1, admissionNo: 1 }).lean();
+  const admissionNoMap = new Map(admissions.map((a) => [a.admissionId, a.admissionNo || null]));
+  for (const r of rows) {
+    if (!r.admissionNo && r.admissionId) r.admissionNo = admissionNoMap.get(r.admissionId) || null;
+  }
+  return rows;
 };
 
 const listCheques = async (req, res, next) => {
@@ -100,7 +115,18 @@ const listCheques = async (req, res, next) => {
       query.$or = [{ admissionNo: buildRegex(search) }, { studentName: buildRegex(search) }, { registrationNumber: buildRegex(search) }, { 'cheque.chequeNo': buildRegex(search) }, { 'cheque.bankName': buildRegex(search) }];
     }
     const sort = parseSort(q.sort);
+    const listFull = safeTrim(q.list).toLowerCase() === 'full';
+    if (listFull) {
+      const rows = await Payment.find(query).sort(sort).lean();
+      await populateAdmissionNo(tenantId, rows);
+      return res.status(200).json({
+        status: true,
+        message: 'Cheques list fetched',
+        data: { rows, total: rows.length, page: 1, limit: rows.length, pages: 1 }
+      });
+    }
     const [rows, total] = await Promise.all([Payment.find(query).sort(sort).skip(skip).limit(limitNum).lean(), Payment.countDocuments(query)]);
+    await populateAdmissionNo(tenantId, rows);
     return res.status(200).json({
       status: true,
       message: 'Cheques list fetched',
@@ -1137,6 +1163,7 @@ const listNeft = async (req, res, next) => {
     }
     const sort = parseSort(q.sort || '-createdAt');
     const [rows, total] = await Promise.all([Payment.find(query).sort(sort).skip(skip).limit(limitNum).lean(), Payment.countDocuments(query)]);
+    await populateAdmissionNo(tenantId, rows);
     return res.status(200).json({
       status: true,
       message: 'NEFT list fetched',
