@@ -171,13 +171,11 @@ const _evalAnswers = (answers, qMap, qGraceMap) =>
       }
       if (grace) {
         const gm = toNum(grace.graceMarks);
-        if (marks < 0) {
-          graceMks = -marks + gm;
-          marks = gm;
-        } else {
-          graceMks = gm;
-          marks += gm;
-        }
+        // Grace replaces whatever marks were awarded for this question (whether negative from a
+        // wrong answer, zero from a skip, or full marks from a correct answer) with graceMarks —
+        // it never stacks on top of marks already earned.
+        graceMks = gm - marks;
+        marks = gm;
       }
     }
     return {
