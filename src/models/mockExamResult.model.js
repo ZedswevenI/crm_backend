@@ -99,6 +99,7 @@ const MockExamResultSchema = new mongoose.Schema(
     },
     isResultVisible: { type: Boolean, default: false },
     isImported: { type: Boolean, default: false },
+    submissionMode: { type: String, enum: ['ONLINE', 'OFFLINE'], default: 'ONLINE' },
     createdBy: { type: String, default: null },
     updatedBy: { type: String, default: null },
     isdeleted: { type: Boolean, default: false }
