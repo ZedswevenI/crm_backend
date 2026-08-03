@@ -63,6 +63,9 @@ routes.post('/questions/unmap', validatetoken, mockExamQnsController.unmapQuesti
 routes.post('/questions/bulk-map', validatetoken, mockExamQnsController.bulkMapQuestionsToExam);
 
 routes.post('/result/submit', mockExamResultController.submitResult);
+routes.post('/result/submit-offline', validatetoken, mockExamResultController.submitOfflineResult);
+routes.post('/result/submit-offline/bulk', validatetoken, mockExamResultController.submitOfflineResultsBulk);
+routes.post('/result/submit-offline/correct', validatetoken, mockExamResultController.correctOfflineResult);
 routes.post('/result/my-result', mockExamResultController.getMyResult);
 routes.post('/result/my-result/with/questions', mockExamResultController.getMyResultWithAnswers);
 routes.post('/result/leaderboard', mockExamResultController.getLeaderboard);

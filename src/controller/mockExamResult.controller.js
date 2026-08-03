@@ -679,6 +679,268 @@ const submitResult = async (req, res, next) => {
   }
 };
 
+// Evaluates one student's answers the same way submitResult does and creates the MockExamResult
+// doc with the given submissionMode. Used only by the offline entry/correction endpoints below.
+const evaluateAndCreateOfflineResult = async ({ tenantId, examId, exam, admissionNo, studentId, batchId, centerId, classNo, startedAt, completedAt, answers: incomingAnswers, createdBy }) => {
+  const isLate = !!(exam.endTime && completedAt > exam.endTime);
+  const questions = await MockExamQns.find({ tenantId, examId, isdeleted: false }, { _id: 0, questionId: 1, sectionId: 1, questionType: 1, positiveMarks: 1, negativeMarks: 1, questionOptions: 1, hasPartialMarking: 1, numericMin: 1, numericMax: 1, correctAnswer: 1 }).lean();
+  const qById = new Map(questions.map((q) => [safeTrim(q.questionId), q]));
+  const totalPossible = questions.reduce((s, q) => s + toNum(q.positiveMarks), 0);
+  const evaluated = [];
+  let obtainedMarks = 0;
+  for (const a of incomingAnswers) {
+    const qid = safeTrim(a?.questionId);
+    const sid = safeTrim(a?.sectionId);
+    if (!qid) continue;
+    const q = qById.get(qid) || null;
+    const isSkipped = a?.isSkipped === true;
+    const answerRaw = isSkipped ? null : (a?.answerRaw ?? null);
+    const pos = q ? toNum(q.positiveMarks) : toNum(a?.positiveMarks);
+    const neg = q ? toNum(q.negativeMarks) : toNum(a?.negativeMarks);
+    let isCorrect = null,
+      correctAnswerRaw = null,
+      marksAwarded = 0;
+    if (q && !isSkipped) {
+      const ev = evalAnswer(q, answerRaw);
+      isCorrect = ev.isCorrect;
+      correctAnswerRaw = ev.correctAnswerRaw ?? null;
+      marksAwarded = ev.marksAwarded;
+    }
+    obtainedMarks += toNum(marksAwarded);
+    evaluated.push({
+      questionId: qid,
+      sectionId: q ? safeTrim(q.sectionId) : sid,
+      answerRaw,
+      isCorrect,
+      isSkipped,
+      timeTaken: toNum(a.timeTaken, 0),
+      positiveMarks: pos,
+      negativeMarks: neg,
+      marksAwarded,
+      correctAnswerRaw,
+      hasPartialMarking: q?.hasPartialMarking || false
+    });
+  }
+  const sectionResults = buildSectionResults(evaluated, exam.sections, {});
+  const totalMarks = toNum(exam.totalMarks) || totalPossible;
+
+  const totalCorrect = evaluated.filter((a) => a.isCorrect === true).length;
+  const totalWrong = evaluated.filter((a) => a.isCorrect === false).length;
+  const totalSkipped = evaluated.filter((a) => a.isSkipped === true).length;
+  const totalPartial = evaluated.filter((a) => a.isCorrect === null && !a.isSkipped && a.answerRaw !== null).length;
+  const totalAnswered = evaluated.filter((a) => !a.isSkipped).length;
+
+  const doc = await MockExamResult.create({
+    tenantId,
+    examId,
+    admissionNo,
+    studentId: studentId || null,
+    batchId,
+    centerId,
+    classNo,
+    startedAt,
+    completedAt,
+    timeTaken: startedAt ? Math.max(0, completedAt - startedAt) : 0,
+    isLate,
+    totalQuestions: evaluated.length,
+    totalMarks,
+    obtainedMarks,
+    correctCount: totalCorrect,
+    wrongCount: totalWrong,
+    skippedCount: totalSkipped,
+    partialCount: totalPartial,
+    answeredCount: totalAnswered,
+    sectionResults,
+    answers: evaluated,
+    status: 'completed',
+    isResultVisible: false,
+    submissionMode: 'OFFLINE',
+    createdBy: createdBy || null,
+    updatedBy: createdBy || null
+  });
+  if (batchId) {
+    await MockExamBatchAssign.updateOne(
+      { tenantId, examId, batchId, isdeleted: false },
+      {
+        $set: {
+          'students.$[st].status': 'completed',
+          'students.$[st].completedAt': completedAt,
+          'students.$[st].startedAt': startedAt,
+          'students.$[st].obtainedMarks': obtainedMarks,
+          'students.$[st].isLate': isLate
+        }
+      },
+      { arrayFilters: [{ 'st.admissionNo': admissionNo }] }
+    );
+  }
+  return { doc, obtainedMarks, totalMarks, isLate, sectionResults };
+};
+
+const submitOfflineResult = async (req, res, next) => {
+  try {
+    const tenantId = pickTid(req);
+    const userId = safeTrim(req.body?.userId);
+    const admissionNo = safeTrim(req.body?.admissionNo);
+    const examId = safeTrim(req.body?.examId);
+    const batchId = safeTrim(req.body?.batchId) || null;
+    const centerId = safeTrim(req.body?.centerId) || null;
+    const classNo = req.body?.classNo ? toNum(req.body.classNo) : null;
+    const completedAt = req.body?.completedAt ? toNum(req.body.completedAt) : Date.now();
+    if (!tenantId || !admissionNo || !examId) return res.status(400).json({ status: false, message: 'tenantId, admissionNo, examId are required' });
+    const incomingAnswers = Array.isArray(req.body?.answers) ? req.body.answers : [];
+    if (!incomingAnswers.length) return res.status(400).json({ status: false, message: 'answers[] is required' });
+    const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }).lean();
+    if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
+    const startedAt = req.body?.startedAt ? toNum(req.body.startedAt) : exam.startTime || completedAt;
+    const existing = await MockExamResult.findOne({ tenantId, examId, admissionNo, isdeleted: false }, { _id: 1 }).lean();
+    if (existing) {
+      return res.status(409).json({ status: false, message: 'A result already exists for this student and exam. Use the correction endpoint to overwrite it.' });
+    }
+    const { doc, obtainedMarks, totalMarks, isLate, sectionResults } = await evaluateAndCreateOfflineResult({
+      tenantId,
+      examId,
+      exam,
+      admissionNo,
+      studentId: safeTrim(req.body?.studentId) || null,
+      batchId,
+      centerId,
+      classNo,
+      startedAt,
+      completedAt,
+      answers: incomingAnswers,
+      createdBy: userId || null
+    });
+    return res.status(200).json({
+      status: true,
+      message: 'Offline result recorded successfully',
+      data: { _id: doc._id, examId, admissionNo, obtainedMarks, totalMarks, isLate, sectionResults }
+    });
+  } catch (err) {
+    if (err?.code === 11000) return res.status(409).json({ status: false, message: 'A result already exists for this student and exam' });
+    return next(err);
+  }
+};
+
+const submitOfflineResultsBulk = async (req, res, next) => {
+  try {
+    const tenantId = pickTid(req);
+    const userId = safeTrim(req.body?.userId);
+    const examId = safeTrim(req.body?.examId);
+    const students = Array.isArray(req.body?.students) ? req.body.students : [];
+    if (!tenantId || !examId) return res.status(400).json({ status: false, message: 'tenantId and examId are required' });
+    if (!students.length) return res.status(400).json({ status: false, message: 'students[] is required' });
+    const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }).lean();
+    if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
+
+    const admissionNos = students.map((s) => safeTrim(s?.admissionNo)).filter(Boolean);
+    const existingResults = await MockExamResult.find({ tenantId, examId, admissionNo: { $in: admissionNos }, isdeleted: false }, { admissionNo: 1 }).lean();
+    const existingSet = new Set(existingResults.map((r) => r.admissionNo));
+
+    const report = { successCount: 0, failedCount: 0, errors: [] };
+    for (let i = 0; i < students.length; i++) {
+      const s = students[i];
+      const admissionNo = safeTrim(s?.admissionNo);
+      if (!admissionNo) {
+        report.failedCount++;
+        report.errors.push({ row: i + 1, reason: 'admissionNo is required' });
+        continue;
+      }
+      if (existingSet.has(admissionNo)) {
+        report.failedCount++;
+        report.errors.push({ row: i + 1, admissionNo, reason: 'A result already exists for this student and exam' });
+        continue;
+      }
+      const answers = Array.isArray(s?.answers) ? s.answers : [];
+      if (!answers.length) {
+        report.failedCount++;
+        report.errors.push({ row: i + 1, admissionNo, reason: 'answers[] is required' });
+        continue;
+      }
+      const completedAt = s?.completedAt ? toNum(s.completedAt) : Date.now();
+      const startedAt = s?.startedAt ? toNum(s.startedAt) : exam.startTime || completedAt;
+      try {
+        await evaluateAndCreateOfflineResult({
+          tenantId,
+          examId,
+          exam,
+          admissionNo,
+          studentId: safeTrim(s?.studentId) || null,
+          batchId: safeTrim(s?.batchId) || null,
+          centerId: safeTrim(s?.centerId) || null,
+          classNo: s?.classNo ? toNum(s.classNo) : null,
+          startedAt,
+          completedAt,
+          answers,
+          createdBy: userId || null
+        });
+        existingSet.add(admissionNo);
+        report.successCount++;
+      } catch (e) {
+        report.failedCount++;
+        report.errors.push({ row: i + 1, admissionNo, reason: e?.code === 11000 ? 'A result already exists for this student and exam' : e?.message || 'Failed to save' });
+      }
+    }
+    return res.status(200).json({
+      status: true,
+      message: `Offline results processed. Success: ${report.successCount}, Failed: ${report.failedCount}`,
+      data: report
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const correctOfflineResult = async (req, res, next) => {
+  try {
+    const tenantId = pickTid(req);
+    const userId = safeTrim(req.body?.userId);
+    const admissionNo = safeTrim(req.body?.admissionNo);
+    const examId = safeTrim(req.body?.examId);
+    if (!tenantId || !admissionNo || !examId) return res.status(400).json({ status: false, message: 'tenantId, admissionNo, examId are required' });
+    const incomingAnswers = Array.isArray(req.body?.answers) ? req.body.answers : [];
+    if (!incomingAnswers.length) return res.status(400).json({ status: false, message: 'answers[] is required' });
+    const existing = await MockExamResult.findOne({ tenantId, examId, admissionNo, isdeleted: false });
+    if (!existing) return res.status(404).json({ status: false, message: 'No existing result found for this student and exam. Use the offline entry endpoint to create one.' });
+    const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }).lean();
+    if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
+
+    const batchId = safeTrim(req.body?.batchId) || existing.batchId || null;
+    const centerId = safeTrim(req.body?.centerId) || existing.centerId || null;
+    const classNo = req.body?.classNo ? toNum(req.body.classNo) : existing.classNo;
+    const completedAt = req.body?.completedAt ? toNum(req.body.completedAt) : existing.completedAt || Date.now();
+    const startedAt = req.body?.startedAt ? toNum(req.body.startedAt) : existing.startedAt || exam.startTime || completedAt;
+
+    // Soft-delete the old row first so the partial unique index (tenantId, examId, admissionNo, isdeleted:false)
+    // doesn't block re-creating it, then re-run the same evaluation used for a fresh offline entry.
+    existing.isdeleted = true;
+    existing.updatedBy = userId || null;
+    await existing.save();
+
+    const { doc, obtainedMarks, totalMarks, isLate, sectionResults } = await evaluateAndCreateOfflineResult({
+      tenantId,
+      examId,
+      exam,
+      admissionNo,
+      studentId: existing.studentId || null,
+      batchId,
+      centerId,
+      classNo,
+      startedAt,
+      completedAt,
+      answers: incomingAnswers,
+      createdBy: userId || null
+    });
+    return res.status(200).json({
+      status: true,
+      message: 'Offline result corrected successfully',
+      data: { _id: doc._id, examId, admissionNo, obtainedMarks, totalMarks, isLate, sectionResults }
+    });
+  } catch (err) {
+    if (err?.code === 11000) return res.status(409).json({ status: false, message: 'Could not overwrite — a result already exists, please retry' });
+    return next(err);
+  }
+};
+
 const getMyResult = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
@@ -1991,6 +2253,9 @@ export { evalAnswer };
 
 export default {
   submitResult,
+  submitOfflineResult,
+  submitOfflineResultsBulk,
+  correctOfflineResult,
   getMyResult,
   getLeaderboard,
   listResultsByExam,
