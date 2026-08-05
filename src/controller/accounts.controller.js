@@ -5,6 +5,7 @@ import DepositBatch from '../models/depositbatch.model.js';
 import ChequeExtensionRequest from '../models/chequeextension.model.js';
 import ChequeMergeGroup from '../models/chequemerge.model.js';
 import Admission from '../models/admission.model.js';
+import StudentProfile from '../models/studentProfile.model.js';
 import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
 
 const pickTenantId = (req) => String(req.body?.entiId || req.body?.tenantId || '').trim();
@@ -31,6 +32,7 @@ const parseSort = (sortRaw) => {
 };
 
 const buildRegex = (s) => ({ $regex: s, $options: 'i' });
+const round2 = (n) => Math.round(Number(n) * 100) / 100;
 
 const isValidYMD = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || '').trim());
 
@@ -77,6 +79,7 @@ const listCheques = async (req, res, next) => {
     const mode = safeTrim(q.mode).toUpperCase();
     const centerId = safeTrim(q.centerId || req.body?.centerId);
     const programCode = safeTrim(q.programCode);
+    const paymentCategory = safeTrim(q.paymentCategory).toUpperCase();
     const fromDueRaw = q.fromDue;
     const toDueRaw = q.toDue;
     const fromDepositRaw = q.fromDeposit;
@@ -90,6 +93,7 @@ const listCheques = async (req, res, next) => {
     if (mode) query['cheque.mode'] = mode;
     if (centerId) query.centerId = centerId;
     if (programCode) query.programCode = buildRegex(programCode);
+    if (paymentCategory && paymentCategory !== 'ALL') query.paymentCategory = paymentCategory;
     const fromDue = toEpochDate(fromDueRaw, false);
     const toDue = toEpochDate(toDueRaw, true);
     if (fromDue !== null || toDue !== null) {
@@ -188,6 +192,204 @@ const updateChequeRemarks = async (req, res, next) => {
     doc.updatedBy = pickUserId(req) || null;
     await doc.save();
     return res.status(200).json({ status: true, message: 'Remarks updated', data: { paymentId } });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+// Builds Payment docs from cheques[]/neftRefs[]/otherPayments[] rows for an already-enrolled
+// student's non-admission fee (hostel, transport, miscellaneous, ...). Mirrors the row shapes
+// admission.controller.js's submitPayments uses, but tags paymentCategory/categoryLabel and
+// never wipes existing payments — a student can have hostel fee added now, transport later.
+const buildStudentFeePaymentDocs = ({ tenantId, student, paymentCategory, categoryLabel, cheques = [], neftRefs = [], otherPayments = [] }) => {
+  const docs = [];
+  const base = {
+    tenantId,
+    admissionId: student.admissionId,
+    admissionNo: student.admissionNo || null,
+    academicYear: student.academicYear || null,
+    centerId: student.centerId || null,
+    centerName: student.centerName,
+    programId: student.programId || null,
+    programName: student.programName,
+    programCode: student.programCode || null,
+    studentName: student.student?.name || '',
+    studentPhone: student.student?.phone || null,
+    registrationNumber: student.registrationNumber || null,
+    paymentCategory,
+    categoryLabel: categoryLabel || null
+  };
+  for (const r of neftRefs) {
+    const utr = safeTrim(r.utr);
+    const amt = toNum(r.amount);
+    const paidOn = toEpochDate(r.paidOn, false);
+    if (!utr || amt <= 0) continue;
+    docs.push({
+      ...base,
+      paymentType: 'NEFT',
+      amount: amt,
+      remarks: safeTrim(r.remarks) || null,
+      status: 'SUBMITTED',
+      submittedOn: paidOn,
+      neft: {
+        utr,
+        paidOn,
+        bankName: safeTrim(r.bankName) || null,
+        branchName: safeTrim(r.branchName) || null,
+        referenceNote: safeTrim(r.referenceNote) || null
+      }
+    });
+  }
+  const chequeMinDueByNo = new Map();
+  for (const c of cheques) {
+    const chequeNo = safeTrim(c.chequeNo);
+    const dueDate = toEpochDate(c.dueDate, false);
+    if (!chequeNo || !dueDate) continue;
+    const prev = chequeMinDueByNo.get(chequeNo);
+    if (!prev || dueDate < prev) chequeMinDueByNo.set(chequeNo, dueDate);
+  }
+  for (const c of cheques) {
+    const chequeNo = safeTrim(c.chequeNo);
+    const dueDate = toEpochDate(c.dueDate, false);
+    const chequeDate = toEpochDate(c.chequeDate, false);
+    const favourOf = safeTrim(c.favourOf);
+    const mode = safeTrim(c.mode);
+    const amt = toNum(c.amount);
+    if (!chequeNo || !dueDate || !chequeDate || !favourOf || !['PDC', 'CDC'].includes(mode) || amt <= 0) continue;
+    const plannedDepositDate = chequeMinDueByNo.get(chequeNo) || dueDate || null;
+    docs.push({
+      ...base,
+      paymentType: 'CHEQUE',
+      amount: amt,
+      remarks: safeTrim(c.remarks) || null,
+      status: 'PENDING',
+      cheque: {
+        sno: c.sno ?? null,
+        chequeNo,
+        chequeDate,
+        dueDate,
+        favourOf,
+        mode,
+        bankName: safeTrim(c.bankName) || null,
+        branchName: safeTrim(c.branchName) || null,
+        plannedDepositDate,
+        instalmentLabel: safeTrim(c.description) || categoryLabel || null
+      },
+      audit: [{ action: 'CREATE', by: student.userId || null, remarks: `Created via student fee entry (${paymentCategory})` }]
+    });
+  }
+  for (const o of otherPayments) {
+    const mode = safeTrim(o.mode);
+    const amt = toNum(o.amount);
+    const paidOn = toEpochDate(o.paidOn, false);
+    if (!mode || amt <= 0) continue;
+    docs.push({
+      ...base,
+      paymentType: 'OTHER',
+      amount: amt,
+      remarks: safeTrim(o.remarks) || null,
+      status: 'SUBMITTED',
+      submittedOn: paidOn,
+      other: {
+        mode,
+        refNo: safeTrim(o.refNo) || null,
+        paidOn,
+        bankName: safeTrim(o.bankName) || null,
+        branchName: safeTrim(o.branchName) || null,
+        referenceNote: safeTrim(o.referenceNote) || null
+      }
+    });
+  }
+  return docs;
+};
+
+const addStudentFeePayments = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = pickUserId(req);
+    const admissionNo = safeTrim(req.body?.admissionNo);
+    const studentId = safeTrim(req.body?.studentId);
+    const paymentCategory = safeTrim(req.body?.paymentCategory).toUpperCase();
+    const categoryLabel = safeTrim(req.body?.categoryLabel) || null;
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    if (!admissionNo && !studentId) return res.status(400).json({ status: false, message: 'admissionNo or studentId is required' });
+    if (!paymentCategory) return res.status(400).json({ status: false, message: 'paymentCategory is required (e.g. HOSTEL, TRANSPORT, MISCELLANEOUS)' });
+
+    const studentQuery = { tenantId, isdeleted: false };
+    if (studentId) studentQuery.studentId = studentId;
+    else studentQuery.admissionNo = admissionNo;
+    const student = await StudentProfile.findOne(studentQuery).lean();
+    if (!student) return res.status(404).json({ status: false, message: 'Student not found' });
+
+    const cheques = Array.isArray(req.body?.cheques) ? req.body.cheques : [];
+    const neftRefs = Array.isArray(req.body?.neftRefs) ? req.body.neftRefs : [];
+    const otherPayments = Array.isArray(req.body?.otherPayments) ? req.body.otherPayments : [];
+    const docs = buildStudentFeePaymentDocs({ tenantId, student: { ...student, userId }, paymentCategory, categoryLabel, cheques, neftRefs, otherPayments });
+    if (!docs.length) return res.status(400).json({ status: false, message: 'No valid payment rows provided' });
+
+    const created = await Payment.insertMany(docs);
+    return res.status(200).json({
+      status: true,
+      message: 'Payment(s) added successfully',
+      data: {
+        admissionNo: student.admissionNo,
+        paymentCategory,
+        count: created.length,
+        totalAmount: round2(created.reduce((s, d) => s + toNum(d.amount), 0)),
+        paymentIds: created.map((d) => d.paymentId)
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const addStudentFeePaymentsBulk = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = pickUserId(req);
+    const paymentCategory = safeTrim(req.body?.paymentCategory).toUpperCase();
+    const categoryLabel = safeTrim(req.body?.categoryLabel) || null;
+    const students = Array.isArray(req.body?.students) ? req.body.students : [];
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    if (!paymentCategory) return res.status(400).json({ status: false, message: 'paymentCategory is required (e.g. HOSTEL, TRANSPORT, MISCELLANEOUS)' });
+    if (!students.length) return res.status(400).json({ status: false, message: 'students[] is required' });
+
+    const report = { successCount: 0, failedCount: 0, errors: [] };
+    const allDocs = [];
+    for (let i = 0; i < students.length; i++) {
+      const row = students[i];
+      const admissionNo = safeTrim(row?.admissionNo);
+      if (!admissionNo) {
+        report.failedCount++;
+        report.errors.push({ row: i + 1, reason: 'admissionNo is required' });
+        continue;
+      }
+      const student = await StudentProfile.findOne({ tenantId, admissionNo, isdeleted: false }).lean();
+      if (!student) {
+        report.failedCount++;
+        report.errors.push({ row: i + 1, admissionNo, reason: 'Student not found' });
+        continue;
+      }
+      const cheques = Array.isArray(row?.cheques) ? row.cheques : [];
+      const neftRefs = Array.isArray(row?.neftRefs) ? row.neftRefs : [];
+      const otherPayments = Array.isArray(row?.otherPayments) ? row.otherPayments : [];
+      const docs = buildStudentFeePaymentDocs({ tenantId, student: { ...student, userId }, paymentCategory, categoryLabel, cheques, neftRefs, otherPayments });
+      if (!docs.length) {
+        report.failedCount++;
+        report.errors.push({ row: i + 1, admissionNo, reason: 'No valid payment rows provided' });
+        continue;
+      }
+      allDocs.push(...docs);
+      report.successCount++;
+    }
+
+    if (allDocs.length) await Payment.insertMany(allDocs);
+    return res.status(200).json({
+      status: true,
+      message: `Student fee payments processed. Success: ${report.successCount}, Failed: ${report.failedCount}`,
+      data: report
+    });
   } catch (err) {
     return next(err);
   }
@@ -1154,10 +1356,12 @@ const listNeft = async (req, res, next) => {
     const skip = (pageNum - 1) * limitNum;
     const search = safeTrim(q.search);
     const status = safeTrim(q.status).toUpperCase();
+    const paymentCategory = safeTrim(q.paymentCategory).toUpperCase();
     const includeInactive = safeTrim(q.includeInactive).toLowerCase() === 'yes';
     const query = { tenantId, isdeleted: false, paymentType: 'NEFT' };
     if (!includeInactive) query.statusFlag = 'Active';
     if (status && status !== 'ALL') query.status = status;
+    if (paymentCategory && paymentCategory !== 'ALL') query.paymentCategory = paymentCategory;
     if (search) {
       query.$or = [{ admissionNo: buildRegex(search) }, { studentName: buildRegex(search) }, { registrationNumber: buildRegex(search) }, { centerName: buildRegex(search) }, { programName: buildRegex(search) }, { 'neft.utr': buildRegex(search) }];
     }
@@ -1246,10 +1450,12 @@ const listPayments = async (req, res, next) => {
     const centerId = safeTrim(q.centerId || req.body?.centerId);
     const programCode = safeTrim(q.programCode);
     const academicYear = safeTrim(q.academicYear);
+    const paymentCategory = safeTrim(q.paymentCategory).toUpperCase();
     const query = { tenantId, isdeleted: false };
     if (!includeInactive) query.statusFlag = 'Active';
     if (paymentType && paymentType !== 'ALL') query.paymentType = paymentType;
     if (status && status !== 'ALL') query.status = status;
+    if (paymentCategory && paymentCategory !== 'ALL') query.paymentCategory = paymentCategory;
     if (academicYear) query.academicYear = academicYear;
     if (centerId) query.centerId = centerId;
     if (programCode) query.programCode = programCode;
@@ -1296,6 +1502,8 @@ const listPayments = async (req, res, next) => {
       paymentType: 1,
       status: 1,
       amount: 1,
+      paymentCategory: 1,
+      categoryLabel: 1,
       admissionNo: 1,
       studentName: 1,
       registrationNumber: 1,
@@ -1338,6 +1546,8 @@ const listPayments = async (req, res, next) => {
 };
 
 export default {
+  addStudentFeePayments,
+  addStudentFeePaymentsBulk,
   listCheques,
   viewCheque,
   updateChequeRemarks,
