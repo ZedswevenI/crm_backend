@@ -16,6 +16,7 @@ routes.post('/reject', validatetoken, admisCtrl.rejectAdmission);
 routes.post('/update', validatetoken, admisCtrl.updateAdmission);
 routes.post('/view', validatetoken, admisCtrl.viewAdmission);
 routes.post('/list', validatetoken, admisCtrl.listAdmissions);
+routes.post('/export', validatetoken, admisCtrl.exportAdmissions);
 routes.post('/paymenttemplate', validatetoken, admisCtrl.getPaymentTemplate);
 routes.post('/bulkupload', validatetoken, admisCtrl.bulkUploadStudents);
 routes.post('/review', validatetoken, admisCtrl.putUnderReview);
