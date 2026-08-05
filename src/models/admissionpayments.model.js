@@ -86,6 +86,8 @@ const paymentSchema = new mongoose.Schema(
     },
     audit: { type: [AuditSchema], required: false, default: [] },
     batchId: { type: String, required: false, trim: true, default: null },
+    paymentCategory: { type: String, trim: true, default: 'ADMISSION' },
+    categoryLabel: { type: String, trim: true, default: null },
     statusFlag: { type: String, enum: ['Active', 'Inactive'], default: 'Active' },
     isdeleted: { type: Boolean, required: true, default: false },
     createdBy: { type: String, required: false, default: null, ref: 'user' },
@@ -107,6 +109,7 @@ paymentSchema.index({ tenantId: 1, 'replacement.replacesPaymentId': 1, isdeleted
 paymentSchema.index({ tenantId: 1, 'replacement.replacedByPaymentId': 1, isdeleted: 1 });
 paymentSchema.index({ tenantId: 1, depositBatchId: 1, isdeleted: 1 });
 paymentSchema.index({ tenantId: 1, mergeGroupId: 1, isdeleted: 1 });
+paymentSchema.index({ tenantId: 1, paymentCategory: 1, isdeleted: 1 });
 
 // ---------------- Validation ----------------
 paymentSchema.pre('validate', function (next) {
