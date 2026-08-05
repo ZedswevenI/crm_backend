@@ -10,6 +10,7 @@ import multer from 'multer';
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 200 * 1024 * 1024 } });
 
 routes.post('/list', validatetoken, studentCtrl.listStudents);
+routes.post('/export', validatetoken, studentCtrl.exportStudents);
 routes.post('/view', validatetoken, studentCtrl.viewProfile);
 routes.post('/finance/summary', validatetoken, studentCtrl.viewFinancials);
 routes.post('/academic/summary', validatetoken, studentCtrl.viewAcademicSummary);

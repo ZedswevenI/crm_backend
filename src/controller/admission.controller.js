@@ -699,6 +699,65 @@ const submitForApproval = async (req, res, next) => {
   }
 };
 
+// Only field names (or dot-paths for nested fields, e.g. "student.name") — no operators.
+const EXPORTABLE_FIELD_REGEX = /^[a-zA-Z0-9_.]+$/;
+
+const exportAdmissions = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+
+    const fields = Array.isArray(req.body?.fields) ? req.body.fields.map((f) => safeTrim(f)).filter((f) => f && EXPORTABLE_FIELD_REGEX.test(f)) : [];
+    if (!fields.length) return res.status(400).json({ status: false, message: 'fields[] is required — list the field names to include in the export' });
+
+    const search = safeTrim(req.body?.search);
+    const registrationNumber = safeTrim(req.body?.registrationNumber);
+    const admissionNo = safeTrim(req.body?.admissionNo);
+    const programId = safeTrim(req.body?.programId);
+    const programCode = safeTrim(req.body?.programCode);
+    const centerId = safeTrim(req.body?.centerId);
+    const batchId = safeTrim(req.body?.batchId);
+    const academicYear = safeTrim(req.body?.academicYear);
+    const statusFilter = safeTrim(req.body?.status).toLowerCase();
+    const admissionIds = Array.isArray(req.body?.admissionIds) ? req.body.admissionIds.map(safeTrim).filter(Boolean) : [];
+    const includeInactive = safeTrim(req.body?.includeInactive).toLowerCase() === 'yes';
+
+    const query = { tenantId, isdeleted: false };
+    if (!includeInactive) query.status = 'Active';
+    if (centerId) query.centerId = centerId;
+    if (batchId) query.batchId = batchId;
+    if (programId) query.programId = programId;
+    if (programCode) query.programCode = programCode;
+    if (academicYear) query.academicYear = academicYear;
+    if (admissionIds.length) query.admissionId = { $in: admissionIds };
+    if (registrationNumber) query.registrationNumber = { $regex: registrationNumber, $options: 'i' };
+    if (admissionNo) query.admissionNo = { $regex: admissionNo, $options: 'i' };
+    if (statusFilter && statusFilter !== 'all') {
+      if (statusFilter === 'approved') query['workflow.stage'] = 'CONFIRMED';
+      else if (statusFilter === 'rejected') query['workflow.stage'] = 'REJECTED';
+      else if (statusFilter === 'waiting' || statusFilter === 'waitingforapproval') query['workflow.stage'] = 'APPROVAL_SENT';
+      else if (statusFilter === 'underreview') query['workflow.stage'] = 'UNDER_REVIEW';
+    }
+    if (search) {
+      query.$or = [{ admissionNo: { $regex: search, $options: 'i' } }, { registrationNumber: { $regex: search, $options: 'i' } }, { 'student.name': { $regex: search, $options: 'i' } }, { 'student.phone': { $regex: search, $options: 'i' } }];
+    }
+
+    const projection = { _id: 0 };
+    for (const f of fields) projection[f] = 1;
+    if (!projection.admissionId) projection.admissionId = 1; // always include as a row key
+
+    const rows = await Admission.find(query, projection).lean();
+    return res.status(200).json({
+      status: true,
+      message: 'Admission export data fetched',
+      count: rows.length,
+      data: rows
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 const viewAdmission = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
@@ -1637,6 +1696,7 @@ export default {
   approveAdmission,
   viewAdmission,
   listAdmissions,
+  exportAdmissions,
   rejectAdmission,
   updateAdmission,
   getPaymentTemplate,

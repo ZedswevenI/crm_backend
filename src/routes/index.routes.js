@@ -21,6 +21,7 @@ import performanceRoute from './performance.routes.js';
 import communicationRoutes from './communication.routes.js';
 import invigiRoutes from './invigilation.routes.js';
 import extStudentRoutes from './extStudent.routes.js';
+import helpRoutes from './help.routes.js';
 
 routes.post('/healthcheck', (req, res) => {
   try {
@@ -48,5 +49,6 @@ routes.use('/performance', performanceRoute);
 routes.use('/communication', communicationRoutes);
 routes.use('/invigi', invigiRoutes);
 routes.use('/ext/student', extStudentRoutes);
+routes.use('/help', helpRoutes);
 
 export default routes;

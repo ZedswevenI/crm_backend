@@ -188,6 +188,55 @@ const listStudents = async (req, res, next) => {
   }
 };
 
+// Only field names (or dot-paths for nested fields, e.g. "student.name") — no operators.
+const EXPORTABLE_FIELD_REGEX = /^[a-zA-Z0-9_.]+$/;
+
+const exportStudents = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+
+    const fields = Array.isArray(req.body?.fields) ? req.body.fields.map((f) => safeTrim(f)).filter((f) => f && EXPORTABLE_FIELD_REGEX.test(f)) : [];
+    if (!fields.length) return res.status(400).json({ status: false, message: 'fields[] is required — list the field names to include in the export' });
+
+    const search = safeTrim(req.body?.search);
+    const programId = safeTrim(req.body?.programId);
+    const batchId = safeTrim(req.body?.batchId);
+    const batchCode = safeTrim(req.body?.batchCode);
+    const centerId = safeTrim(req.body?.centerId);
+    const academicYear = safeTrim(req.body?.academicYear);
+    const status = safeTrim(req.body?.status);
+    const admissionNos = Array.isArray(req.body?.admissionNos) ? req.body.admissionNos.map(safeTrim).filter(Boolean) : [];
+
+    const query = { tenantId, isdeleted: false };
+    if (programId) query.programId = programId;
+    if (batchId) query.batchId = batchId;
+    if (batchCode) query.batchCode = batchCode;
+    if (centerId) query.centerId = centerId;
+    if (academicYear) query.academicYear = academicYear;
+    if (status && status !== 'ALL') query.status = status;
+    if (admissionNos.length) query.admissionNo = { $in: admissionNos };
+    if (search) {
+      const rx = new RegExp(escapeRegex(search), 'i');
+      query.$or = [{ 'student.name': rx }, { admissionNo: rx }, { registrationNumber: rx }, { 'student.phone': rx }, { 'student.parentPhone': rx }];
+    }
+
+    const projection = { _id: 0 };
+    for (const f of fields) projection[f] = 1;
+    if (!projection.admissionNo) projection.admissionNo = 1; // always include as a row key
+
+    const rows = await StudentProfile.find(query, projection).lean();
+    return res.status(constants.HTTPS_SUCCESS).json({
+      status: true,
+      message: 'Student export data fetched',
+      count: rows.length,
+      data: rows
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 const viewProfile = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
@@ -2182,6 +2231,7 @@ const getStudentPerformance = async (req, res, next) => {
 
 export default {
   listStudents,
+  exportStudents,
   viewProfile,
   viewFinancials,
   viewAcademicSummary,
