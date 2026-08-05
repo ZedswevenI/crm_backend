@@ -5,6 +5,8 @@ import bcrypt from 'bcrypt';
 import dotenv from 'dotenv';
 import { signAccessToken, signRefreshToken, hashToken, verifyRefreshToken } from '../helpers/auth.helper.js';
 import User, { ROLE_MAP } from '../models/users.model.js';
+import Permission from '../models/permission.model.js';
+import { setUserAccess, clearUserAccess, hasUserAccess } from '../services/permissionCache.service.js';
 import Center from '../models/center.model.js';
 import Token from '../models/auth.model.js';
 import Staff from '../models/staff.model.js';
@@ -17,9 +19,33 @@ dotenv.config();
 
 const Rounds = 12;
 const VALID_ROLES = Object.keys(ROLE_MAP);
+const VALID_PORTALS = ['CRM', 'ACADEMIC'];
 const pickTenantId = (req) => (req.body?.entiId || req.body?.tenantId || '').toString().trim();
 const safeLower = (v) => (v == null ? '' : String(v)).trim().toLowerCase();
 const safeTrim = (v) => (v == null ? '' : String(v)).trim();
+
+// Validates and normalizes the `portal` array (['CRM','ACADEMIC']). Returns undefined if input is undefined.
+const normalizePortal = (input) => {
+  if (input === undefined) return undefined;
+  const portal = [...new Set((Array.isArray(input) ? input : []).map(safeTrim).filter(Boolean))];
+  const invalid = portal.filter((p) => !VALID_PORTALS.includes(p));
+  if (invalid.length) throw new Error(`Invalid portal value(s): ${invalid.join(', ')}`);
+  return portal;
+};
+
+const arraysEqualAsSets = (a = [], b = []) => a.length === b.length && new Set(b).size === b.length && a.every((x) => new Set(b).has(x));
+
+// Validates `permissions` array against the seeded Permission catalog. Returns undefined if input is undefined.
+const normalizePermissions = async (input) => {
+  if (input === undefined) return undefined;
+  const permissions = [...new Set((Array.isArray(input) ? input : []).map(safeTrim).filter(Boolean))];
+  if (!permissions.length) return permissions;
+  const validRows = await Permission.find({ permissionKey: { $in: permissions }, isActive: true }, { permissionKey: 1 }).lean();
+  const validSet = new Set(validRows.map((v) => v.permissionKey));
+  const invalid = permissions.filter((p) => !validSet.has(p));
+  if (invalid.length) throw new Error(`Unknown permission key(s): ${invalid.join(', ')}`);
+  return permissions;
+};
 
 // Accepts centerIds: [] (preferred) or legacy single centerId string, resolves names, returns centers[] for the User doc.
 const resolveCenters = async (tenantId, body) => {
@@ -45,6 +71,14 @@ const createUser = async (req, res, next) => {
     const roleLabel = ROLE_MAP[roleLevel];
     const empCode = req.body.empCode ? safeTrim(req.body.empCode) : null;
     if (!name || !email || !phone || !password) return res.status(400).json({ status: false, message: 'name, email, phone and password are required' });
+    const role = req.body.role !== undefined ? safeTrim(req.body.role) || null : null;
+    let portal, permissions;
+    try {
+      portal = (await normalizePortal(req.body.portal)) ?? [];
+      permissions = (await normalizePermissions(req.body.permissions)) ?? [];
+    } catch (e) {
+      return res.status(400).json({ status: false, message: e.message });
+    }
     const centers = await resolveCenters(tenantId, req.body);
     let mappedStaffId = null;
     if (empCode) {
@@ -78,9 +112,13 @@ const createUser = async (req, res, next) => {
       empCode,
       roleLevel,
       roleLabel,
+      role,
+      portal,
+      permissions,
       centers,
       status: req.body.status || 'Active',
       isdeleted: false
+      // isAdmin intentionally omitted — never settable via this endpoint, always defaults false
     });
     if (mappedStaffId) await Staff.updateOne({ tenantId, staffId: mappedStaffId, isdeleted: false }, { $set: { userId: newUserId } });
     const out = doc.toObject();
@@ -148,6 +186,42 @@ const viewUser = async (req, res, next) => {
   }
 };
 
+// Given a userId (the app-level uuid, not the Mongo _id), returns that user's current access.
+// Callers may always fetch their own; fetching someone else's requires isAdmin.
+const getUserPermissions = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    // NOTE: `userId` in the body is overwritten by validatetoken with the CALLER's own id (used elsewhere
+    // for audit-injection) — the id being looked up must travel under a distinct field name.
+    const targetUserId = safeTrim(req.body?.targetUserId);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    if (!targetUserId) return res.status(400).json({ status: false, message: 'targetUserId is required' });
+
+    const callerId = req.user?.userId;
+    if (targetUserId !== callerId) {
+      const caller = await User.findOne({ tenantId, userId: callerId, isdeleted: false }, { isAdmin: 1 }).lean();
+      if (!caller?.isAdmin) return res.status(403).json({ status: false, message: 'Only the institute admin can view another user\'s permissions' });
+    }
+
+    const target = await User.findOne({ tenantId, userId: targetUserId, isdeleted: false }, { userId: 1, role: 1, portal: 1, permissions: 1, isAdmin: 1 }).lean();
+    if (!target) return res.status(404).json({ status: false, message: 'User not found' });
+
+    return res.status(200).json({
+      status: true,
+      message: 'User permissions retrieved successfully',
+      data: {
+        userId: target.userId,
+        role: target.role || null,
+        portal: target.portal || [],
+        isAdmin: !!target.isAdmin,
+        permissions: target.permissions || []
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 const updateUser = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
@@ -180,15 +254,84 @@ const updateUser = async (req, res, next) => {
     if (req.body.password) {
       updateDoc.password = await bcrypt.hash(String(req.body.password), Rounds);
     }
+    // role/portal/permissions are only writable here by the institute admin — same isolation rule as
+    // /user/access/update, just reachable from this combined edit call too. Only touched (and only
+    // diffed against the current value) when the caller actually is admin; otherwise silently ignored,
+    // consistent with `isAdmin` itself being stripped from every write path.
+    if (req.body.role !== undefined || req.body.portal !== undefined || req.body.permissions !== undefined) {
+      const callerId = req.user?.userId;
+      const caller = callerId ? await User.findOne({ tenantId, userId: callerId, isdeleted: false }, { isAdmin: 1 }).lean() : null;
+      if (caller?.isAdmin && !existingUser.isAdmin) {
+        if (req.body.role !== undefined) {
+          const role = safeTrim(req.body.role) || null;
+          if (role !== (existingUser.role || null)) updateDoc.role = role;
+        }
+        try {
+          const portal = await normalizePortal(req.body.portal);
+          if (portal !== undefined && !arraysEqualAsSets(portal, existingUser.portal || [])) updateDoc.portal = portal;
+          const permissions = await normalizePermissions(req.body.permissions);
+          if (permissions !== undefined && !arraysEqualAsSets(permissions, existingUser.permissions || [])) updateDoc.permissions = permissions;
+        } catch (e) {
+          return res.status(400).json({ status: false, message: e.message });
+        }
+      }
+    }
     if (Object.keys(updateDoc).length === 0) return res.status(400).json({ status: false, message: 'No fields to update' });
     const updated = await User.findOneAndUpdate({ _id: recId, tenantId, isdeleted: false }, { $set: updateDoc }, { new: true }).select('-password');
     if (!updated) return res.status(404).json({ status: false, message: 'User not found or already deleted' });
+    // Deactivating a user should cut off any in-flight session immediately, not at their next token refresh.
+    if (updateDoc.status === 'Inactive') clearUserAccess(updated.userId);
+    // If permissions actually changed and this user is currently logged in, refresh their cache live.
+    if (updateDoc.permissions !== undefined && hasUserAccess(updated.userId)) {
+      setUserAccess(updated.userId, { isAdmin: updated.isAdmin, permissions: updated.permissions });
+    }
     return res.status(200).json({ status: true, message: 'User updated successfully', data: updated });
   } catch (err) {
     if (err?.code === 11000) {
       const dupField = Object.keys(err.keyPattern || {})[0] || 'unique field';
       return res.status(409).json({ status: false, message: `Duplicate ${dupField}.` });
     }
+    return next(err);
+  }
+};
+
+// Dedicated endpoint for granting/changing a user's role label, portal access and permissions.
+// Kept separate from the general profile-edit endpoint (updateUser) and restricted to the
+// institute admin, so a bug in general profile editing can never become a privilege-escalation path.
+// `isAdmin` is never accepted here — there is exactly one admin per tenant, set only at institute creation.
+const updateUserAccess = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const { recId } = req.body;
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    if (!recId) return res.status(400).json({ status: false, message: 'recId is required' });
+
+    const callerId = req.user?.userId;
+    const caller = await User.findOne({ tenantId, userId: callerId, isdeleted: false }, { isAdmin: 1 }).lean();
+    if (!caller?.isAdmin) return res.status(403).json({ status: false, message: 'Only the institute admin can manage user access' });
+
+    const target = await User.findOne({ _id: recId, tenantId, isdeleted: false }).lean();
+    if (!target) return res.status(404).json({ status: false, message: 'User not found' });
+    if (target.isAdmin) return res.status(400).json({ status: false, message: 'Cannot modify access for the institute admin user' });
+
+    const updateDoc = {};
+    if (req.body.role !== undefined) updateDoc.role = safeTrim(req.body.role) || null;
+    try {
+      const portal = await normalizePortal(req.body.portal);
+      if (portal !== undefined) updateDoc.portal = portal;
+      const permissions = await normalizePermissions(req.body.permissions);
+      if (permissions !== undefined) updateDoc.permissions = permissions;
+    } catch (e) {
+      return res.status(400).json({ status: false, message: e.message });
+    }
+    if (!Object.keys(updateDoc).length) return res.status(400).json({ status: false, message: 'No access fields to update' });
+
+    const updated = await User.findOneAndUpdate({ _id: recId, tenantId, isdeleted: false }, { $set: updateDoc }, { new: true }).select('-password');
+    // If this user is currently logged in (has a cache entry), refresh it now so the change is live
+    // immediately instead of waiting for them to log out/in.
+    if (hasUserAccess(updated.userId)) setUserAccess(updated.userId, { isAdmin: updated.isAdmin, permissions: updated.permissions });
+    return res.status(200).json({ status: true, message: 'User access updated successfully', data: updated });
+  } catch (err) {
     return next(err);
   }
 };
@@ -205,6 +348,7 @@ const deleteUser = async (req, res, next) => {
     const deletedUser = await User.findOneAndUpdate({ _id: recId, tenantId, isdeleted: false }, { $set: { isdeleted: true, status: 'Inactive' } }, { new: true }).select('-password');
     if (!deletedUser) return res.status(404).json({ status: false, message: 'User not found or already deleted' });
     await Token.deleteMany({ userId: deletedUser.userId });
+    clearUserAccess(deletedUser.userId);
     if (deletedUser.staffId) await Staff.updateOne({ tenantId, staffId: deletedUser.staffId, isdeleted: false }, { $set: { userId: null } });
     return res.status(200).json({ status: true, message: 'User deleted successfully', data: deletedUser });
   } catch (err) {
@@ -229,6 +373,7 @@ const Loginuser = async (req, res, next) => {
       token: hashedRefresh,
       expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
     });
+    setUserAccess(user.userId, { isAdmin: user.isAdmin, permissions: user.permissions });
     const userdata = { ...user.toJSON(), token };
     delete userdata.password;
     if (user.roleLevel === 'L4' && user.staffId) {
@@ -260,6 +405,8 @@ const refreshToken = async (req, res, next) => {
     const payload = verifyRefreshToken(rt);
     const user = await User.findOne({ userId: payload.CRN, isdeleted: false });
     if (!user) return next({ status: constants.HTTPS_NOT_FOUND, message: 'User not found.' });
+    // Silent-refresh flows never hit /login again — keep the cache alive here too.
+    setUserAccess(user.userId, { isAdmin: user.isAdmin, permissions: user.permissions });
     const newAccessToken = signAccessToken(user);
     return res.status(200).json({ status: true, token: newAccessToken });
   } catch (err) {
@@ -277,6 +424,7 @@ const logout = async (req, res, next) => {
       sameSite: 'Strict'
     });
     if (rt) await Token.deleteOne({ token: hashToken(rt) });
+    if (req.user?.userId) clearUserAccess(req.user.userId);
     const fcmToken = safeTrim(req.body?.fcmToken);
     if (fcmToken && req.body?.userId) {
       const userId = safeTrim(req.body?.userId);
@@ -657,7 +805,9 @@ export default {
   createUser,
   listUsers,
   viewUser,
+  getUserPermissions,
   updateUser,
+  updateUserAccess,
   deleteUser,
   Loginuser,
   refreshToken,

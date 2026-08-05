@@ -43,6 +43,11 @@ const userSchema = new mongoose.Schema(
     password: { type: String, required: true },
     roleLevel: { type: String, required: true, enum: ROLE_LEVELS, default: 'L4' },
     roleLabel: { type: String, required: true, default: 'Teacher', trim: true },
+    // ── Custom permission-based access (replaces roleLevel-driven authorization) ──
+    role: { type: String, default: null, trim: true }, // free-text display label e.g. "Teacher", "Center Head" — NOT used for authorization
+    portal: { type: [String], enum: ['CRM', 'ACADEMIC'], default: [] },
+    permissions: { type: [String], default: [] }, // e.g. ['orgcenter:create', 'batch:list']
+    isAdmin: { type: Boolean, default: false }, // exactly one per tenant — implicit all-permissions bypass
     centers: { type: [UserCenterSchema], default: [] },
     status: { type: String, enum: ['Active', 'Inactive'], default: 'Active' },
     lastLoginAt: { type: Date, default: null },
@@ -73,6 +78,8 @@ userSchema.index(
 userSchema.index({ tenantId: 1, roleLevel: 1, isdeleted: 1, createdAt: -1 });
 userSchema.index({ tenantId: 1, name: 1, isdeleted: 1 });
 userSchema.index({ tenantId: 1, 'centers.centerId': 1, isdeleted: 1 });
+// Exactly one admin per tenant, enforced at the DB layer (not just application logic).
+userSchema.index({ tenantId: 1, isAdmin: 1 }, { unique: true, partialFilterExpression: { isAdmin: true } });
 
 // ── Pre-validate: only sync roleLabel from roleLevel ──────────────────────────
 // FIX: removed manual duplicate email/phone checks — unique indexes handle this.
