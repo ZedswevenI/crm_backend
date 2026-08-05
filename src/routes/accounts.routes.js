@@ -8,6 +8,8 @@ import accountsCtrl from '../controller/accounts.controller.js';
 
 // -------- Cheque Register
 routes.post('/payments/list', validatetoken, accountsCtrl.listPayments);
+routes.post('/student-fee/add', validatetoken, accountsCtrl.addStudentFeePayments);
+routes.post('/student-fee/add/bulk', validatetoken, accountsCtrl.addStudentFeePaymentsBulk);
 routes.post('/cheque/list', validatetoken, accountsCtrl.listCheques);
 routes.post('/cheque/view', validatetoken, accountsCtrl.viewCheque);
 routes.post('/cheque/update-remarks', validatetoken, accountsCtrl.updateChequeRemarks);
