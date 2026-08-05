@@ -48,6 +48,8 @@ routes.post('/user/list', validatetoken, requirePermission('orgUser:list'), user
 routes.post('/user/edit', validatetoken, requirePermission('orgUser:edit'), userCtrl.updateUser);
 routes.post('/user/delete', validatetoken, requirePermission('orgUser:delete'), userCtrl.deleteUser);
 routes.post('/user/view', validatetoken, requirePermission('orgUser:view'), userCtrl.viewUser);
+// Same as /user/view, keyed by targetUserId (the app-level userId) instead of recId (Mongo _id).
+routes.post('/user/view-by-userid', validatetoken, requirePermission('orgUser:view'), userCtrl.viewUserByUserId);
 // Self-service (own permissions) or admin-only (someone else's) — enforced inside the controller.
 routes.post('/user/permissions', validatetoken, userCtrl.getUserPermissions);
 routes.post('/user/import', validatetoken, requirePermission('orgUser:create'), userCtrl.importUsers);

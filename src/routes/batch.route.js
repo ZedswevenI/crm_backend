@@ -20,7 +20,7 @@ routes.post('/students/eligible', validatetoken, requirePermission('batch:list')
 routes.post('/students/assign', validatetoken, requirePermission('batch:assignStudents'), batchCtrl.assignStudentsToBatch);
 routes.post('/students/move', validatetoken, requirePermission('batch:assignStudents'), batchCtrl.moveStudentsToBatch);
 routes.post('/students/remove', validatetoken, requirePermission('batch:assignStudents'), batchCtrl.removeStudentsFromBatch);
-routes.post('/students/shuffle', validatetoken, requirePermission('batch:assignStudents'), batchCtrl.shuffleStudentsBetweenBatches);
+routes.post('/students/shuffle', validatetoken, requirePermission('batch:shuffleStudents'), batchCtrl.shuffleStudentsBetweenBatches);
 routes.post('/recalc', validatetoken, requirePermission('batch:edit'), batchCtrl.recalcBatchStudentCount);
 routes.post('/subjects', validatetoken, requirePermission('batch:view'), batchCtrl.getBatchSubjects);
 routes.post('/ayinfo', validatetoken, requirePermission('batch:view'), batchCtrl.getBatchAyInfo);

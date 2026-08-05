@@ -13,7 +13,10 @@ const run = async () => {
   await mongoose.connect(MONGO_URI);
   console.log(`Connected. DRY_RUN=${DRY_RUN}`);
 
-  const users = await User.find({ isdeleted: false }).sort({ tenantId: 1, createdAt: 1 }).select('tenantId userId email roleLevel roleLabel isAdmin role portal permissions').lean();
+  const users = await User.find({ isdeleted: false })
+    .sort({ tenantId: 1, createdAt: 1 })
+    .select('tenantId userId email roleLevel roleLabel isAdmin role portal permissions accessCustomizedAt')
+    .lean();
 
   const byTenant = new Map();
   for (const u of users) {
@@ -23,6 +26,7 @@ const run = async () => {
 
   const adminOps = [];
   const accessOps = [];
+  const skipped = [];
   const report = [];
 
   for (const [tenantId, tenantUsers] of byTenant) {
@@ -52,6 +56,10 @@ const run = async () => {
 
     for (const u of tenantUsers) {
       if (adminCandidate && String(u._id) === String(adminCandidate._id)) continue; // handled above
+      if (u.accessCustomizedAt) {
+        skipped.push({ email: u.email, customizedAt: u.accessCustomizedAt });
+        continue; // never overwrite a manual edit — this is a re-runnable seed script, not a reset button
+      }
       accessOps.push({
         updateOne: {
           filter: { _id: u._id },
@@ -70,6 +78,10 @@ const run = async () => {
   console.log(`\nTenants: ${byTenant.size}, Users: ${users.length}`);
   console.log('\nAdmin assignment report:');
   console.table(report);
+  if (skipped.length) {
+    console.log(`\nSkipped ${skipped.length} user(s) with manually-customized access (accessCustomizedAt set) — left untouched:`);
+    console.table(skipped);
+  }
 
   if (DRY_RUN) {
     console.log(`\n[dry-run] would promote ${adminOps.length} user(s) to isAdmin, backfill access fields for ${accessOps.length} user(s)`);

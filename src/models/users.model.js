@@ -48,6 +48,9 @@ const userSchema = new mongoose.Schema(
     portal: { type: [String], enum: ['CRM', 'ACADEMIC'], default: [] },
     permissions: { type: [String], default: [] }, // e.g. ['orgcenter:create', 'batch:list']
     isAdmin: { type: Boolean, default: false }, // exactly one per tenant — implicit all-permissions bypass
+    // Set whenever a human explicitly edits role/portal/permissions (via updateUser or updateUserAccess).
+    // Once set, scripts/migrate-user-access.js skips this user forever — it must never clobber a manual edit.
+    accessCustomizedAt: { type: Date, default: null },
     centers: { type: [UserCenterSchema], default: [] },
     status: { type: String, enum: ['Active', 'Inactive'], default: 'Active' },
     lastLoginAt: { type: Date, default: null },

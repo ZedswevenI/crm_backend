@@ -5,7 +5,7 @@
 export const PERMISSION_MODULES = [
   { module: 'dashboard', label: 'Dashboard', actions: ['view'] },
 
-  { module: 'batch', label: 'Batch', actions: ['list', 'view', 'create', 'edit', 'delete', 'close', 'assignStudents', 'assignFaculty', 'promote', 'logLateEntry', 'addSpecialClass'] },
+  { module: 'batch', label: 'Batch', actions: ['list', 'view', 'create', 'edit', 'delete', 'close', 'assignStudents', 'shuffleStudents', 'assignFaculty', 'promote', 'logLateEntry', 'addSpecialClass', 'export'] },
   { module: 'class', label: 'Class', actions: ['list', 'view'] },
 
   { module: 'timetable', label: 'Timetable', actions: ['list', 'create', 'view', 'edit', 'delete', 'publish', 'revertDraft', 'export'] },

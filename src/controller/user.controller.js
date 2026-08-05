@@ -222,6 +222,22 @@ const getUserPermissions = async (req, res, next) => {
   }
 };
 
+// Same as viewUser, but keyed by the app-level userId (uuid) instead of the Mongo _id — useful when the
+// frontend only has the userId (e.g. from a JWT, a report row, or /user/permissions) and not recId.
+const viewUserByUserId = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const targetUserId = safeTrim(req.body?.targetUserId);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    if (!targetUserId) return res.status(400).json({ status: false, message: 'targetUserId is required' });
+    const user = await User.findOne({ tenantId, userId: targetUserId, isdeleted: false }).select('-password');
+    if (!user) return res.status(404).json({ status: false, message: 'User not found' });
+    return res.status(200).json({ status: true, message: 'User retrieved successfully', data: user });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 const updateUser = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
@@ -274,6 +290,9 @@ const updateUser = async (req, res, next) => {
         } catch (e) {
           return res.status(400).json({ status: false, message: e.message });
         }
+        if (updateDoc.role !== undefined || updateDoc.portal !== undefined || updateDoc.permissions !== undefined) {
+          updateDoc.accessCustomizedAt = new Date();
+        }
       }
     }
     if (Object.keys(updateDoc).length === 0) return res.status(400).json({ status: false, message: 'No fields to update' });
@@ -325,6 +344,7 @@ const updateUserAccess = async (req, res, next) => {
       return res.status(400).json({ status: false, message: e.message });
     }
     if (!Object.keys(updateDoc).length) return res.status(400).json({ status: false, message: 'No access fields to update' });
+    updateDoc.accessCustomizedAt = new Date();
 
     const updated = await User.findOneAndUpdate({ _id: recId, tenantId, isdeleted: false }, { $set: updateDoc }, { new: true }).select('-password');
     // If this user is currently logged in (has a cache entry), refresh it now so the change is live
@@ -805,6 +825,7 @@ export default {
   createUser,
   listUsers,
   viewUser,
+  viewUserByUserId,
   getUserPermissions,
   updateUser,
   updateUserAccess,
