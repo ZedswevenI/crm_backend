@@ -467,9 +467,38 @@ const getTeacherDashboard = async (req, res, next) => {
   }
 };
 
+// Narrow, field-restricted write — only `status` (Retire Employee / reactivate) and `relievingDate`.
+// Deliberately separate from institute.controller.js:updateStaff (which edits every staff field —
+// name/email/phone/salary/department/etc. — and is gated by orgStaff:edit) so that granting
+// teacher:edit can never be used as a back door into full staff-record editing.
+const updateTeacherRelieving = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const recId = safeTrim(req.body?.recId);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    if (!recId) return res.status(400).json({ status: false, message: 'recId is required' });
+
+    const patch = {};
+    if (req.body?.status !== undefined) {
+      patch.status = safeTrim(req.body.status) === 'Inactive' ? 'Inactive' : 'Active';
+    }
+    if (req.body?.relievingDate !== undefined) {
+      patch.relievingDate = req.body.relievingDate ? toInt(req.body.relievingDate) : null;
+    }
+    if (!Object.keys(patch).length) return res.status(400).json({ status: false, message: 'status or relievingDate is required' });
+
+    const updated = await Staff.findOneAndUpdate({ _id: recId, tenantId, isdeleted: false }, { $set: patch }, { new: true });
+    if (!updated) return res.status(404).json({ status: false, message: 'Staff not found' });
+    return res.status(200).json({ status: true, message: 'Staff relieving details updated successfully', data: updated });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   listTeachingStaff,
   viewTeachingStaff,
   getTeacherBatches,
-  getTeacherDashboard
+  getTeacherDashboard,
+  updateTeacherRelieving
 };

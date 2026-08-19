@@ -3,7 +3,28 @@
 // Edit this file to add/remove permissions, then re-run the seed script.
 
 export const PERMISSION_MODULES = [
-  { module: 'dashboard', label: 'Dashboard', actions: ['view'] },
+  {
+    module: 'dashboard',
+    label: 'Dashboard',
+    actions: [
+      'view', // legacy catch-all — still gates the original /kpis, /batch-performance, /top-performers, /summary endpoints
+      'viewActiveBatches',
+      'viewTotalStudents',
+      'viewTotalStaff',
+      'viewSystemUsers',
+      'viewTodayAbsentees',
+      'viewTotalQuestions',
+      'viewUpcomingPtms',
+      'viewUpcomingActivities',
+      'viewAttendanceOverview',
+      'viewStudentsByProgram',
+      'viewExamPerformance',
+      'viewAssignmentPerformance',
+      'viewStaffByDepartment',
+      'viewRecentUsers',
+      'viewInactiveUsers'
+    ]
+  },
 
   { module: 'batch', label: 'Batch', actions: ['list', 'view', 'create', 'edit', 'delete', 'close', 'assignStudents', 'shuffleStudents', 'assignFaculty', 'promote', 'logLateEntry', 'addSpecialClass', 'export'] },
   { module: 'class', label: 'Class', actions: ['list', 'view'] },
@@ -25,7 +46,7 @@ export const PERMISSION_MODULES = [
   { module: 'enableAssignment', label: 'Enable Assignment', actions: ['list', 'enableTopic', 'disableTopic', 'resetAll', 'viewTests'] },
 
   { module: 'student', label: 'Student', actions: ['list', 'view', 'create', 'edit', 'bulkUpload', 'imageUpload', 'rpaImport', 'boardImport', 'alumniImport', 'export'] },
-  { module: 'teacher', label: 'Teachers', actions: ['list', 'view'] },
+  { module: 'teacher', label: 'Teachers', actions: ['list', 'view', 'edit'] },
 
   { module: 'reports', label: 'Reports', actions: ['view', 'export'] },
   { module: 'performance', label: 'Performance', actions: ['list', 'view', 'sync', 'override'] },

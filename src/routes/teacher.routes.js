@@ -22,6 +22,7 @@ routes.post('/list', validatetoken, requirePermission('teacher:list'), staffCtrl
 routes.post('/view', validatetoken, requirePermission('teacher:view'), staffCtrl.viewTeachingStaff);
 routes.post('/getstaffmaps', validatetoken, requirePermission('teacher:view'), staffCtrl.getTeacherBatches);
 routes.post('/dashboard', validatetoken, requirePermission('teacher:view'), staffCtrl.getTeacherDashboard);
+routes.post('/relieving/update', validatetoken, requirePermission('teacher:edit'), staffCtrl.updateTeacherRelieving);
 // FCM token registration is self-service device management, not a business permission — no requirePermission gate.
 routes.post('/fcm/register', validatetoken, userCtrl.registerFcmToken);
 routes.post('/fcm/remove', validatetoken, userCtrl.removeFcmToken);
