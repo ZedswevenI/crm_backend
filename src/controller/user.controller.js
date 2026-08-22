@@ -6,6 +6,7 @@ import dotenv from 'dotenv';
 import { signAccessToken, signRefreshToken, hashToken, verifyRefreshToken } from '../helpers/auth.helper.js';
 import User, { ROLE_MAP } from '../models/users.model.js';
 import Permission from '../models/permission.model.js';
+import { PERMISSION_DEPENDENCIES, BASELINE_PERMISSIONS } from '../data/permissionCatalog.data.js';
 import { setUserAccess, clearUserAccess, hasUserAccess } from '../services/permissionCache.service.js';
 import Center from '../models/center.model.js';
 import Token from '../models/auth.model.js';
@@ -35,16 +36,23 @@ const normalizePortal = (input) => {
 
 const arraysEqualAsSets = (a = [], b = []) => a.length === b.length && new Set(b).size === b.length && a.every((x) => new Set(b).has(x));
 
-// Validates `permissions` array against the seeded Permission catalog. Returns undefined if input is undefined.
+// Validates `permissions` array against the seeded Permission catalog, then auto-includes any
+// dependent keys (see PERMISSION_DEPENDENCIES) so an admin never has to remember a screen's
+// hidden lookup requirements manually. Returns undefined if input is undefined.
 const normalizePermissions = async (input) => {
   if (input === undefined) return undefined;
-  const permissions = [...new Set((Array.isArray(input) ? input : []).map(safeTrim).filter(Boolean))];
-  if (!permissions.length) return permissions;
-  const validRows = await Permission.find({ permissionKey: { $in: permissions }, isActive: true }, { permissionKey: 1 }).lean();
-  const validSet = new Set(validRows.map((v) => v.permissionKey));
-  const invalid = permissions.filter((p) => !validSet.has(p));
-  if (invalid.length) throw new Error(`Unknown permission key(s): ${invalid.join(', ')}`);
-  return permissions;
+  const permissions = new Set((Array.isArray(input) ? input : []).map(safeTrim).filter(Boolean));
+  if (permissions.size) {
+    const validRows = await Permission.find({ permissionKey: { $in: [...permissions] }, isActive: true }, { permissionKey: 1 }).lean();
+    const validSet = new Set(validRows.map((v) => v.permissionKey));
+    const invalid = [...permissions].filter((p) => !validSet.has(p));
+    if (invalid.length) throw new Error(`Unknown permission key(s): ${invalid.join(', ')}`);
+    for (const key of [...permissions]) {
+      (PERMISSION_DEPENDENCIES[key] || []).forEach((dep) => permissions.add(dep));
+    }
+  }
+  BASELINE_PERMISSIONS.forEach((key) => permissions.add(key));
+  return [...permissions];
 };
 
 // Accepts centerIds: [] (preferred) or legacy single centerId string, resolves names, returns centers[] for the User doc.
@@ -75,7 +83,9 @@ const createUser = async (req, res, next) => {
     let portal, permissions;
     try {
       portal = (await normalizePortal(req.body.portal)) ?? [];
-      permissions = (await normalizePermissions(req.body.permissions)) ?? [];
+      // Creation always needs a concrete array (unlike edits, where undefined means "leave untouched") —
+      // treat an omitted field the same as an explicit [] so baseline permissions still get applied.
+      permissions = await normalizePermissions(req.body.permissions ?? []);
     } catch (e) {
       return res.status(400).json({ status: false, message: e.message });
     }

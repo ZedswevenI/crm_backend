@@ -93,3 +93,15 @@ export const PERMISSION_MODULES = [
   { module: 'admission', label: 'Admission', actions: ['list', 'view', 'create', 'update', 'submitForApproval', 'approve', 'reject', 'export', 'bulkUpload', 'review'] },
   { module: 'accounts', label: 'Accounts', actions: ['listPayments', 'addPayment', 'listCheques', 'reconcileCheque', 'chequeExtension', 'chequeReplacement', 'depositBatch', 'listNeft', 'updateNeftStatus'] }
 ];
+
+// Screen dependencies: granting the key on the left requires the screen to also call an endpoint
+// gated by the key(s) on the right (e.g. the Admission Create screen needs a fee-plan dropdown).
+// normalizePermissions() in user.controller.js auto-includes these whenever the trigger key is granted,
+// so an admin never has to remember the pairing manually.
+export const PERMISSION_DEPENDENCIES = {
+  'admission:create': ['orgFeePlan:list', 'orgCenter:list', 'orgProgram:list', 'admission:list']
+};
+
+// Granted to every non-admin user unconditionally (isAdmin already bypasses everything) —
+// not tied to any other permission, applied on every save and backfilled once for existing users.
+export const BASELINE_PERMISSIONS = ['notification:list'];

@@ -2,6 +2,17 @@ import mongoose from 'mongoose';
 import dotenv from 'dotenv';
 import User from '../src/models/users.model.js';
 import { ROLE_PORTAL_MAP, ROLE_PERMISSION_MAP } from '../src/data/legacyRoleAccessMap.data.js';
+import { PERMISSION_DEPENDENCIES, BASELINE_PERMISSIONS } from '../src/data/permissionCatalog.data.js';
+
+// Same expansion user.controller.js applies on every manual save — kept in sync here so a
+// dependency (or baseline permission) added to the catalog is reflected for legacy-mapped users
+// too, not just new manual edits.
+const withDependencies = (keys) => {
+  const expanded = new Set(keys);
+  for (const key of keys) (PERMISSION_DEPENDENCIES[key] || []).forEach((dep) => expanded.add(dep));
+  BASELINE_PERMISSIONS.forEach((key) => expanded.add(key));
+  return [...expanded];
+};
 
 dotenv.config();
 
@@ -67,7 +78,7 @@ const run = async () => {
             $set: {
               role: u.roleLabel || null,
               portal: ROLE_PORTAL_MAP[u.roleLevel] || [],
-              permissions: ROLE_PERMISSION_MAP[u.roleLevel] || []
+              permissions: withDependencies(ROLE_PERMISSION_MAP[u.roleLevel] || [])
             }
           }
         }
