@@ -1,6 +1,7 @@
 import SchoolAttendance from '../models/schoolAttendance.model.js';
 import Batch from '../models/batch.model.js';
 import StudentProfile from '../models/studentProfile.model.js';
+import User from '../models/users.model.js';
 import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
 
 const pickTenantId = (req) => String(req?.body?.tenantId || req?.body?.entiId || '').trim();
@@ -16,11 +17,14 @@ const listBatchesForSchoolAttendance = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-    const roleLevel = safeTrim(req.body?.roleLevel || req.body?.role);
-    const staffId = safeTrim(req.body?.staffId);
+    // roleLevel/staffId must come from the authenticated user's own record, never from the request body —
+    // a client-supplied value here would let any caller impersonate a different role/teacher to bypass scoping.
+    const caller = req.user?.isAdmin ? null : await User.findOne({ tenantId, userId: req.user?.userId, isdeleted: false }, { roleLevel: 1, staffId: 1 }).lean();
+    const roleLevel = caller?.roleLevel || '';
+    const staffId = caller?.staffId || '';
     const query = { tenantId, isdeleted: false, status: 'ACTIVE' };
     if (roleLevel === 'L4' || roleLevel === 'L5') {
-      if (!staffId) return res.status(400).json({ status: false, message: 'staffId is required for teacher role' });
+      if (!staffId) return res.status(400).json({ status: false, message: 'No staff profile linked to this user' });
       query.classTeacherId = staffId;
     }
     const batches = await Batch.find(query, {
