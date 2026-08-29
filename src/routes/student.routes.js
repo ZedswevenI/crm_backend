@@ -2,6 +2,7 @@ import { Router } from 'express';
 
 const routes = Router();
 import validatetoken from '../middlewares/auth.js';
+import { requirePermission } from '../middlewares/permission.js';
 import studentCtrl from '../controller/student.controller.js';
 import extstudentCtrl from '../controller/extStudent.controller.js';
 
@@ -9,11 +10,11 @@ import multer from 'multer';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 200 * 1024 * 1024 } });
 
-routes.post('/list', validatetoken, studentCtrl.listStudents);
-routes.post('/export', validatetoken, studentCtrl.exportStudents);
-routes.post('/view', validatetoken, studentCtrl.viewProfile);
-routes.post('/finance/summary', validatetoken, studentCtrl.viewFinancials);
-routes.post('/academic/summary', validatetoken, studentCtrl.viewAcademicSummary);
+routes.post('/list', validatetoken, requirePermission('student:list'), studentCtrl.listStudents);
+routes.post('/export', validatetoken, requirePermission('student:export'), studentCtrl.exportStudents);
+routes.post('/view', validatetoken, requirePermission('student:view'), studentCtrl.viewProfile);
+routes.post('/finance/summary', validatetoken, requirePermission('student:view'), studentCtrl.viewFinancials);
+routes.post('/academic/summary', validatetoken, requirePermission('student:view'), studentCtrl.viewAcademicSummary);
 routes.post('/login', studentCtrl.studentLogin);
 routes.post('/get/assnsubjects', studentCtrl.getStudentSubjects);
 routes.post('/get/assignments', studentCtrl.getAllClassSubjectTopics);
@@ -32,14 +33,14 @@ routes.post('/my-performance', studentCtrl.getStudentPerformance);
 // routes.post('/school-exam/marks/add', studentCtrl.addSchoolExamMarks);
 routes.post('/bulk-update', studentCtrl.bulkUpdateStudents);
 routes.post('/bulk-image-upload', upload.array('images', 100), studentCtrl.bulkUploadPhotos);
-routes.post('/zip-image-upload', validatetoken, upload.single('zip'), studentCtrl.bulkUploadZipPhotos);
+routes.post('/zip-image-upload', validatetoken, requirePermission('student:imageUpload'), upload.single('zip'), studentCtrl.bulkUploadZipPhotos);
 routes.post('/late-entries', studentCtrl.getStudentLateEntries);
-routes.post('/rpa-import', validatetoken, studentCtrl.importStudentRpa);
-routes.post('/board-exam-import', validatetoken, studentCtrl.importBoardExamMarks);
-routes.post('/alumni-import', validatetoken, studentCtrl.importAlumniData);
-routes.post('/alumni-data', validatetoken, studentCtrl.getAlumniData);
-routes.post('/tablet/lock', validatetoken, extstudentCtrl.lockStudentTablet);
-routes.post('/tablet/unlock', validatetoken, extstudentCtrl.unlockStudentTablet);
+routes.post('/rpa-import', validatetoken, requirePermission('student:rpaImport'), studentCtrl.importStudentRpa);
+routes.post('/board-exam-import', validatetoken, requirePermission('student:boardImport'), studentCtrl.importBoardExamMarks);
+routes.post('/alumni-import', validatetoken, requirePermission('student:alumniImport'), studentCtrl.importAlumniData);
+routes.post('/alumni-data', validatetoken, requirePermission('student:alumniImport'), studentCtrl.getAlumniData);
+routes.post('/tablet/lock', validatetoken, requirePermission('student:edit'), extstudentCtrl.lockStudentTablet);
+routes.post('/tablet/unlock', validatetoken, requirePermission('student:edit'), extstudentCtrl.unlockStudentTablet);
 
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Student routes' }));
 

@@ -1,15 +1,18 @@
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 
-const ACCESS_SECRET = 'admin@123';
-const REFRESH_SECRET = '321@nimda';
+const ACCESS_SECRET = process.env.JWT_ACCESS_SECRET || 'admin@123';
+const REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || '321@nimda';
 
+// Lean identity token — authorization data (isAdmin/permissions) lives server-side in the permission
+// cache, keyed by CRN (userId), not in the token itself. See src/services/permissionCache.service.js.
 export const signAccessToken = (user) =>
   jwt.sign(
     {
       userId: user._id,
       CRN: user.userId,
       email: user.email,
+      tenantId: user.tenantId,
       roleLevel: user.roleLevel,
       staffId: user.staffId,
       name: user.name

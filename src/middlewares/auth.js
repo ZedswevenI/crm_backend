@@ -1,5 +1,6 @@
 import jwt from 'jsonwebtoken';
-import { decode } from 'punycode';
+
+const ACCESS_SECRET = process.env.JWT_ACCESS_SECRET || 'admin@123';
 
 const validatetoken = async (req, res, next) => {
   try {
@@ -7,20 +8,20 @@ const validatetoken = async (req, res, next) => {
     if (!token) {
       return res.status(403).send('A token is required for authentication');
     }
-    const decoded = jwt.verify(token, 'admin@123', (err, data) => {
+    jwt.verify(token, ACCESS_SECRET, (err, data) => {
       if (err) {
         return res.status(401).send('Invalid Token');
-      } else {
-        if (req.body) {
-          req.body.userId = data.CRN;
-          req.body.userName = data.name;
-        }
-        req.user = {
-          userId: data.CRN,
-          userName: data.name
-        };
-        return next();
       }
+      if (req.body) {
+        req.body.userId = data.CRN;
+        req.body.userName = data.name;
+      }
+      req.user = {
+        userId: data.CRN,
+        userName: data.name,
+        tenantId: data.tenantId || null
+      };
+      return next();
     });
   } catch (error) {
     // Access Denied

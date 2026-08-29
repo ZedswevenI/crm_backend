@@ -254,6 +254,9 @@ const createInstitute = async (req, res, next) => {
       password: hashedPassword,
       roleLevel: 'L1',
       roleLabel: ROLE_MAP.L1,
+      role: 'Admin',
+      portal: ['CRM', 'ACADEMIC'],
+      isAdmin: true, // forced regardless of request body — exactly one admin per tenant, set only here
       status: 'Active',
       isdeleted: false
     });

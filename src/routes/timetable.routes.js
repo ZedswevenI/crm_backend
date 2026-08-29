@@ -4,36 +4,38 @@ const routes = Router();
 import validate from '../middlewares/validation.js';
 import constants from '../helpers/constants.js';
 import validatetoken from '../middlewares/auth.js';
+import { requirePermission } from '../middlewares/permission.js';
 import timeTableController from '../controller/timetable.controller.js';
 
-routes.post('/create', validatetoken, timeTableController.createTimeTable);
-routes.post('/validate', validatetoken, timeTableController.validateSchedule);
-routes.post('/import', validatetoken, timeTableController.bulkUploadTimeTables);
-routes.post('/view', validatetoken, timeTableController.viewTimeTable);
-routes.post('/viewbybatch', validatetoken, timeTableController.viewBatchScheduleByDate);
-routes.post('/list-by-batch', validatetoken, timeTableController.listTimeTablesByBatch);
-routes.post('/list', validatetoken, timeTableController.listTimeTables);
-routes.post('/period/add', validatetoken, timeTableController.addPeriod);
-routes.post('/period/cancel', validatetoken, timeTableController.cancelPeriod);
-routes.post('/period/rearrange-staff', validatetoken, timeTableController.rearrangeStaff);
-routes.post('/period/move', validatetoken, timeTableController.changePeriod);
-routes.post('/period/replace', validatetoken, timeTableController.replacePeriod);
-routes.post('/day/cancel', validatetoken, timeTableController.cancelWholeDay);
-routes.post('/day/edit', validatetoken, timeTableController.editWholeDay);
-routes.post('/update/zoomlink', validatetoken, timeTableController.updateZoomLink);
-routes.post('/convertToExam', validatetoken, timeTableController.convertToExam);
-routes.post('/bulk/zoomlink/upload', validatetoken, timeTableController.bulkUpdateZoomLinks);
 
-routes.post('/late-entry/log', validatetoken, timeTableController.logLateEntry);
-routes.post('/late-entry/list/student', validatetoken, timeTableController.listStudentLateEntries);
-routes.post('/late-entry/list/staff', validatetoken, timeTableController.listStaffLateEntries);
-routes.post('/subject/report', validatetoken, timeTableController.subjectHoursReport);
+routes.post('/create', validatetoken, requirePermission('timetable:create'), timeTableController.createTimeTable);
+routes.post('/validate', validatetoken, requirePermission('timetable:create'), timeTableController.validateSchedule);
+routes.post('/import', validatetoken, requirePermission('timetable:create'), timeTableController.bulkUploadTimeTables);
+routes.post('/view', validatetoken, requirePermission('timetable:view'), timeTableController.viewTimeTable);
+routes.post('/viewbybatch', validatetoken, requirePermission('timetable:view'), timeTableController.viewBatchScheduleByDate);
+routes.post('/list-by-batch', validatetoken, requirePermission('timetable:list'), timeTableController.listTimeTablesByBatch);
+routes.post('/list', validatetoken, requirePermission('timetable:list'), timeTableController.listTimeTables);
+routes.post('/period/add', validatetoken, requirePermission('timetable:edit'), timeTableController.addPeriod);
+routes.post('/period/cancel', validatetoken, requirePermission('timetable:edit'), timeTableController.cancelPeriod);
+routes.post('/period/rearrange-staff', validatetoken, requirePermission('timetable:edit'), timeTableController.rearrangeStaff);
+routes.post('/period/move', validatetoken, requirePermission('timetable:edit'), timeTableController.changePeriod);
+routes.post('/period/replace', validatetoken, requirePermission('timetable:edit'), timeTableController.replacePeriod);
+routes.post('/day/cancel', validatetoken, requirePermission('timetable:edit'), timeTableController.cancelWholeDay);
+routes.post('/day/edit', validatetoken, requirePermission('timetable:edit'), timeTableController.editWholeDay);
+routes.post('/update/zoomlink', validatetoken, requirePermission('timetable:edit'), timeTableController.updateZoomLink);
+routes.post('/convertToExam', validatetoken, requirePermission('timetable:edit'), timeTableController.convertToExam);
+routes.post('/bulk/zoomlink/upload', validatetoken, requirePermission('timetable:edit'), timeTableController.bulkUpdateZoomLinks);
 
-routes.post('/publish', validatetoken, timeTableController.publishTimeTable);
-routes.post('/unpublish', validatetoken, timeTableController.unpublishTimeTable);
-routes.post('/delete', validatetoken, timeTableController.deleteTimeTable);
-routes.post('/clone-week', validatetoken, timeTableController.cloneWeek);
-routes.post('/day/uncancel', validatetoken, timeTableController.uncancelDay);
+routes.post('/late-entry/log', validatetoken, requirePermission('batch:logLateEntry'), timeTableController.logLateEntry);
+routes.post('/late-entry/list/student', validatetoken, requirePermission('batch:view'), timeTableController.listStudentLateEntries);
+routes.post('/late-entry/list/staff', validatetoken, requirePermission('batch:view'), timeTableController.listStaffLateEntries);
+routes.post('/subject/report', validatetoken, requirePermission('timetable:export'), timeTableController.subjectHoursReport);
+
+routes.post('/publish', validatetoken, requirePermission('timetable:publish'), timeTableController.publishTimeTable);
+routes.post('/unpublish', validatetoken, requirePermission('timetable:revertDraft'), timeTableController.unpublishTimeTable);
+routes.post('/delete', validatetoken, requirePermission('timetable:delete'), timeTableController.deleteTimeTable);
+routes.post('/clone-week', validatetoken, requirePermission('timetable:create'), timeTableController.cloneWeek);
+routes.post('/day/uncancel', validatetoken, requirePermission('timetable:edit'), timeTableController.uncancelDay);
 
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Timetable routes' }));
 
