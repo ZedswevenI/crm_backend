@@ -275,11 +275,12 @@ export const syncOnSchoolExamUpload = async ({ tenantId, examLogId, academicYear
           console.error(`[PerfSync] syncOnSchoolExamUpload skipped student: tenantId=${tenantId} examLogId=${examLogId} studentId=${studentId} admissionNo=${r.admissionNo} reason=unresolvable academicYear`);
           continue;
         }
-        const subjectsWithMax = (r.subjects || []).filter((s) => s.marks != null && !s.isAbsent);
-        const totalObtained = subjectsWithMax.reduce((s, sub) => s + (toNum(sub.marks) || 0), 0);
-        const hasMaxMarks = (r.subjects || []).some((s) => s.maxMarks != null);
-        const totalMaxFromSubjects = hasMaxMarks ? subjectsWithMax.reduce((s, sub) => s + (toNum(sub.maxMarks) || 0), 0) : null;
-        const totalMax = totalMaxFromSubjects || toNum(r.totalMarks) || null;
+        // An absence scores 0 obtained but its subject's max marks still count toward the total
+        // (matches standard report-card percentage behavior). r.totalMarks is never used as a stand-in
+        // for the max — that field is the student's own obtained total, not a real maximum.
+        const subjects = r.subjects || [];
+        const totalObtained = subjects.reduce((s, sub) => s + (sub.isAbsent ? 0 : toNum(sub.marks) || 0), 0);
+        const totalMax = subjects.reduce((s, sub) => s + (toNum(sub.maxMarks) || 0), 0) || null;
         const pct = totalMax > 0 ? round2((totalObtained / totalMax) * 100) : null;
         await upsert(
           { tenantId, studentId, examId: examLogId, academicYear: resolvedYear, performanceType: 'SCHOOL_EXAM' },

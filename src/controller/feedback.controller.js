@@ -1002,7 +1002,10 @@ const getConsolidatedStaffReport = async (req, res, next) => {
             sortOrder: q.sortOrder || 0
           };
         }
-        const part = q.part || 'A';
+        // Use the frozen, first-seen part for this fieldId (same as fieldText/maxScore/etc. above) —
+        // not this particular form's copy — so a question can never end up double-counted across two
+        // parts if the template's part assignment changed between when different forms were created.
+        const part = questionMeta[q.fieldId].part;
         if (!questionsByPart[part]) questionsByPart[part] = [];
         if (!questionsByPart[part].find((x) => x.fieldId === q.fieldId)) {
           questionsByPart[part].push(questionMeta[q.fieldId]);
