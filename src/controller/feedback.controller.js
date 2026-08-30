@@ -935,10 +935,7 @@ const getConsolidatedStaffReport = async (req, res, next) => {
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
 
     // ── Find forms in date range ──────────────────────────────────────────────
-    // category: 'STAFF' is required here, not just staffAssignments presence — COURSE/FACILITY
-    // forms can also carry staffAssignments (real data has several), which would otherwise pull
-    // non-staff feedback questions/responses into this staff-only consolidated report.
-    const formQuery = { tenantId, isdeleted: false, category: 'STAFF', 'staffAssignments.0': { $exists: true } };
+    const formQuery = { tenantId, isdeleted: false, 'staffAssignments.0': { $exists: true } };
     if (fromDate || toDate) {
       formQuery.startDate = {};
       if (fromDate) formQuery.startDate.$gte = fromDate;
