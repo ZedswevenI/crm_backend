@@ -935,7 +935,10 @@ const getConsolidatedStaffReport = async (req, res, next) => {
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
 
     // ── Find forms in date range ──────────────────────────────────────────────
-    const formQuery = { tenantId, isdeleted: false, 'staffAssignments.0': { $exists: true } };
+    // category: 'STAFF' is required here, not just staffAssignments presence — COURSE/FACILITY
+    // forms can also carry staffAssignments (real data has several), which would otherwise pull
+    // non-staff feedback questions/responses into this staff-only consolidated report.
+    const formQuery = { tenantId, isdeleted: false, category: 'STAFF', 'staffAssignments.0': { $exists: true } };
     if (fromDate || toDate) {
       formQuery.startDate = {};
       if (fromDate) formQuery.startDate.$gte = fromDate;
@@ -1002,7 +1005,10 @@ const getConsolidatedStaffReport = async (req, res, next) => {
             sortOrder: q.sortOrder || 0
           };
         }
-        const part = q.part || 'A';
+        // Use the frozen, first-seen part for this fieldId (same as fieldText/maxScore/etc. above) —
+        // not this particular form's copy — so a question can never end up double-counted across two
+        // parts if the template's part assignment changed between when different forms were created.
+        const part = questionMeta[q.fieldId].part;
         if (!questionsByPart[part]) questionsByPart[part] = [];
         if (!questionsByPart[part].find((x) => x.fieldId === q.fieldId)) {
           questionsByPart[part].push(questionMeta[q.fieldId]);

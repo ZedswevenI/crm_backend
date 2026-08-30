@@ -37,8 +37,10 @@ const getStudentAttendanceReport = async (req, res, next) => {
     const toDate = toInt(req.body?.toDate, 0);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
     if (!studentId && !admissionNo) return res.status(400).json({ status: false, message: 'studentId or admissionNo is required' });
-    if (!fromDate) return res.status(400).json({ status: false, message: 'fromDate is required' });
-    if (!toDate) return res.status(400).json({ status: false, message: 'toDate is required' });
+    // fromDate/toDate are optional — omitting either (or both) returns the student's full attendance history.
+    const dateFilter = {};
+    if (fromDate) dateFilter.$gte = fromDate;
+    if (toDate) dateFilter.$lte = toDate;
     const student = await resolveStudent(tenantId, studentId, admissionNo);
     if (!student) return res.status(404).json({ status: false, message: 'Student not found' });
     const sid = student.studentId;
@@ -47,7 +49,7 @@ const getStudentAttendanceReport = async (req, res, next) => {
     const attRecords = await Attendance.find({
       tenantId,
       batchCode,
-      date: { $gte: fromDate, $lte: toDate },
+      ...(Object.keys(dateFilter).length ? { date: dateFilter } : {}),
       isdeleted: false
     })
       .sort({ date: 1, periodNo: 1 })
@@ -96,7 +98,7 @@ const getStudentAttendanceReport = async (req, res, next) => {
       ? await SchoolAttendance.find({
           tenantId,
           batchCode,
-          date: { $gte: fromDate, $lte: toDate },
+          ...(Object.keys(dateFilter).length ? { date: dateFilter } : {}),
           isdeleted: false
         })
           .sort({ date: 1 })
@@ -378,7 +380,7 @@ const getStudentAttendanceBulkReport = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-    const admissionNos = Array.isArray(req.body?.admissionNos) ? req.body.admissionNos.map(safeTrim).filter(Boolean).slice(0, 100) : [];
+    const admissionNos = Array.isArray(req.body?.admissionNos) ? [...new Set(req.body.admissionNos.map(safeTrim).filter(Boolean))] : [];
     if (!admissionNos.length) {
       return res.status(400).json({ status: false, message: 'admissionNos[] is required' });
     }
@@ -519,7 +521,7 @@ const getStudentRemarksBulkReport = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
-    const admissionNos = Array.isArray(req.body?.admissionNos) ? req.body.admissionNos.map(safeTrim).filter(Boolean).slice(0, 100) : [];
+    const admissionNos = Array.isArray(req.body?.admissionNos) ? [...new Set(req.body.admissionNos.map(safeTrim).filter(Boolean))] : [];
     if (!admissionNos.length) return res.status(400).json({ status: false, message: 'admissionNos[] is required' });
     const fromDate = toInt(req.body?.fromDate, 0);
     const toDate = toInt(req.body?.toDate, 0);
@@ -594,7 +596,7 @@ const getStudentLateEntriesBulkReport = async (req, res, next) => {
     const tenantId = pickTid(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
 
-    const admissionNos = Array.isArray(req.body?.admissionNos) ? req.body.admissionNos.map(safeTrim).filter(Boolean).slice(0, 100) : [];
+    const admissionNos = Array.isArray(req.body?.admissionNos) ? [...new Set(req.body.admissionNos.map(safeTrim).filter(Boolean))] : [];
     if (!admissionNos.length) return res.status(400).json({ status: false, message: 'admissionNos[] is required' });
 
     const fromDate = toInt(req.body?.fromDate, 0);
