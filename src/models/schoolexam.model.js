@@ -36,6 +36,9 @@ const SchoolExamLogSchema = new mongoose.Schema(
     classNo: { type: Number, default: null },
     academicYear: { type: String, trim: true, default: null },
     subjectNames: { type: [String], default: [] },
+    // Set once per exam (not per student) — e.g. Physics: 100. Individual student rows may still
+    // carry their own subjects[].maxMarks as an override; when absent, this is what gets resolved from.
+    subjectMaxMarks: { type: [{ subjectName: String, maxMarks: Number }], default: [], _id: false },
     results: { type: [StudentResultSchema], default: [] },
     totalStudents: { type: Number, default: 0 },
     matchedCount: { type: Number, default: 0 },

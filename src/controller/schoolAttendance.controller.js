@@ -711,6 +711,155 @@ const getBatchAttendanceStatusReport = async (req, res, next) => {
   }
 };
 
+// Builds the per-batch report object (dates/rows/holidays) shared by both the single-batch and
+// multi-batch response paths below, from pre-fetched student/attendance records for that one batch.
+const buildRangeReportForBatch = (batch, fromDate, toDate, studentProfiles, allRecords) => {
+  const attendanceRecords = allRecords.filter((r) => r.type === 'ATTENDANCE');
+  const holidayRecords = allRecords.filter((r) => HOLIDAY_TYPES.includes(r.type));
+  const dateAttMap = new Map();
+  const holidayDateMap = new Map();
+  attendanceRecords.forEach((rec) => {
+    const stuMap = new Map();
+    (rec.students || []).forEach((s) => stuMap.set(safeTrim(s.studentId), { status: s.status, remarks: s.remarks || null }));
+    dateAttMap.set(rec.date, stuMap);
+  });
+  holidayRecords.forEach((rec) => holidayDateMap.set(rec.date, { name: rec.holidayName || rec.type, type: rec.type }));
+  const dates = [];
+  for (let d = fromDate; d <= toDate; d += 86400000) dates.push(d);
+  const workingDays = attendanceRecords.length;
+  const rows = studentProfiles.map((stu) => {
+    const studentId = safeTrim(stu.studentId);
+    let presentCount = 0,
+      absentCount = 0,
+      lateCount = 0;
+    const remarks = [];
+    const attendance = dates.map((dateMs) => {
+      if (holidayDateMap.has(dateMs)) {
+        remarks.push(null);
+        return 'H';
+      }
+      const stuMap = dateAttMap.get(dateMs);
+      if (!stuMap) {
+        remarks.push(null);
+        return '';
+      }
+      const entry = stuMap.get(studentId);
+      const status = entry?.status || 'ABSENT';
+      remarks.push(entry?.remarks || null);
+      if (status === 'PRESENT') {
+        presentCount++;
+        return 'P';
+      }
+      if (status === 'LATE') {
+        presentCount++;
+        lateCount++;
+        return 'L';
+      }
+      absentCount++;
+      return 'A';
+    });
+    const pct = workingDays > 0 ? Math.round((presentCount / workingDays) * 100) : 0;
+    return {
+      studentId,
+      admissionNo: safeTrim(stu.admissionNo),
+      name: safeTrim(stu.student?.name || stu.admissionNo),
+      attendance,
+      remarks, // positionally aligned with `dates`/`attendance` — per-student remark entered when that day was marked, null where none
+      presentCount,
+      workingDays,
+      lateCount,
+      absentCount,
+      percentage: pct
+    };
+  });
+  const holidays = Array.from(holidayDateMap.entries())
+    .sort((a, b) => a[0] - b[0])
+    .map(([date, h]) => ({ date, name: h.name, type: h.type }));
+  return {
+    batchId: batch.batchId,
+    batchCode: batch.batchCode,
+    batchName: batch.batchName || null,
+    fromDate,
+    toDate,
+    dates,
+    workingDays,
+    holidayCount: holidays.length,
+    holidays,
+    rows
+  };
+};
+
+// Free date-range equivalent of getMonthlyAttendanceReport, for when the caller needs a range
+// that doesn't align to a single calendar month. Kept as a separate endpoint rather than changing
+// getMonthlyAttendanceReport itself, since that one's response is a fixed "days 1..lastDay" grid
+// tied to a single month — a real range spanning a month boundary doesn't fit that shape.
+//
+// batchCode (single)   -> single report object, same shape as before (backward compatible)
+// batchCodes[] (array) -> array of report objects, one per requested batch
+// neither given        -> array of report objects for every active batch
+const getAttendanceRangeReport = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const batchCode = safeTrim(req.body?.batchCode);
+    const batchCodesInput = Array.isArray(req.body?.batchCodes) ? [...new Set(req.body.batchCodes.map(safeTrim).filter(Boolean))] : null;
+    const fromDate = toInt(req.body?.fromDate);
+    const toDate = toInt(req.body?.toDate);
+    if (!tenantId || !fromDate || !toDate) {
+      return res.status(400).json({ status: false, message: 'tenantId, fromDate, toDate are required' });
+    }
+    if (fromDate > toDate) {
+      return res.status(400).json({ status: false, message: 'fromDate must be before or equal to toDate' });
+    }
+
+    const isMultiBatch = !batchCode; // batchCodes[] given, or neither given (= all active batches)
+    const batchQuery = { tenantId, isdeleted: false, status: 'ACTIVE' };
+    if (batchCode) batchQuery.batchCode = batchCode;
+    else if (batchCodesInput?.length) batchQuery.batchCode = { $in: batchCodesInput };
+    const batches = await Batch.find(batchQuery, { batchId: 1, batchCode: 1, batchName: 1, section: 1, classNo: 1 })
+      .sort({ classNo: 1, batchCode: 1 })
+      .lean();
+    if (!batches.length) {
+      return batchCode ? res.status(404).json({ status: false, message: 'Batch not found' }) : res.status(200).json({ status: true, count: 0, data: [] });
+    }
+
+    // Batched queries across every target batch at once — not one query pair per batch — so an
+    // "all batches" call stays a fixed two DB round trips regardless of how many batches match.
+    const batchIds = batches.map((b) => b.batchId);
+    const batchCodes = batches.map((b) => b.batchCode);
+    const [studentProfiles, allRecords] = await Promise.all([
+      StudentProfile.find({ tenantId, isdeleted: false, batchId: { $in: batchIds } }, { studentId: 1, admissionNo: 1, batchId: 1, 'student.name': 1 })
+        .sort({ 'student.name': 1 })
+        .lean(),
+      SchoolAttendance.find({ tenantId, batchCode: { $in: batchCodes }, date: { $gte: fromDate, $lte: toDate }, isdeleted: false })
+        .sort({ date: 1 })
+        .lean()
+    ]);
+    const studentsByBatchId = new Map();
+    studentProfiles.forEach((s) => {
+      const key = s.batchId;
+      if (!studentsByBatchId.has(key)) studentsByBatchId.set(key, []);
+      studentsByBatchId.get(key).push(s);
+    });
+    const recordsByBatchCode = new Map();
+    allRecords.forEach((r) => {
+      const key = r.batchCode;
+      if (!recordsByBatchCode.has(key)) recordsByBatchCode.set(key, []);
+      recordsByBatchCode.get(key).push(r);
+    });
+
+    const reports = batches.map((batch) =>
+      buildRangeReportForBatch(batch, fromDate, toDate, studentsByBatchId.get(batch.batchId) || [], recordsByBatchCode.get(batch.batchCode) || [])
+    );
+
+    if (!isMultiBatch) {
+      return res.status(200).json({ status: true, data: reports[0] });
+    }
+    return res.status(200).json({ status: true, count: reports.length, data: reports });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   listBatchesForSchoolAttendance,
   getSchoolAttendanceStudents,
@@ -722,6 +871,7 @@ export default {
   getSchoolAttendanceSummary,
   checkMarkedBatches,
   getMonthlyAttendanceReport,
+  getAttendanceRangeReport,
   finaliseAttendance,
   getBatchAttendanceStatusReport
 };
