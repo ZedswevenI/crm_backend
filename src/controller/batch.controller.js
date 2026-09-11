@@ -374,14 +374,17 @@ const listBatches = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-    const page = Math.max(parseInt(req.query.page || '1', 10), 1);
-    const limit = Math.min(Math.max(parseInt(req.query.limit || '20', 10), 1), 200);
-    const list = safeTrim(req.query.list);
-    const search = safeTrim(req.query.search);
-    const status = safeTrim(req.query.status);
-    const academicYear = safeTrim(req.query.academicYear);
-    const programId = safeTrim(req.query.programId);
-    const centerId = safeTrim(req.query.centerId || req.body?.centerId);
+    // Accepts filters from either the query string or the JSON body (body takes precedence) —
+    // this codebase's convention elsewhere is body-driven POST, so callers sending these as body
+    // fields (matching every other list endpoint) now work here too, not just ?query=params.
+    const page = Math.max(parseInt(req.body?.page || req.query.page || '1', 10), 1);
+    const limit = Math.min(Math.max(parseInt(req.body?.limit || req.query.limit || '20', 10), 1), 200);
+    const list = safeTrim(req.body?.list || req.query.list);
+    const search = safeTrim(req.body?.search || req.query.search);
+    const status = safeTrim(req.body?.status || req.query.status);
+    const academicYear = safeTrim(req.body?.academicYear || req.query.academicYear);
+    const programId = safeTrim(req.body?.programId || req.query.programId);
+    const centerId = safeTrim(req.body?.centerId || req.query.centerId);
     const query = { tenantId, isdeleted: false };
     if (status && status !== 'ALL') query.status = status;
     if (academicYear) query.academicYear = academicYear;
