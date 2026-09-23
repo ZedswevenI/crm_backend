@@ -78,6 +78,7 @@ routes.post('/result/section-analytics', mockExamResultController.getSectionAnal
 routes.post('/result/analytics/timing', mockExamResultController.getQuestionTimingAnalytics);
 routes.post('/result/analytics/attempts', mockExamResultController.getQuestionAttemptAnalytics);
 routes.post('/result/batch-attendance', mockExamResultController.getBatchAttendanceReport);
+routes.post('/result/absentees-report', validatetoken, requirePermission('exam:view'), mockExamResultController.getExamAbsenteesReport);
 routes.post('/result/batch-performance', mockExamResultController.getBatchPerformanceReport);
 routes.post('/result/compare-topper', mockExamResultController.compareWithTopper);
 routes.post('/result/analytics/question-wise', validatetoken, requirePermission('exam:view'), mockExamResultController.getExamQuestionWiseReport);

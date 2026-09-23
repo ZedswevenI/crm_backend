@@ -11,6 +11,7 @@ import StudentProfile from '../models/studentProfile.model.js';
 import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
 import { evalAnswer } from './mockExamResult.controller.js';
 import Counter from '../models/counter.model.js';
+import { resolveBatchId } from '../helpers/batch.helper.js';
 
 const safeTrim = (v) => (v == null ? '' : String(v)).trim();
 const toNum = (v) => {
@@ -511,10 +512,11 @@ const checkAndAutoPublish = async (req, res, next) => {
 const listExamsForStudent = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
-    const batchId = safeTrim(req.body?.batchId);
+    const rawBatchId = safeTrim(req.body?.batchId);
     const admissionNo = safeTrim(req.body?.admissionNo);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
-    if (!batchId) return res.status(400).json({ status: false, message: 'batchId is required' });
+    if (!rawBatchId) return res.status(400).json({ status: false, message: 'batchId is required' });
+    const batchId = await resolveBatchId(tenantId, rawBatchId);
     const assigns = await MockExamBatchAssign.find({ tenantId, batchId, isdeleted: false, status: 'enabled' }, { examId: 1, students: 1 }).lean();
     if (!assigns.length) return res.status(200).json({ status: true, message: 'No exams assigned', data: [], count: 0 });
     const examIds = assigns.map((a) => a.examId);

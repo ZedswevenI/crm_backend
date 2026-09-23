@@ -4,7 +4,9 @@ import MockExamQns from '../models/mockExamQns.model.js';
 import MockExam from '../models/mockExam.model.js';
 import MockExamBatchAssign from '../models/mockExambatchmapping.model.js';
 import StudentProfile from '../models/studentProfile.model.js';
+import Batch from '../models/batch.model.js';
 import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
+import { resolveBatchId } from '../helpers/batch.helper.js';
 
 const sumFromSections = (result, field) => {
   const secs = result.sectionResults || [];
@@ -541,13 +543,13 @@ const submitResult = async (req, res, next) => {
     const tenantId = pickTid(req);
     const admissionNo = safeTrim(req.body?.admissionNo);
     const examId = safeTrim(req.body?.examId);
-    const batchId = safeTrim(req.body?.batchId) || null;
     const centerId = safeTrim(req.body?.centerId) || null;
     const classNo = req.body?.classNo ? toNum(req.body.classNo) : null;
     const startedAt = req.body?.startedAt ? toNum(req.body.startedAt) : null;
     const completedAt = req.body?.completedAt ? toNum(req.body.completedAt) : Date.now();
     const sectionTimings = req.body?.sectionTimings || {};
     if (!tenantId || !admissionNo || !examId) return res.status(400).json({ status: false, message: 'tenantId, admissionNo, examId are required' });
+    const batchId = req.body?.batchId ? await resolveBatchId(tenantId, req.body.batchId) : null;
     const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }).lean();
     if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
     const now = Date.now();
@@ -782,13 +784,13 @@ const submitOfflineResult = async (req, res, next) => {
     const userId = safeTrim(req.body?.userId);
     const admissionNo = safeTrim(req.body?.admissionNo);
     const examId = safeTrim(req.body?.examId);
-    const batchId = safeTrim(req.body?.batchId) || null;
     const centerId = safeTrim(req.body?.centerId) || null;
     const classNo = req.body?.classNo ? toNum(req.body.classNo) : null;
     const completedAt = req.body?.completedAt ? toNum(req.body.completedAt) : Date.now();
     if (!tenantId || !admissionNo || !examId) return res.status(400).json({ status: false, message: 'tenantId, admissionNo, examId are required' });
     const incomingAnswers = Array.isArray(req.body?.answers) ? req.body.answers : [];
     if (!incomingAnswers.length) return res.status(400).json({ status: false, message: 'answers[] is required' });
+    const batchId = req.body?.batchId ? await resolveBatchId(tenantId, req.body.batchId) : null;
     const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }).lean();
     if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
     const startedAt = req.body?.startedAt ? toNum(req.body.startedAt) : exam.startTime || completedAt;
@@ -904,7 +906,7 @@ const correctOfflineResult = async (req, res, next) => {
     const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }).lean();
     if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
 
-    const batchId = safeTrim(req.body?.batchId) || existing.batchId || null;
+    const batchId = (req.body?.batchId ? await resolveBatchId(tenantId, req.body.batchId) : null) || existing.batchId || null;
     const centerId = safeTrim(req.body?.centerId) || existing.centerId || null;
     const classNo = req.body?.classNo ? toNum(req.body.classNo) : existing.classNo;
     const completedAt = req.body?.completedAt ? toNum(req.body.completedAt) : existing.completedAt || Date.now();
@@ -999,7 +1001,7 @@ const getLeaderboard = async (req, res, next) => {
     const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 50));
     const skip = (page - 1) * limit;
     const query = { tenantId, examId, isdeleted: false, isResultVisible: true };
-    if (safeTrim(req.body?.batchId)) query.batchId = safeTrim(req.body.batchId);
+    if (safeTrim(req.body?.batchId)) query.batchId = await resolveBatchId(tenantId, req.body.batchId);
     if (safeTrim(req.body?.centerId)) query.centerId = safeTrim(req.body.centerId);
     const [rows, count] = await Promise.all([
       MockExamResult.find(query, { admissionNo: 1, studentId: 1, batchId: 1, centerId: 1, obtainedMarks: 1, totalMarks: 1, percentile: 1, rank: 1, timeTaken: 1, isLate: 1, sectionResults: 1, completedAt: 1, correctCount: 1, wrongCount: 1, skippedCount: 1 })
@@ -1029,7 +1031,7 @@ const listResultsByExam = async (req, res, next) => {
     const skip = (page - 1) * limit;
 
     const query = { tenantId, examId, isdeleted: false };
-    if (safeTrim(req.body?.batchId)) query.batchId = safeTrim(req.body.batchId);
+    if (safeTrim(req.body?.batchId)) query.batchId = await resolveBatchId(tenantId, req.body.batchId);
     if (safeTrim(req.body?.centerId)) query.centerId = safeTrim(req.body.centerId);
     if (safeTrim(req.body?.admissionNo)) query.admissionNo = safeTrim(req.body.admissionNo);
     if (safeTrim(req.body?.status)) query.status = safeTrim(req.body.status);
@@ -1045,8 +1047,9 @@ const listResultsByExam = async (req, res, next) => {
 const listResultsByBatch = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
-    const batchId = safeTrim(req.body?.batchId);
-    if (!tenantId || !batchId) return res.status(400).json({ status: false, message: 'tenantId and batchId are required' });
+    const rawBatchId = safeTrim(req.body?.batchId);
+    if (!tenantId || !rawBatchId) return res.status(400).json({ status: false, message: 'tenantId and batchId are required' });
+    const batchId = await resolveBatchId(tenantId, rawBatchId);
 
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 20));
@@ -1076,7 +1079,7 @@ const listResultsByStudent = async (req, res, next) => {
 
     const query = { tenantId, admissionNo, isdeleted: false };
     if (safeTrim(req.body?.examId)) query.examId = safeTrim(req.body.examId);
-    if (safeTrim(req.body?.batchId)) query.batchId = safeTrim(req.body.batchId);
+    if (safeTrim(req.body?.batchId)) query.batchId = await resolveBatchId(tenantId, req.body.batchId);
 
     const [rows, count] = await Promise.all([MockExamResult.find(query, { answers: 0 }).sort({ completedAt: -1 }).skip(skip).limit(limit).lean(), MockExamResult.countDocuments(query)]);
     const data = await populateStudentNames(tenantId, rows);
@@ -1094,7 +1097,7 @@ const getSectionAnalytics = async (req, res, next) => {
     const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }, { sections: 1 }).lean();
     if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
     const matchQ = { tenantId, examId, isdeleted: false, isResultVisible: true };
-    if (safeTrim(req.body?.batchId)) matchQ.batchId = safeTrim(req.body.batchId);
+    if (safeTrim(req.body?.batchId)) matchQ.batchId = await resolveBatchId(tenantId, req.body.batchId);
     if (safeTrim(req.body?.centerId)) matchQ.centerId = safeTrim(req.body.centerId);
     const agg = await MockExamResult.aggregate([
       { $match: matchQ },
@@ -1424,7 +1427,7 @@ const getQuestionTimingAnalytics = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     const examId = safeTrim(req.body?.examId);
-    const batchId = safeTrim(req.body?.batchId) || null;
+    const batchId = req.body?.batchId ? await resolveBatchId(tenantId, req.body.batchId) : null;
     if (!tenantId || !examId) return res.status(400).json({ status: false, message: 'tenantId and examId are required' });
     const matchStage = { tenantId, examId, isdeleted: false };
     if (batchId) matchStage.batchId = batchId;
@@ -1471,7 +1474,7 @@ const getQuestionAttemptAnalytics = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     const examId = safeTrim(req.body?.examId);
-    const batchId = safeTrim(req.body?.batchId) || null;
+    const batchId = req.body?.batchId ? await resolveBatchId(tenantId, req.body.batchId) : null;
     if (!tenantId || !examId) return res.status(400).json({ status: false, message: 'tenantId and examId are required' });
     const matchStage = { tenantId, examId, isdeleted: false };
     if (batchId) matchStage.batchId = batchId;
@@ -1534,18 +1537,19 @@ const getBatchAttendanceReport = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     const examId = safeTrim(req.body?.examId);
-    const batchId = safeTrim(req.body?.batchId);
+    const rawBatchId = safeTrim(req.body?.batchId);
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
     if (!examId) return res.status(400).json({ status: false, message: 'examId is required' });
-    if (!batchId) return res.status(400).json({ status: false, message: 'batchId is required' });
+    if (!rawBatchId) return res.status(400).json({ status: false, message: 'batchId is required' });
+    const batchId = await resolveBatchId(tenantId, rawBatchId);
     const assign = await MockExamBatchAssign.findOne({ tenantId, examId, batchId, isdeleted: false }).lean();
     if (!assign) {
       return res.status(404).json({ status: false, message: 'No assignment found for this exam and batch' });
     }
     const students = Array.isArray(assign.students) ? assign.students : [];
-    const results = await MockExamResult.find({ tenantId, examId, batchId, isdeleted: false }, { admissionNo: 1, obtainedMarks: 1, totalMarks: 1, rank: 1, percentile: 1, timeTaken: 1, isLate: 1, completedAt: 1, sectionResults: 1 }).lean();
-    const resultMap = new Map(results.map((r) => [r.admissionNo, r]));
     const admissionNos = students.map((s) => safeTrim(s.admissionNo)).filter(Boolean);
+    const results = await MockExamResult.find({ tenantId, examId, admissionNo: { $in: admissionNos }, isdeleted: false }, { admissionNo: 1, obtainedMarks: 1, totalMarks: 1, rank: 1, percentile: 1, timeTaken: 1, isLate: 1, completedAt: 1, sectionResults: 1 }).lean();
+    const resultMap = new Map(results.map((r) => [r.admissionNo, r]));
     const profiles = await StudentProfile.find({ tenantId, admissionNo: { $in: admissionNos }, isdeleted: false }, { admissionNo: 1, 'student.name': 1, 'student.phone': 1 }).lean();
     const profileMap = new Map(profiles.map((p) => [safeTrim(p.admissionNo), p]));
     let totalAssigned = 0;
@@ -1618,15 +1622,119 @@ const getBatchAttendanceReport = async (req, res, next) => {
   }
 };
 
+// Downloadable list of students who were assigned to this exam (via enabled batches) but never
+// actually completed it. Only becomes available once the exam window has closed or results are
+// published — before that, "didn't attend yet" and "hasn't started yet" aren't distinguishable.
+//
+// batchId omitted -> covers every batch currently enabled for this exam, not just one.
+//
+// Note: nothing in this codebase ever flips a MockExamBatchAssign student's status to 'absent' —
+// a no-show simply stays at the schema default ('assigned') forever. So "didn't attend" is computed
+// here as "assigned, but no completed MockExamResult exists" — the same defensive cross-check
+// getStudentStatus() already uses — rather than trusting that status field literally.
+const getExamAbsenteesReport = async (req, res, next) => {
+  try {
+    const tenantId = pickTid(req);
+    const examId = safeTrim(req.body?.examId);
+    const batchId = req.body?.batchId ? await resolveBatchId(tenantId, req.body.batchId) : '';
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+    if (!examId) return res.status(400).json({ status: false, message: 'examId is required' });
+
+    const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }, { status: 1, endTime: 1, examName: 1, examCode: 1 }).lean();
+    if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
+
+    const windowClosed = !!exam.endTime && Date.now() >= exam.endTime;
+    const resultPublished = exam.status === 'result_published';
+    if (!windowClosed && !resultPublished) {
+      return res.status(400).json({
+        status: false,
+        message: 'Absentees report is available only after the exam window has closed or results are published'
+      });
+    }
+
+    const assignQuery = { tenantId, examId, isdeleted: false, status: 'enabled' };
+    if (batchId) assignQuery.batchId = batchId;
+    const assignments = await MockExamBatchAssign.find(assignQuery, { batchId: 1, centerId: 1, students: 1 }).lean();
+    if (batchId && !assignments.length) {
+      return res.status(404).json({ status: false, message: 'No assignment found for this exam and batch' });
+    }
+    if (!assignments.length) {
+      return res.status(200).json({ status: true, message: 'Absentees report loaded', data: { examId, examName: exam.examName, summary: { totalAssigned: 0, absentCount: 0 }, batches: [] } });
+    }
+
+    const batchIds = assignments.map((a) => a.batchId);
+    const assignedAdmissionNos = assignments.flatMap((a) => (Array.isArray(a.students) ? a.students : []).map((s) => safeTrim(s.admissionNo)));
+    const [results, batches] = await Promise.all([
+      MockExamResult.find({ tenantId, examId, admissionNo: { $in: assignedAdmissionNos }, isdeleted: false }, { admissionNo: 1, completedAt: 1, status: 1 }).lean(),
+      Batch.find({ tenantId, batchId: { $in: batchIds }, isdeleted: false }, { batchId: 1, batchCode: 1, batchName: 1 }).lean()
+    ]);
+    const completedAdmissionNos = new Set(results.filter((r) => r.completedAt || ['completed', 'evaluated', 'result_published'].includes(r.status)).map((r) => safeTrim(r.admissionNo)));
+    const batchMap = new Map(batches.map((b) => [b.batchId, b]));
+
+    const allAbsentAdmissionNos = [];
+    const batchGroups = assignments.map((a) => {
+      const students = Array.isArray(a.students) ? a.students : [];
+      const absentees = students.filter((s) => !completedAdmissionNos.has(safeTrim(s.admissionNo)));
+      absentees.forEach((s) => allAbsentAdmissionNos.push(safeTrim(s.admissionNo)));
+      return { batchId: a.batchId, students, absentees };
+    });
+
+    const profiles = allAbsentAdmissionNos.length
+      ? await StudentProfile.find({ tenantId, admissionNo: { $in: allAbsentAdmissionNos }, isdeleted: false }, { admissionNo: 1, 'student.name': 1, 'student.phone': 1 }).lean()
+      : [];
+    const profileMap = new Map(profiles.map((p) => [safeTrim(p.admissionNo), p]));
+
+    let totalAssigned = 0;
+    let absentCount = 0;
+    const batchOut = batchGroups.map((g) => {
+      const batchMeta = batchMap.get(g.batchId) || {};
+      totalAssigned += g.students.length;
+      absentCount += g.absentees.length;
+      return {
+        batchId: g.batchId,
+        batchCode: batchMeta.batchCode || null,
+        batchName: batchMeta.batchName || null,
+        totalAssigned: g.students.length,
+        absentCount: g.absentees.length,
+        absentees: g.absentees.map((s) => {
+          const profile = profileMap.get(safeTrim(s.admissionNo)) || null;
+          return {
+            admissionNo: safeTrim(s.admissionNo),
+            studentName: profile?.student?.name || null,
+            studentPhone: profile?.student?.phone || null,
+            assignedAt: s.assignedAt || null,
+            assignStatus: s.status
+          };
+        })
+      };
+    });
+
+    return res.status(200).json({
+      status: true,
+      message: 'Absentees report loaded',
+      data: {
+        examId,
+        examName: exam.examName,
+        examCode: exam.examCode,
+        summary: { totalAssigned, absentCount, attendancePct: totalAssigned > 0 ? round2(((totalAssigned - absentCount) / totalAssigned) * 100) : 0 },
+        batches: batchOut
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 const getBatchPerformanceReport = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     const examId = safeTrim(req.body?.examId);
-    const batchId = safeTrim(req.body?.batchId);
+    const rawBatchId = safeTrim(req.body?.batchId);
     const rangeSize = toNum(req.body?.rangeSize) || 50;
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
     if (!examId) return res.status(400).json({ status: false, message: 'examId is required' });
-    if (!batchId) return res.status(400).json({ status: false, message: 'batchId is required' });
+    if (!rawBatchId) return res.status(400).json({ status: false, message: 'batchId is required' });
+    const batchId = await resolveBatchId(tenantId, rawBatchId);
     const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }, { totalMarks: 1, sections: 1 }).lean();
     if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
     const results = await MockExamResult.find({ tenantId, examId, batchId, isdeleted: false, isResultVisible: true }, { admissionNo: 1, obtainedMarks: 1, totalMarks: 1, rank: 1, percentile: 1, timeTaken: 1, sectionResults: 1 }).lean();
@@ -1752,7 +1860,7 @@ const compareWithTopper = async (req, res, next) => {
     const tenantId = pickTid(req);
     const examId = safeTrim(req.body?.examId);
     const admissionNo = safeTrim(req.body?.admissionNo);
-    const batchId = safeTrim(req.body?.batchId) || null;
+    const batchId = req.body?.batchId ? await resolveBatchId(tenantId, req.body.batchId) : null;
     if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
     if (!examId) return res.status(400).json({ status: false, message: 'examId is required' });
     if (!admissionNo) return res.status(400).json({ status: false, message: 'admissionNo is required' });
@@ -1941,7 +2049,7 @@ const getExamQuestionWiseReport = async (req, res, next) => {
     if (!tenantId || !examId) return res.status(400).json({ status: false, message: 'tenantId and examId are required' });
 
     const matchQ = { tenantId, examId, isdeleted: false };
-    if (safeTrim(req.body?.batchId)) matchQ.batchId = safeTrim(req.body.batchId);
+    if (safeTrim(req.body?.batchId)) matchQ.batchId = await resolveBatchId(tenantId, req.body.batchId);
     if (safeTrim(req.body?.centerId)) matchQ.centerId = safeTrim(req.body.centerId);
 
     const [results, questions] = await Promise.all([MockExamResult.find(matchQ, { answers: 1 }).lean(), MockExamQns.find({ tenantId, examId, isdeleted: false }, { questionId: 1, sectionId: 1, sortOrder: 1 }).sort({ sectionId: 1, sortOrder: 1 }).lean()]);
@@ -2152,8 +2260,9 @@ const getBatchSubjectStats = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
     const examId = safeTrim(req.body?.examId);
-    const batchId = safeTrim(req.body?.batchId);
-    if (!tenantId || !examId || !batchId) return res.status(400).json({ status: false, message: 'tenantId, examId and batchId are required' });
+    const rawBatchId = safeTrim(req.body?.batchId);
+    if (!tenantId || !examId || !rawBatchId) return res.status(400).json({ status: false, message: 'tenantId, examId and batchId are required' });
+    const batchId = await resolveBatchId(tenantId, rawBatchId);
     const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }, { sections: 1 }).lean();
     if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
     // const batchResults = await MockExamResult.find({ tenantId, examId, batchId, isdeleted: false }, { sectionResults: 1 }).lean();
@@ -2266,6 +2375,7 @@ export default {
   getQuestionTimingAnalytics,
   getQuestionAttemptAnalytics,
   getBatchAttendanceReport,
+  getExamAbsenteesReport,
   getBatchPerformanceReport,
   compareWithTopper,
   getExamQuestionWiseReport,
