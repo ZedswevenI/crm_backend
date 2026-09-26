@@ -15,6 +15,7 @@ import AcademicYearConfig from '../models/academicYear.model.js';
 import Batch from '../models/batch.model.js';
 import mongoose from 'mongoose';
 import { v4 as uuid } from 'uuid';
+import { mapScholarshipRecord } from '../helpers/scholarship.helper.js';
 
 const pickTenantId = (req) => String(req.body?.entiId || req.body?.tenantId || '').trim();
 const safeTrim = (v) => (v === null || v === undefined ? '' : String(v)).trim();
@@ -255,42 +256,7 @@ const fetchScholarshipRegistration = async (req, res, next) => {
     }
     const d = body.data;
     const up = {
-      tenantId,
-      registrationNumber: safeTrim(d.registrationNumber),
-      studentId: safeTrim(d.studentId) || null,
-      firstName: safeTrim(d.firstName) || null,
-      lastName: safeTrim(d.lastName) || null,
-      name: safeTrim(d.name) || null,
-      email: safeTrim(d.email) ? safeTrim(d.email).toLowerCase() : null,
-      mobileNo: safeTrim(d.mobileNo) || null,
-      dateOfBirth: toEpochOrNull(d.dateOfBirth),
-      gender: safeTrim(d.gender) || null,
-      fatherName: safeTrim(d.fatherName) || null,
-      motherName: safeTrim(d.motherName) || null,
-      address: safeTrim(d.address) || null,
-      city: safeTrim(d.city) || null,
-      state: safeTrim(d.state) || null,
-      pincode: safeTrim(d.pincode) || null,
-      schoolName: safeTrim(d.schoolName) || null,
-      className: safeTrim(d.className) || null,
-      testDate: toEpochOrNull(d.testDate),
-      testCity: safeTrim(d.testCity) || null,
-      testCentre: safeTrim(d.testCentre) || null,
-      testName: safeTrim(d.testName) || null,
-      centerCode: safeTrim(d.centerCode) || null,
-      programName: safeTrim(d.programName) || null,
-      programCode: safeTrim(d.programCode) || null,
-      paper1Total: safeTrim(d.paper1Total) || null,
-      paper2Total: safeTrim(d.paper2Total) || null,
-      gtotal: safeTrim(d.gtotal) || null,
-      normalizedScore: d.normalizedScore ?? null,
-      normalizedPercentage: d.normalizedPercentage ?? null,
-      normalizedRank: d.normalizedRank ?? null,
-      resultCategory: safeTrim(d.resultCategory) || null,
-      programOffered1: safeTrim(d.programOffered1) || null,
-      programOffered2: safeTrim(d.programOffered2) || null,
-      waiverPerInTf: d.waiverPerInTf === null || d.waiverPerInTf === undefined ? null : Number(d.waiverPerInTf),
-      studyCentre: safeTrim(d.studyCentre) || null,
+      ...mapScholarshipRecord(tenantId, d),
       lastSyncAt: Date.now(),
       lastSyncStatus: 'SUCCESS',
       lastSyncMessage: body?.message || 'OK',

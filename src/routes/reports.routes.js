@@ -8,8 +8,14 @@ import { requirePermission } from '../middlewares/permission.js';
 import batchReCtrl from '../controller/batchReports.controller.js';
 import studentReCtrl from '../controller/studentReports.controller.js';
 import staffReCtrl from '../controller/teacherReports.controller.js';
+import admissionReCtrl from '../controller/admissionReports.controller.js';
 
 const rv = requirePermission('reports:view');
+
+routes.post('/admission/registration', validatetoken, rv, admissionReCtrl.getRegistrationReport);
+routes.post('/admission/enrollment', validatetoken, rv, admissionReCtrl.getEnrollmentReport);
+routes.post('/admission/snj', validatetoken, rv, admissionReCtrl.getSnjReport);
+routes.post('/admission/analysis', validatetoken, rv, admissionReCtrl.getAdmissionAnalysisReport);
 
 routes.post('/batch/students', validatetoken, rv, batchReCtrl.getStudentListReport);
 routes.post('/batch/staff', validatetoken, rv, batchReCtrl.getStaffListReport);
