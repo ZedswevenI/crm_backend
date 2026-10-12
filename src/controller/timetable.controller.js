@@ -996,11 +996,19 @@ const listTimeTables = async (req, res, next) => {
       const rx = new RegExp(escapeRegex(search), 'i');
       query.$or = [{ batchCode: rx }, { centerCode: rx }, { phase: rx }];
     }
+    const withBatchName = async (rows) => {
+      const codes = [...new Set(rows.map((r) => r.batchCode).filter(Boolean))];
+      const batches = codes.length ? await Batch.find({ tenantId, batchCode: { $in: codes } }, { batchCode: 1, batchName: 1 }).lean() : [];
+      const nameMap = new Map(batches.map((b) => [b.batchCode, b.batchName]));
+      return rows.map((r) => ({ ...r, batchName: r.batchCode ? nameMap.get(r.batchCode) || null : null }));
+    };
     if (list === 'full') {
-      const rows = await TimeTable.find(query).sort({ wkStartOn: -1 }).lean();
-      return res.json({ status: true, data: rows, count: rows.length });
+      const rawRows = await TimeTable.find(query).sort({ wkStartOn: -1 }).lean();
+      const data = await withBatchName(rawRows);
+      return res.json({ status: true, data, count: data.length });
     }
-    const [rows, count] = await Promise.all([TimeTable.find(query).sort({ wkStartOn: -1 }).skip(skip).limit(limit).lean(), TimeTable.countDocuments(query)]);
+    const [rawRows, count] = await Promise.all([TimeTable.find(query).sort({ wkStartOn: -1 }).skip(skip).limit(limit).lean(), TimeTable.countDocuments(query)]);
+    const rows = await withBatchName(rawRows);
     return res.json({ status: true, data: rows, count });
   } catch (err) {
     return next(err);

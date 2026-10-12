@@ -1842,6 +1842,12 @@ const listPtmSessions = async (req, res, next) => {
     const [result] = await PTM.aggregate(pipeline);
     const sessions = result?.data || [];
     const total = result?.total?.[0]?.count || 0;
+    const sessionBatchCodes = [...new Set(sessions.map((s) => s.batchCode).filter(Boolean))];
+    const sessionBatches = sessionBatchCodes.length ? await Batch.find({ tenantId, batchCode: { $in: sessionBatchCodes } }, { batchCode: 1, batchName: 1 }).lean() : [];
+    const sessionBatchNameMap = new Map(sessionBatches.map((b) => [b.batchCode, b.batchName]));
+    sessions.forEach((s) => {
+      s.batchName = sessionBatchNameMap.get(s.batchCode) || null;
+    });
     return res.status(200).json({
       status: true,
       message: 'PTM sessions retrieved successfully',

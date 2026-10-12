@@ -3,6 +3,7 @@ import constants from '../helpers/constants.js';
 import Circular from '../models/circular.model.js';
 import CircularRead from '../models/circularRead.model.js';
 import StudentProfile from '../models/studentProfile.model.js';
+import Batch from '../models/batch.model.js';
 import { uploadFileToS3 } from '../middlewares/s3.service.js';
 import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
 
@@ -92,9 +93,22 @@ const listCirculars = async (req, res, next) => {
       query.$or = [{ subject: rx }, { details: rx }, { category: rx }];
     }
     const [rows, count] = await Promise.all([Circular.find(query).sort(sort).skip(skip).limit(limit).lean(), Circular.countDocuments(query)]);
+    // batchCode on a circular can be a single code or a comma-separated list (scope:'BATCH' with multiple batches selected).
+    const circularBatchCodes = [...new Set(rows.flatMap((r) => (r.batchCode ? r.batchCode.split(',').map((c) => c.trim()) : [])).filter(Boolean))];
+    const circularBatches = circularBatchCodes.length ? await Batch.find({ tenantId, batchCode: { $in: circularBatchCodes } }, { batchCode: 1, batchName: 1 }).lean() : [];
+    const circularBatchNameMap = new Map(circularBatches.map((b) => [b.batchCode, b.batchName]));
+    const data = rows.map((r) => ({
+      ...r,
+      batchName: r.batchCode
+        ? r.batchCode
+            .split(',')
+            .map((c) => circularBatchNameMap.get(c.trim()) || null)
+            .join(', ')
+        : null
+    }));
     return res.status(constants.HTTPS_SUCCESS || 200).send({
       status: true,
-      data: rows,
+      data,
       page,
       limit,
       count,
@@ -319,12 +333,16 @@ const getCircularReadList = async (req, res, next) => {
       },
       'studentId admissionNo registrationNumber firstName lastName batchCode centerName student'
     ).lean();
+    const readBatchCodes = [...new Set(students.map((s) => s.batchCode).filter(Boolean))];
+    const readBatches = readBatchCodes.length ? await Batch.find({ tenantId, batchCode: { $in: readBatchCodes } }, { batchCode: 1, batchName: 1 }).lean() : [];
+    const readBatchNameMap = new Map(readBatches.map((b) => [b.batchCode, b.batchName]));
     const formattedList = readList.map((record) => {
       const stu = students.find((s) => s.studentId === record.studentNo || s.admissionNo === record.studentNo || s.registrationNumber === record.studentNo);
       return {
         ...record,
         studentName: stu ? stu.student?.name || 'Unknown' : 'Unknown',
         batchCode: stu ? stu.batchCode : null,
+        batchName: stu?.batchCode ? readBatchNameMap.get(stu.batchCode) || null : null,
         centerCode: stu ? stu.centerName : null
       };
     });

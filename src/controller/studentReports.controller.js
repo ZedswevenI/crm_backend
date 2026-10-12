@@ -3,6 +3,7 @@ import SchoolAttendance from '../models/schoolAttendance.model.js';
 import LateEntryLog from '../models/lateEntrylog.model.js';
 import StudentRemark from '../models/studentremark.model.js';
 import StudentProfile from '../models/studentProfile.model.js';
+import Batch from '../models/batch.model.js';
 import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
 
 const pickTid = (req) => String(req?.body?.entiId || req?.body?.tenantId || '').trim();
@@ -28,6 +29,13 @@ const resolveStudent = async (tenantId, studentId, admissionNo) => {
 
 const round2 = (n) => Math.round(Number(n) * 100) / 100;
 
+const buildBatchNameMap = async (tenantId, batchCodes) => {
+  const codes = [...new Set((batchCodes || []).map(safeTrim).filter(Boolean))];
+  if (!codes.length) return new Map();
+  const batches = await Batch.find({ tenantId, batchCode: { $in: codes } }, { batchCode: 1, batchName: 1 }).lean();
+  return new Map(batches.map((b) => [b.batchCode, b.batchName]));
+};
+
 const getStudentAttendanceReport = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
@@ -46,6 +54,7 @@ const getStudentAttendanceReport = async (req, res, next) => {
     const sid = student.studentId;
     const admNo = student.admissionNo;
     const batchCode = safeTrim(student.batchCode || '');
+    const batchNameMap = await buildBatchNameMap(tenantId, [batchCode]);
     const attRecords = await Attendance.find({
       tenantId,
       batchCode,
@@ -164,6 +173,7 @@ const getStudentAttendanceReport = async (req, res, next) => {
       admissionNo: admNo,
       studentName: student.student?.name || null,
       batchCode,
+      batchName: batchCode ? batchNameMap.get(batchCode) || null : null,
       fromDate,
       toDate,
 
@@ -230,6 +240,7 @@ const getStudentRemarksReport = async (req, res, next) => {
     }
 
     const remarks = await StudentRemark.find(query).sort({ dateOfIncident: -1 }).lean();
+    const batchNameMap = await buildBatchNameMap(tenantId, [student.batchCode]);
 
     // ── Type-wise summary ─────────────────────────────────────────────────────
     const typeCount = { ACADEMIC: 0, BEHAVIOUR: 0, ATTENDANCE: 0, HEALTH: 0, OTHER: 0 };
@@ -259,6 +270,7 @@ const getStudentRemarksReport = async (req, res, next) => {
       admissionNo: admNo,
       studentName: student.student?.name || null,
       batchCode: student.batchCode || null,
+      batchName: student.batchCode ? batchNameMap.get(student.batchCode) || null : null,
       summary: {
         total: remarks.length,
         byType: typeCount,
@@ -309,6 +321,7 @@ const getStudentLateEntryReport = async (req, res, next) => {
     }
 
     const entries = await LateEntryLog.find(query).sort({ date: 1, periodNo: 1 }).lean();
+    const batchNameMap = await buildBatchNameMap(tenantId, [student.batchCode, ...entries.map((e) => e.batchCode)]);
 
     // ── Summary ───────────────────────────────────────────────────────────────
     const lateCount = entries.filter((e) => (e.entryType || 'LATE') === 'LATE').length;
@@ -347,6 +360,7 @@ const getStudentLateEntryReport = async (req, res, next) => {
       dateFormatted: formatDate(e.date),
       periodNo: e.periodNo,
       batchCode: e.batchCode || null,
+      batchName: e.batchCode ? batchNameMap.get(e.batchCode) || null : null,
       scheduledStartMin: e.scheduledStartMin,
       delayMinutes: e.delayMinutes,
       reason: e.reason || null
@@ -358,6 +372,7 @@ const getStudentLateEntryReport = async (req, res, next) => {
       admissionNo: admNo,
       studentName: student.student?.name || null,
       batchCode: student.batchCode || null,
+      batchName: student.batchCode ? batchNameMap.get(student.batchCode) || null : null,
       fromDate: fromDate || null,
       toDate: toDate || null,
       summary: {
@@ -408,6 +423,7 @@ const getStudentAttendanceBulkReport = async (req, res, next) => {
     }
     const studentMap = new Map(students.map((s) => [s.admissionNo, s]));
     const batchCodes = [...new Set(students.map((s) => s.batchCode).filter(Boolean))];
+    const batchNameMap = await buildBatchNameMap(tenantId, batchCodes);
     const attQuery = {
       tenantId,
       batchCode: { $in: batchCodes },
@@ -486,6 +502,7 @@ const getStudentAttendanceBulkReport = async (req, res, next) => {
         admissionNo: admNo,
         studentName: student.student?.name || null,
         batchCode: student.batchCode || null,
+        batchName: student.batchCode ? batchNameMap.get(student.batchCode) || null : null,
         totalPeriods,
         present,
         absent,
@@ -497,6 +514,7 @@ const getStudentAttendanceBulkReport = async (req, res, next) => {
           admissionNo: admNo,
           studentName: student.student?.name || null,
           batchCode: student.batchCode || null,
+          batchName: student.batchCode ? batchNameMap.get(student.batchCode) || null : null,
           ...p
         });
       }
@@ -536,6 +554,7 @@ const getStudentRemarksBulkReport = async (req, res, next) => {
     if (centerId) remarksStudentQuery.centerId = centerId;
     const students = await StudentProfile.find(remarksStudentQuery, { studentId: 1, admissionNo: 1, batchCode: 1, 'student.name': 1 }).lean();
     const studentMap = new Map(students.map((s) => [s.admissionNo, s]));
+    const remarksBatchNameMap = await buildBatchNameMap(tenantId, students.map((s) => s.batchCode));
     const remarkQuery = { tenantId, admissionNo: { $in: admissionNos }, isdeleted: false };
     if (filterType) remarkQuery.type = filterType;
     if (filterStatus) remarkQuery.status = filterStatus;
@@ -560,6 +579,7 @@ const getStudentRemarksBulkReport = async (req, res, next) => {
         admissionNo: admNo,
         studentName: student?.student?.name || null,
         batchCode: student?.batchCode || null,
+        batchName: student?.batchCode ? remarksBatchNameMap.get(student.batchCode) || null : null,
         totalRemarks: studentRemarks.length
       });
       for (const r of studentRemarks) {
@@ -567,6 +587,7 @@ const getStudentRemarksBulkReport = async (req, res, next) => {
           admissionNo: admNo,
           studentName: student?.student?.name || null,
           batchCode: student?.batchCode || null,
+          batchName: student?.batchCode ? remarksBatchNameMap.get(student.batchCode) || null : null,
           type: r.type || null,
           dateFormatted: formatDate(r.dateOfIncident),
           remark: r.remark || null,
@@ -615,6 +636,7 @@ const getStudentLateEntriesBulkReport = async (req, res, next) => {
 
     const studentMap = new Map(students.map((s) => [s.admissionNo, s]));
     const studentIds = students.map((s) => s.studentId).filter(Boolean);
+    const lateBatchNameMap = await buildBatchNameMap(tenantId, students.map((s) => s.batchCode));
 
     // Fetch all late entries at once
     const lateQuery = {
@@ -659,6 +681,7 @@ const getStudentLateEntriesBulkReport = async (req, res, next) => {
         admissionNo: admNo,
         studentName: student?.student?.name || null,
         batchCode: student?.batchCode || null,
+        batchName: student?.batchCode ? lateBatchNameMap.get(student.batchCode) || null : null,
         totalEntries: studentEntries.length,
         lateCount,
         earlyCount,
@@ -670,6 +693,7 @@ const getStudentLateEntriesBulkReport = async (req, res, next) => {
           admissionNo: admNo,
           studentName: student?.student?.name || null,
           batchCode: student?.batchCode || null,
+          batchName: student?.batchCode ? lateBatchNameMap.get(student.batchCode) || null : null,
           entryType: e.entryType || null,
           dateFormatted: formatDate(e.date),
           periodNo: e.periodNo || null,

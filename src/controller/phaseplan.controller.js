@@ -725,12 +725,20 @@ const listActivities = async (req, res, next) => {
       const rx = { $regex: safeTrim(search), $options: 'i' };
       query.$or = [{ activityName: rx }, { remarks: rx }];
     }
+    const withBatchName = async (rows) => {
+      const codes = [...new Set(rows.map((r) => r.batchCode).filter(Boolean))];
+      const batches = codes.length ? await Batch.find({ tenantId, batchCode: { $in: codes } }, { batchCode: 1, batchName: 1 }).lean() : [];
+      const nameMap = new Map(batches.map((b) => [b.batchCode, b.batchName]));
+      return rows.map((r) => ({ ...r, batchName: r.batchCode ? nameMap.get(r.batchCode) || null : null }));
+    };
     // const listMode = String(req.query.list || req.body.list || '').toLowerCase();
     if (listMode === 'full') {
       const rows = await Activity.find(query).sort(sort).lean();
-      return res.status(constants.HTTPS_SUCCESS).send({ status: true, data: rows, count: rows.length, message: 'Activities retrieved' });
+      const data = await withBatchName(rows);
+      return res.status(constants.HTTPS_SUCCESS).send({ status: true, data, count: data.length, message: 'Activities retrieved' });
     }
-    const [rows, count] = await Promise.all([Activity.find(query).sort(sort).skip(skip).limit(limit).lean(), Activity.countDocuments(query)]);
+    const [rawRows, count] = await Promise.all([Activity.find(query).sort(sort).skip(skip).limit(limit).lean(), Activity.countDocuments(query)]);
+    const rows = await withBatchName(rawRows);
     return res.status(constants.HTTPS_SUCCESS).send({
       status: true,
       data: rows,
