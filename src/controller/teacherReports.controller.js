@@ -345,6 +345,9 @@ const getStaffLateEntryReport = async (req, res, next) => {
     applyBatchCodeFilter(lateQuery, lateBatchCodes);
 
     const entries = await LateEntryLog.find(lateQuery).sort({ date: 1 }).lean();
+    const lateEntryBatchCodes = [...new Set(entries.map((e) => e.batchCode).filter(Boolean))];
+    const lateReportBatches = lateEntryBatchCodes.length ? await Batch.find({ tenantId, batchCode: { $in: lateEntryBatchCodes } }, { batchCode: 1, batchName: 1 }).lean() : [];
+    const lateReportBatchNameMap = new Map(lateReportBatches.map((b) => [b.batchCode, b.batchName]));
 
     const entriesByStaff = new Map(staffIds.map((sid) => [sid, []]));
     for (const e of entries) {
@@ -362,7 +365,7 @@ const getStaffLateEntryReport = async (req, res, next) => {
       const byBatch = new Map();
       for (const e of staffEntries) {
         const key = e.batchCode || 'UNKNOWN';
-        if (!byBatch.has(key)) byBatch.set(key, { batchCode: key, count: 0, totalDelay: 0 });
+        if (!byBatch.has(key)) byBatch.set(key, { batchCode: key, batchName: lateReportBatchNameMap.get(key) || null, count: 0, totalDelay: 0 });
         byBatch.get(key).count++;
         byBatch.get(key).totalDelay += e.delayMinutes || 0;
       }
@@ -373,6 +376,7 @@ const getStaffLateEntryReport = async (req, res, next) => {
         date: e.date,
         dateFormatted: formatDate(e.date),
         batchCode: e.batchCode || null,
+        batchName: e.batchCode ? lateReportBatchNameMap.get(e.batchCode) || null : null,
         periodNo: e.periodNo,
         scheduledStartMin: e.scheduledStartMin,
         delayMinutes: e.delayMinutes,
@@ -425,6 +429,9 @@ const getStaffEarlyLeavingReport = async (req, res, next) => {
     applyBatchCodeFilter(earlyQuery, earlyBatchCodes);
 
     const entries = await LateEntryLog.find(earlyQuery).sort({ date: 1 }).lean();
+    const earlyLeaveBatchCodes = [...new Set(entries.map((e) => e.batchCode).filter(Boolean))];
+    const earlyLeaveBatches = earlyLeaveBatchCodes.length ? await Batch.find({ tenantId, batchCode: { $in: earlyLeaveBatchCodes } }, { batchCode: 1, batchName: 1 }).lean() : [];
+    const earlyLeaveBatchNameMap = new Map(earlyLeaveBatches.map((b) => [b.batchCode, b.batchName]));
 
     const entriesByStaff = new Map(staffIds.map((sid) => [sid, []]));
     for (const e of entries) {
@@ -444,6 +451,7 @@ const getStaffEarlyLeavingReport = async (req, res, next) => {
         date: e.date,
         dateFormatted: formatDate(e.date),
         batchCode: e.batchCode || null,
+        batchName: e.batchCode ? earlyLeaveBatchNameMap.get(e.batchCode) || null : null,
         periodNo: e.periodNo,
         scheduledStartMin: e.scheduledStartMin,
         earlyByMinutes: e.delayMinutes,
@@ -696,6 +704,8 @@ const getStaffAttendanceReport = async (req, res, next) => {
 
     // Fetch all attendance records in range for these batchCodes, across every requested staff
     const allBatchCodes = [...new Set([...scheduleByStaffDate.values()].flatMap((dateMap) => [...dateMap.values()].flat().map((p) => p.batchCode)))];
+    const staffAttBatches = allBatchCodes.length ? await Batch.find({ tenantId, batchCode: { $in: allBatchCodes } }, { batchCode: 1, batchName: 1 }).lean() : [];
+    const staffAttBatchNameMap = new Map(staffAttBatches.map((b) => [b.batchCode, b.batchName]));
 
     const attRecords = allBatchCodes.length
       ? await Attendance.find(
@@ -738,6 +748,7 @@ const getStaffAttendanceReport = async (req, res, next) => {
 
           return {
             batchCode: p.batchCode,
+            batchName: staffAttBatchNameMap.get(p.batchCode) || null,
             timetableId: p.timetableId,
             periodNo: p.periodNo,
             subjectId: p.subjectId || null,
@@ -839,6 +850,10 @@ const getStaffFeedbackReport = async (req, res, next) => {
       return res.status(200).json({ status: true, staffIds, count: 0, data: [] });
     }
 
+    const ptmBatchCodes = [...new Set(ptmDocs.map((p) => p.batchCode).filter(Boolean))];
+    const ptmBatches = ptmBatchCodes.length ? await Batch.find({ tenantId, batchCode: { $in: ptmBatchCodes } }, { batchCode: 1, batchName: 1 }).lean() : [];
+    const ptmBatchNameMap = new Map(ptmBatches.map((b) => [b.batchCode, b.batchName]));
+
     // Per-subject and per-staff summary of remarks
     const subjectSummary = new Map();
     const staffSummary = new Map();
@@ -873,6 +888,7 @@ const getStaffFeedbackReport = async (req, res, next) => {
       return {
         ptmId: p.ptmId,
         batchCode: p.batchCode,
+        batchName: ptmBatchNameMap.get(p.batchCode) || null,
         studentId: p.studentId,
         admissionNo: p.admissionNo,
         studentName: p.studentName,

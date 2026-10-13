@@ -311,19 +311,24 @@ const getStaffSchedule = async (req, res, next) => {
     }
     const batchCodes = [...new Set(myClasses.map((c) => c.batchCode))];
     const periodNos = [...new Set(myClasses.map((c) => c.periodNo))];
-    const attRecords = await Attendance.find({
-      tenantId,
-      batchCode: { $in: batchCodes },
-      date,
-      periodNo: { $in: periodNos },
-      isdeleted: false
-    }).lean();
+    const [attRecords, batches] = await Promise.all([
+      Attendance.find({
+        tenantId,
+        batchCode: { $in: batchCodes },
+        date,
+        periodNo: { $in: periodNos },
+        isdeleted: false
+      }).lean(),
+      Batch.find({ tenantId, batchCode: { $in: batchCodes } }, { batchCode: 1, batchName: 1 }).lean()
+    ]);
     const attMap = new Map(attRecords.map((a) => [`${a.batchCode}_${a.periodNo}`, a]));
+    const batchNameMap = new Map(batches.map((b) => [b.batchCode, b.batchName]));
     const data = myClasses.map((cls) => {
       const attDoc = attMap.get(`${cls.batchCode}_${cls.periodNo}`) || null;
       const summary = buildAttendanceSummary(attDoc);
       return {
         ...cls,
+        batchName: batchNameMap.get(cls.batchCode) || null,
         attendance: summary || {
           isMarked: false,
           attendanceId: null,
@@ -593,14 +598,18 @@ const getScheduleWithAttendance = async (req, res, next) => {
     }
     const batchCodes = [...new Set(allPeriods.map((p) => p.batchCode))];
     const periodNos = [...new Set(allPeriods.map((p) => p.periodNo))];
-    const attRecords = await Attendance.find({
-      tenantId,
-      batchCode: { $in: batchCodes },
-      periodNo: { $in: periodNos },
-      date,
-      isdeleted: false
-    }).lean();
+    const [attRecords, batches] = await Promise.all([
+      Attendance.find({
+        tenantId,
+        batchCode: { $in: batchCodes },
+        periodNo: { $in: periodNos },
+        date,
+        isdeleted: false
+      }).lean(),
+      Batch.find({ tenantId, batchCode: { $in: batchCodes } }, { batchCode: 1, batchName: 1 }).lean()
+    ]);
     const attMap = new Map(attRecords.map((a) => [`${a.batchCode}_${a.periodNo}`, a]));
+    const batchNameMap = new Map(batches.map((b) => [b.batchCode, b.batchName]));
     const data = allPeriods.map((period) => {
       const attDoc = attMap.get(`${period.batchCode}_${period.periodNo}`) || null;
       const students = Array.isArray(attDoc?.students) ? attDoc.students : [];
@@ -631,6 +640,7 @@ const getScheduleWithAttendance = async (req, res, next) => {
           };
       return {
         batchCode: period.batchCode,
+        batchName: batchNameMap.get(period.batchCode) || null,
         timetableId: period.timetableId,
         periodNo: period.periodNo,
         periodType: period.periodType || null,
@@ -727,14 +737,18 @@ const getScheduleWithAttendanceRange = async (req, res, next) => {
       return res.status(200).json({ status: true, message: 'No periods scheduled for this date range', startDate, endDate, data: [], count: 0 });
     }
 
-    const attRecords = await Attendance.find({
-      tenantId,
-      batchCode: { $in: [...allBatchCodesSet] },
-      periodNo: { $in: [...allPeriodNosSet] },
-      date: { $in: dates },
-      isdeleted: false
-    }).lean();
+    const [attRecords, batches] = await Promise.all([
+      Attendance.find({
+        tenantId,
+        batchCode: { $in: [...allBatchCodesSet] },
+        periodNo: { $in: [...allPeriodNosSet] },
+        date: { $in: dates },
+        isdeleted: false
+      }).lean(),
+      Batch.find({ tenantId, batchCode: { $in: [...allBatchCodesSet] } }, { batchCode: 1, batchName: 1 }).lean()
+    ]);
     const attMap = new Map(attRecords.map((a) => [`${a.batchCode}_${a.periodNo}_${a.date}`, a]));
+    const batchNameMap = new Map(batches.map((b) => [b.batchCode, b.batchName]));
 
     const buildAttendance = (attDoc) => {
       const students = Array.isArray(attDoc?.students) ? attDoc.students : [];
@@ -771,6 +785,7 @@ const getScheduleWithAttendanceRange = async (req, res, next) => {
       if (!periods.length) continue;
       const rows = periods.map((period) => ({
         batchCode: period.batchCode,
+        batchName: batchNameMap.get(period.batchCode) || null,
         timetableId: period.timetableId,
         periodNo: period.periodNo,
         periodType: period.periodType || null,

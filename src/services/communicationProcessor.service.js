@@ -1,6 +1,6 @@
 import CommunicationCampaign from '../models/communicationcampaign.model.js';
 import CommunicationRecipientLog from '../models/communicationrecipientlog.model.js';
-import { sendMailgunEmail } from './mailgun.service.js';
+import { sendEmail } from './mail.service.js';
 
 export const processCommunicationCampaign = async ({ tenantId, campaignId }) => {
   console.log('method called for email');
@@ -24,7 +24,7 @@ export const processCommunicationCampaign = async ({ tenantId, campaignId }) => 
     .limit(100);
   for (const log of logs) {
     try {
-      const resp = await sendMailgunEmail({
+      const resp = await sendEmail({
         to: log.recipientEmail,
         subject: log.subject,
         html: log.body,
@@ -32,6 +32,7 @@ export const processCommunicationCampaign = async ({ tenantId, campaignId }) => 
       });
       log.status = 'SENT';
       log.sentAt = Date.now();
+      log.provider = resp?.provider || log.provider;
       log.providerMessageId = resp?.id || null;
       log.error = null;
       await log.save();

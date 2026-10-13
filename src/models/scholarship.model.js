@@ -21,6 +21,8 @@ const scholarshipTestSchema = new mongoose.Schema(
     motherName: { type: String, required: false, trim: true, default: null },
     address: { type: String, required: false, trim: true, default: null },
     city: { type: String, required: false, trim: true, default: null },
+    state: { type: String, required: false, trim: true, default: null },
+    pincode: { type: String, required: false, trim: true, default: null },
     schoolName: { type: String, required: false, trim: true, default: null },
     className: { type: String, required: false, trim: true, default: null },
     testDate: { type: Number, required: false, default: null },
@@ -39,6 +41,11 @@ const scholarshipTestSchema = new mongoose.Schema(
     normalizedRank: { type: String, required: false, trim: true, default: null },
 
     resultCategory: { type: String, required: false, trim: true, default: null },
+    // External API's own "status" field (e.g. PASS/FAIL) — kept separate from this schema's `status`
+    // (Active/Inactive) field below to avoid a name collision.
+    testResultStatus: { type: String, required: false, trim: true, default: null },
+    selection: { type: String, required: false, trim: true, default: null },
+    selectionStatus: { type: String, required: false, trim: true, default: null },
     programOffered1: { type: String, required: false, trim: true, default: null },
     programOffered2: { type: String, required: false, trim: true, default: null },
 
@@ -68,6 +75,9 @@ scholarshipTestSchema.index({ tenantId: 1, studentId: 1, isdeleted: 1 });
 scholarshipTestSchema.index({ tenantId: 1, programCode: 1, isdeleted: 1 });
 scholarshipTestSchema.index({ tenantId: 1, className: 1, isdeleted: 1 });
 scholarshipTestSchema.index({ tenantId: 1, lastSyncAt: -1, isdeleted: 1 });
+scholarshipTestSchema.index({ tenantId: 1, testDate: -1, isdeleted: 1 });
+scholarshipTestSchema.index({ tenantId: 1, selection: 1, isdeleted: 1 });
+scholarshipTestSchema.index({ tenantId: 1, testResultStatus: 1, isdeleted: 1 });
 
 const ScholarshipTest = mongoose.model('scholarship_test', scholarshipTestSchema);
 export default ScholarshipTest;

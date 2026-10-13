@@ -1041,6 +1041,8 @@ const getConsolidatedStaffReport = async (req, res, next) => {
     const allBatchCodes = [...new Set(responses.map((r) => r.batchCode))];
     const strengthAgg = await StudentProfile.aggregate([{ $match: { tenantId, batchCode: { $in: allBatchCodes }, status: 'ACTIVE', isdeleted: false } }, { $group: { _id: '$batchCode', count: { $sum: 1 } } }]);
     const strengthMap = new Map(strengthAgg.map((s) => [s._id, s.count]));
+    const consolidatedBatches = allBatchCodes.length ? await Batch.find({ tenantId, batchCode: { $in: allBatchCodes } }, { batchCode: 1, batchName: 1 }).lean() : [];
+    const consolidatedBatchNameMap = new Map(consolidatedBatches.map((b) => [b.batchCode, b.batchName]));
 
     // ── Group responses by staffId::subjectName::batchCode::phase ────────────
     const rowMap = new Map();
@@ -1061,6 +1063,7 @@ const getConsolidatedStaffReport = async (req, res, next) => {
           subjectName,
           subjectCode,
           batchCode: resp.batchCode,
+          batchName: consolidatedBatchNameMap.get(resp.batchCode) || null,
           phase,
           strength: strengthMap.get(resp.batchCode) || 0,
           responses: []
@@ -1109,6 +1112,7 @@ const getConsolidatedStaffReport = async (req, res, next) => {
         subjectName: row.subjectName,
         subjectCode: row.subjectCode,
         batchCode: row.batchCode,
+        batchName: row.batchName,
         phase: row.phase,
         strength: row.strength,
         responseCount: row.responses.length,

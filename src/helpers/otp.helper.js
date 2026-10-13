@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import Otp from '../models/otp.model.js';
-import { sendMailgunEmail } from '../services/mailgun.service.js';
+import { sendEmail } from '../services/mail.service.js';
 import logger from './logger.js';
 
 const OTP_EXPIRY_MINUTES = 5;
@@ -29,7 +29,7 @@ export const sendOtpEmail = async (email, name, otp, purpose = 'Verification') =
       <p style="color:#6B7280;font-size:13px">Do not share this OTP with anyone. If you did not request this, please ignore this email.</p>
     </div>
   `;
-  await sendMailgunEmail({ to: email, subject, html });
+  await sendEmail({ to: email, subject, html });
   logger.info(`OTP email sent to ${email} for ${purpose}`);
 };
 

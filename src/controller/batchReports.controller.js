@@ -314,6 +314,9 @@ const getTimetableReport = async (req, res, next) => {
     const ttQuery = { tenantId, wkStartOn: { $in: [...weekStarts] }, status: 'Active', isdeleted: false };
     applyBatchCodeFilter(ttQuery, batchCodes);
     const timetables = await TimeTable.find(ttQuery).lean();
+    const ttBatchCodes = [...new Set([batchCode, ...timetables.map((tt) => tt.batchCode)].filter(Boolean))];
+    const ttBatches = ttBatchCodes.length ? await Batch.find({ tenantId, batchCode: { $in: ttBatchCodes } }, { batchCode: 1, batchName: 1 }).lean() : [];
+    const ttBatchNameMap = new Map(ttBatches.map((b) => [b.batchCode, b.batchName]));
     const ttMap = new Map(timetables.map((tt) => [tt.wkStartOn, tt]));
     const schedule = [];
     curr = fromDate;
@@ -330,6 +333,7 @@ const getTimetableReport = async (req, res, next) => {
           date: curr,
           day: DAYS[d.getUTCDay()],
           batchCode: tt.batchCode,
+          batchName: ttBatchNameMap.get(tt.batchCode) || null,
           timetableId: String(tt._id),
           isHoliday: false,
           periods: periods
@@ -363,6 +367,7 @@ const getTimetableReport = async (req, res, next) => {
     return res.status(200).json({
       status: true,
       batchCode,
+      batchName: batchCode ? ttBatchNameMap.get(batchCode) || null : null,
       fromDate,
       toDate: effectiveToDate,
       summary: { totalDays: schedule.length, totalPeriods, cancelledCount },
