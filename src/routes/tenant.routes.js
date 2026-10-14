@@ -182,6 +182,7 @@ routes.post('/notification/remove', validatetoken, requirePermission('notificati
 routes.post('/package/upload', validatetoken, requirePermission('package:create'), upload.single('file'), packageCtrl.uploadPackageFile);
 routes.post('/package/create', validatetoken, requirePermission('package:create'), packageCtrl.createPackage);
 routes.post('/package/update', validatetoken, requirePermission('package:edit'), packageCtrl.editPackage);
+routes.post('/package/password/change', validatetoken, requirePermission('package:edit'), packageCtrl.changePackagePassword);
 routes.post('/package/delete', validatetoken, requirePermission('package:delete'), packageCtrl.deletePackage);
 routes.post('/package/list', validatetoken, requirePermission('package:list'), packageCtrl.listPackages);
 routes.post('/package/enable', validatetoken, requirePermission('package:enable'), packageCtrl.assignPackage);

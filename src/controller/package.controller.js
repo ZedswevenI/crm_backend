@@ -71,7 +71,7 @@ const createPackage = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
     const userId = safeTrim(req.body?.userId);
-    const { packageCode, classNo, subjectId, subjectName, title, description, attachmentUrl } = req.body;
+    const { packageCode, classNo, subjectId, subjectName, title, description, attachmentUrl, password } = req.body;
     if (!tenantId || !packageCode || !classNo || !subjectId || !title || !attachmentUrl) {
       return res.status(400).json({ status: false, message: 'Missing mandatory fields' });
     }
@@ -88,6 +88,7 @@ const createPackage = async (req, res, next) => {
       title: safeTrim(title),
       description: safeTrim(description),
       attachmentUrl: safeTrim(attachmentUrl),
+      password: safeTrim(password) || null,
       createdBy: userId,
       updatedBy: userId
     });
@@ -101,7 +102,7 @@ const createPackage = async (req, res, next) => {
 const editPackage = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
-    const { packageId, userId, packageCode, classNo, subjectId, subjectName, title, description, attachmentUrl, status } = req.body;
+    const { packageId, userId, packageCode, classNo, subjectId, subjectName, title, description, attachmentUrl, status, password } = req.body;
     if (!tenantId || !packageId) {
       return res.status(400).json({ status: false, message: 'tenantId and packageId are required' });
     }
@@ -125,9 +126,28 @@ const editPackage = async (req, res, next) => {
     if (description !== undefined) updateData.description = safeTrim(description);
     if (attachmentUrl) updateData.attachmentUrl = safeTrim(attachmentUrl);
     if (status) updateData.status = safeTrim(status);
+    if (password !== undefined) updateData.password = safeTrim(password) || null;
     const updated = await Package.findOneAndUpdate({ tenantId, packageId, isdeleted: false }, { $set: updateData }, { new: true }).lean();
     if (!updated) return res.status(404).json({ status: false, message: 'Package not found' });
     return res.status(200).json({ status: true, message: 'Package updated successfully', data: updated });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const changePackagePassword = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const { packageId, userId, password } = req.body;
+    if (!tenantId || !packageId) {
+      return res.status(400).json({ status: false, message: 'tenantId and packageId are required' });
+    }
+    if (!safeTrim(password)) {
+      return res.status(400).json({ status: false, message: 'password is required' });
+    }
+    const updated = await Package.findOneAndUpdate({ tenantId, packageId, isdeleted: false }, { $set: { password: safeTrim(password), updatedBy: safeTrim(userId) } }, { new: true }).lean();
+    if (!updated) return res.status(404).json({ status: false, message: 'Package not found' });
+    return res.status(200).json({ status: true, message: 'Package password updated successfully', data: updated });
   } catch (err) {
     return next(err);
   }
@@ -248,7 +268,7 @@ const reportPackageEnablement = async (req, res, next) => {
     const [rows, count] = await Promise.all([PackageEnablement.find(query).sort({ enableDate: -1 }).skip(skip).limit(limit).lean(), PackageEnablement.countDocuments(query)]);
     if (rows.length > 0) {
       const packageIds = [...new Set(rows.map((r) => r.packageId))];
-      const masterPackages = await Package.find({ tenantId, packageId: { $in: packageIds } }, 'packageId packageCode title classNo subjectName').lean();
+      const masterPackages = await Package.find({ tenantId, packageId: { $in: packageIds } }, 'packageId packageCode title classNo subjectName password').lean();
       const packageMap = new Map(masterPackages.map((p) => [p.packageId, p]));
       rows.forEach((r) => {
         r.packageId = packageMap.get(r.packageId) || null;
@@ -519,6 +539,7 @@ export default {
   createPackage,
   listPackages,
   editPackage,
+  changePackagePassword,
   deletePackage,
   assignPackage,
   reportPackageEnablement,
