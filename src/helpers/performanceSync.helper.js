@@ -10,12 +10,67 @@ import Batch from '../models/batch.model.js';
 
 const safeTrim = (v) => (v == null ? '' : String(v)).trim();
 const toNum = (v) => {
+  if (v === null || v === undefined || v === '') return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 };
 const round2 = (v) => (v != null ? Math.round(v * 100) / 100 : null);
 
 const WEIGHTS = { assignment: 0.4, mock: 0.3, school: 0.3 };
+
+// Display-time fallback for SCHOOL_EXAM subjects[] — maxMarks of null or 0 (either genuinely
+// unconfigured, or a legacy row written before the toNum(null)->0 bug above was fixed) shows as
+// 100 instead. Applied at read time only, so it never touches what's actually stored.
+export const withDefaultSubjectMaxMarks = (subjects) => (Array.isArray(subjects) ? subjects.map((s) => ({ ...s, maxMarks: s?.maxMarks ? s.maxMarks : 100 })) : subjects);
+
+// Per-subject batch average/highest for one school exam log, keyed by subjectName. Shared by the
+// standalone school/exam/batch-subject-stats endpoint and by the student-facing performance reads
+// (which embed these numbers into each subject row), so the two surfaces never drift apart.
+export const getSchoolExamSubjectStatsMap = async (tenantId, examLogId) => {
+  const statsMap = new Map();
+  if (!tenantId || !examLogId) return statsMap;
+  const doc = await SchoolExamLog.findOne({ tenantId, examLogId, isdeleted: false }, { results: 1, subjectMaxMarks: 1 }).lean();
+  if (!doc) return statsMap;
+  const matchedResults = (doc.results || []).filter((r) => r.isMatched);
+  const examMaxMarksMap = new Map((doc.subjectMaxMarks || []).map((s) => [safeTrim(s.subjectName), toNum(s.maxMarks)]).filter(([, v]) => v != null));
+  const subjectMarksMap = new Map();
+  for (const r of matchedResults) {
+    for (const sub of r.subjects || []) {
+      const name = safeTrim(sub.subjectName);
+      if (!name) continue;
+      if (!subjectMarksMap.has(name)) subjectMarksMap.set(name, { marks: [], rowMaxMarks: null });
+      const entry = subjectMarksMap.get(name);
+      entry.marks.push(sub.isAbsent ? 0 : toNum(sub.marks) || 0);
+      if (entry.rowMaxMarks == null && sub.maxMarks != null) entry.rowMaxMarks = toNum(sub.maxMarks);
+    }
+  }
+  for (const [subjectName, { marks, rowMaxMarks }] of subjectMarksMap.entries()) {
+    statsMap.set(subjectName, {
+      maxMarks: examMaxMarksMap.get(subjectName) ?? rowMaxMarks ?? 100,
+      avgObtained: marks.length ? round2(marks.reduce((s, m) => s + m, 0) / marks.length) : 0,
+      maxObtained: marks.length ? Math.max(...marks) : 0,
+      studentCount: marks.length
+    });
+  }
+  return statsMap;
+};
+
+// Embeds each school exam's batch-wide per-subject avgObtained/maxObtained into that subject's row,
+// so the frontend gets the student's own marks and the batch comparison in one response instead of
+// a second call to school/exam/batch-subject-stats. Caches one stats-map fetch per distinct examId
+// across all rows passed in, since a student can have several school exams in the same response.
+export const embedSchoolExamBatchStats = async (tenantId, schoolExamRows) => {
+  const examIds = [...new Set(schoolExamRows.map((r) => r.examId).filter(Boolean))];
+  const statsMapByExamId = new Map(await Promise.all(examIds.map(async (examId) => [examId, await getSchoolExamSubjectStatsMap(tenantId, examId)])));
+  return schoolExamRows.map((r) => {
+    const examStats = statsMapByExamId.get(r.examId);
+    const subjects = withDefaultSubjectMaxMarks(r.subjects).map((s) => {
+      const stat = examStats?.get(safeTrim(s.subjectName));
+      return { ...s, avgObtained: stat?.avgObtained ?? null, maxObtained: stat?.maxObtained ?? null };
+    });
+    return { ...r, subjects };
+  });
+};
 
 export const resolveAcademicYear = (profile, classNo) => {
   if (!profile) return null;

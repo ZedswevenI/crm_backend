@@ -31,6 +31,7 @@ import StudentAlumni from '../models/studentAlumni.model.js';
 import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
 import AdmZip from 'adm-zip';
 import StudentPerformance from '../models/studentperformance.model.js';
+import { embedSchoolExamBatchStats } from '../helpers/performanceSync.helper.js';
 
 const QUESTION_BUCKET = process.env.AWS_S3_QUESTION_BUCKET;
 const REGION = process.env.AWS_REGION || 'ap-south-1';
@@ -2176,7 +2177,7 @@ const getStudentPerformance = async (req, res, next) => {
         rank: r.rank,
         sectionResults: r.sectionResults || []
       }));
-    const schoolExams = records
+    const schoolExamsBase = records
       .filter((r) => r.performanceType === 'SCHOOL_EXAM')
       .sort((a, b) => (b.examDate || 0) - (a.examDate || 0))
       .map((r) => ({
@@ -2188,6 +2189,7 @@ const getStudentPerformance = async (req, res, next) => {
         percentage: r.percentage,
         subjects: r.subjects || []
       }));
+    const schoolExams = await embedSchoolExamBatchStats(tenantId, schoolExamsBase);
 
     return res.status(200).json({
       status: true,

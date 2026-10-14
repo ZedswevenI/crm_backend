@@ -1,6 +1,6 @@
 import SchoolExamLog from '../models/schoolexam.model.js';
 import StudentProfile from '../models/studentProfile.model.js';
-import { syncOnSchoolExamUpload } from '../helpers/performanceSync.helper.js';
+import { syncOnSchoolExamUpload, getSchoolExamSubjectStatsMap } from '../helpers/performanceSync.helper.js';
 import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
 
 const safeTrim = (v) => (v == null ? '' : String(v)).trim();
@@ -277,6 +277,25 @@ const viewExam = async (req, res, next) => {
   }
 };
 
+// Per-subject batch average/highest for one exam log — the school-exam equivalent of mock exam's
+// batch-subject-stats. Delegates to the shared helper so this standalone endpoint and the embedded
+// version in the student-facing performance reads never drift apart.
+const getBatchSubjectStats = async (req, res, next) => {
+  try {
+    const tenantId = pickTid(req);
+    const examLogId = safeTrim(req.body?.examLogId);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+    if (!examLogId) return res.status(400).json({ status: false, message: 'examLogId is required' });
+    const exists = await SchoolExamLog.exists({ tenantId, examLogId, isdeleted: false });
+    if (!exists) return res.status(404).json({ status: false, message: 'Exam log not found' });
+    const statsMap = await getSchoolExamSubjectStatsMap(tenantId, examLogId);
+    const data = Array.from(statsMap.entries()).map(([subjectName, stats]) => ({ subjectName, ...stats }));
+    return res.status(200).json({ status: true, examLogId, data });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 const deleteExam = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
@@ -336,4 +355,4 @@ const listByStudent = async (req, res, next) => {
   }
 };
 
-export default { uploadExamMarks, listExams, viewExam, deleteExam, listByStudent };
+export default { uploadExamMarks, listExams, viewExam, deleteExam, listByStudent, getBatchSubjectStats };

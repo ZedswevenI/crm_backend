@@ -199,6 +199,7 @@ routes.post('/school/exam/view', validatetoken, requirePermission('orgSchoolExam
 routes.post('/school/exam/delete', validatetoken, requirePermission('orgSchoolExam:delete'), schlexamCtrl.deleteExam);
 routes.post('/school/exam/list', validatetoken, requirePermission('orgSchoolExam:list'), schlexamCtrl.listExams);
 routes.post('/school/exam/list/student', validatetoken, requirePermission('orgSchoolExam:list'), schlexamCtrl.listByStudent);
+routes.post('/school/exam/batch-subject-stats', validatetoken, requirePermission('orgSchoolExam:list'), schlexamCtrl.getBatchSubjectStats);
 
 routes.post('/download', tenantCtrl.downloadFile);
 
