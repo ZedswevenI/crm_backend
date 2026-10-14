@@ -12,6 +12,7 @@ const packageSchema = new mongoose.Schema(
     title: { type: String, required: true, trim: true },
     description: { type: String, default: null, trim: true },
     attachmentUrl: { type: String, required: true, trim: true },
+    password: { type: String, default: null, trim: true },
     status: { type: String, enum: ['ACTIVE', 'INACTIVE'], default: 'ACTIVE' },
     isdeleted: { type: Boolean, default: false, index: true },
     createdBy: { type: String, default: null, trim: true },
