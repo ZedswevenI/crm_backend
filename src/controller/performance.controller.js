@@ -12,7 +12,7 @@ import Staff from '../models/staff.model.js';
 import StaffPerformance from '../models/staffperformance.model.js';
 import constants from '../helpers/constants.js';
 import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
-import { resolveAcademicYear } from '../helpers/performanceSync.helper.js';
+import { resolveAcademicYear, embedSchoolExamBatchStats } from '../helpers/performanceSync.helper.js';
 
 const pickTenantId = (req) => String(req?.body?.tenantId || req?.body?.entiId || '').trim();
 
@@ -695,6 +695,7 @@ const getStudentPerformanceFull = async (req, res, next) => {
     }
     grouped.mockExams.sort((a, b) => (b.syncedAt || 0) - (a.syncedAt || 0));
     grouped.schoolExams.sort((a, b) => (b.examDate || 0) - (a.examDate || 0));
+    grouped.schoolExams = await embedSchoolExamBatchStats(tenantId, grouped.schoolExams);
     return res.status(200).json({ status: true, data: grouped });
   } catch (err) {
     return next(err);
@@ -733,7 +734,8 @@ const getStudentSchoolList = async (req, res, next) => {
       StudentPerformance.find({ tenantId, studentId, academicYear, performanceType: 'SCHOOL_EXAM', isdeleted: false }).sort({ examDate: -1 }).skip(skip).limit(limit).lean(),
       StudentPerformance.countDocuments({ tenantId, studentId, academicYear, performanceType: 'SCHOOL_EXAM', isdeleted: false })
     ]);
-    return res.status(200).json({ status: true, data: rows, page, limit, count, pages: Math.ceil(count / limit) || 0 });
+    const data = await embedSchoolExamBatchStats(tenantId, rows);
+    return res.status(200).json({ status: true, data, page, limit, count, pages: Math.ceil(count / limit) || 0 });
   } catch (err) {
     return next(err);
   }

@@ -19,8 +19,13 @@ export const buildStudentQuery = ({ tenantId, filters = {} }) => {
   if (classNo !== null) query.classNo = classNo;
   if (safeTrim(filters.studentId)) query.studentId = safeTrim(filters.studentId);
   if (safeTrim(filters.admissionNo)) query.admissionNo = safeTrim(filters.admissionNo);
-  if (safeTrim(filters.batchId)) query.batchId = safeTrim(filters.batchId);
-  if (safeTrim(filters.batchCode)) query.batchCode = safeTrim(filters.batchCode);
+  const batchIds = Array.isArray(filters.batchIds) ? filters.batchIds.map(safeTrim).filter(Boolean) : [];
+  const batchCodes = Array.isArray(filters.batchCodes) ? filters.batchCodes.map(safeTrim).filter(Boolean) : [];
+  if (batchIds.length && batchCodes.length) query.$or = [{ batchId: { $in: batchIds } }, { batchCode: { $in: batchCodes } }];
+  else if (batchIds.length) query.batchId = { $in: batchIds };
+  else if (batchCodes.length) query.batchCode = { $in: batchCodes };
+  else if (safeTrim(filters.batchId)) query.batchId = safeTrim(filters.batchId);
+  else if (safeTrim(filters.batchCode)) query.batchCode = safeTrim(filters.batchCode);
   if (safeTrim(filters.centerId)) query.centerId = safeTrim(filters.centerId);
   if (safeTrim(filters.centerCode)) query.centerCode = safeTrim(filters.centerCode);
   if (safeTrim(filters.programId)) query.programId = safeTrim(filters.programId);
