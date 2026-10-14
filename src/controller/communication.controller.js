@@ -253,6 +253,141 @@ const sendCommunication = async (req, res, next) => {
   }
 };
 
+// Send to one or more batches, by DB-resolved recipients (not frontend-uploaded rows like
+// sendExcelBulkMail) — either rendered from a saved template or raw ad-hoc subject/body, same
+// choice sendExcelBulkMail already offers for Excel-sourced recipients.
+const sendBatchCommunication = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = pickUserId(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+
+    const batchIds = Array.isArray(req.body?.batchIds) ? req.body.batchIds.map(safeTrim).filter(Boolean) : [];
+    const batchCodes = Array.isArray(req.body?.batchCodes) ? req.body.batchCodes.map(safeTrim).filter(Boolean) : [];
+    if (!batchIds.length && !batchCodes.length) {
+      return res.status(400).json({ status: false, message: 'batchIds[] or batchCodes[] is required' });
+    }
+
+    const templateId = safeTrim(req.body?.templateId);
+    const rawSubject = safeTrim(req.body?.subject);
+    const rawBody = req.body?.body || '';
+    if (templateId && (rawSubject || safeTrim(rawBody))) {
+      return res.status(400).json({ status: false, message: 'Provide either templateId or subject/body, not both' });
+    }
+    if (!templateId && (!rawSubject || !safeTrim(rawBody))) {
+      return res.status(400).json({ status: false, message: 'templateId, or both subject and body, is required' });
+    }
+
+    let subjectTemplate;
+    let bodyTemplate;
+    let category;
+    let resolvedTemplateId;
+    let templateName;
+    if (templateId) {
+      const template = await CommunicationTemplate.findOne({ tenantId, templateId, channel: 'email', status: 'ACTIVE', isdeleted: false }).lean();
+      if (!template) return res.status(404).json({ status: false, message: 'Active email template not found' });
+      subjectTemplate = template.subject || '';
+      bodyTemplate = template.body || '';
+      category = template.category;
+      resolvedTemplateId = template.templateId;
+      templateName = template.name;
+    } else {
+      subjectTemplate = rawSubject;
+      bodyTemplate = rawBody;
+      category = 'BATCH_BULK';
+      resolvedTemplateId = `BATCH_${Date.now()}`;
+      templateName = `Batch Mail ${Date.now()}`;
+    }
+
+    const title = safeTrim(req.body?.title) || templateName;
+    const sendType = safeTrim(req.body?.sendType).toUpperCase() === 'SCHEDULED' ? 'SCHEDULED' : 'NOW';
+    const scheduledAt = Number(req.body?.scheduledAt || 0);
+    if (sendType === 'SCHEDULED' && (!scheduledAt || scheduledAt <= Date.now())) {
+      return res.status(400).json({ status: false, message: 'Valid future scheduledAt is required' });
+    }
+
+    const filters = { ...(req.body?.filters || {}) };
+    if (batchIds.length) filters.batchIds = batchIds;
+    if (batchCodes.length) filters.batchCodes = batchCodes;
+    const resolved = await resolveStudentRecipients({ tenantId, filters });
+
+    const campaign = await CommunicationCampaign.create({
+      tenantId,
+      title,
+      templateId: resolvedTemplateId,
+      templateName,
+      category,
+      channel: 'email',
+      subject: subjectTemplate || null,
+      body: bodyTemplate || null,
+      recipientFilters: filters,
+      sendType,
+      scheduledAt: sendType === 'SCHEDULED' ? scheduledAt : null,
+      totalRecipients: resolved.totalRecipients,
+      validEmailCount: resolved.validEmailCount,
+      missingEmailCount: resolved.missingEmailCount,
+      queuedCount: resolved.validEmailCount,
+      skippedCount: resolved.missingEmailCount,
+      status: sendType === 'SCHEDULED' ? 'SCHEDULED' : 'QUEUED',
+      isdeleted: false,
+      createdBy: userId || null,
+      updatedBy: userId || null
+    });
+
+    const logDocs = resolved.recipients.map((r) => {
+      const data = buildTemplateDataFromStudent(r);
+      const subject = renderTemplate(subjectTemplate || '', data);
+      const body = renderTemplate(bodyTemplate || '', data);
+      return {
+        tenantId,
+        campaignId: campaign.campaignId,
+        templateId: resolvedTemplateId,
+        templateName,
+        channel: 'email',
+        studentId: r.studentId || null,
+        admissionNo: r.admissionNo || null,
+        studentName: r.studentName || null,
+        parentName: r.parentName || null,
+        recipientEmail: r.recipientEmail || null,
+        classNo: r.classNo,
+        batchId: r.batchId || null,
+        batchCode: r.batchCode || null,
+        centerId: r.centerId || null,
+        centerCode: r.centerCode || null,
+        programId: r.programId || null,
+        programName: r.programName || null,
+        subject,
+        body,
+        status: r.hasValidEmail ? 'QUEUED' : 'SKIPPED',
+        error: r.hasValidEmail ? null : 'Student email missing/invalid',
+        createdBy: userId || null,
+        updatedBy: userId || null
+      };
+    });
+    if (logDocs.length) await CommunicationRecipientLog.insertMany(logDocs);
+
+    if (sendType === 'NOW') {
+      setImmediate(() => {
+        processCommunicationCampaign({ tenantId, campaignId: campaign.campaignId }).catch((e) => console.error('[batch communication send failed]', e));
+      });
+    }
+
+    return res.status(200).json({
+      status: true,
+      message: sendType === 'SCHEDULED' ? 'Batch communication scheduled' : 'Batch communication queued for sending',
+      data: {
+        campaignId: campaign.campaignId,
+        totalRecipients: resolved.totalRecipients,
+        validEmailCount: resolved.validEmailCount,
+        missingEmailCount: resolved.missingEmailCount,
+        status: campaign.status
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 const listCampaigns = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
@@ -612,6 +747,7 @@ export default {
   deleteTemplate,
   previewRecipients,
   sendCommunication,
+  sendBatchCommunication,
   listCampaigns,
   listLogs,
   viewLog,
