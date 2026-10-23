@@ -32,6 +32,10 @@ const attendanceSchema = new mongoose.Schema(
 );
 
 attendanceSchema.index({ tenantId: 1, batchCode: 1, date: 1, periodNo: 1 }, { unique: true, partialFilterExpression: { isdeleted: false } });
+// Supports looking up a student's attendance across every batch they've ever been in, not just
+// their current one — StudentProfile.batchCode has no history, so queries keyed on the student's
+// current batch silently miss records from before a batch transfer.
+attendanceSchema.index({ tenantId: 1, 'students.studentId': 1, date: 1 }, { name: 'student_attendance_lookup_idx' });
 
 const Attendance = mongoose.model('attendance', attendanceSchema);
 export default Attendance;

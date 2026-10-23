@@ -55,9 +55,11 @@ const getStudentAttendanceReport = async (req, res, next) => {
     const admNo = student.admissionNo;
     const batchCode = safeTrim(student.batchCode || '');
     const batchNameMap = await buildBatchNameMap(tenantId, [batchCode]);
+    // Not scoped to batchCode — see student.controller.js's getStudentAttendance for why: the
+    // student's current batch isn't necessarily the batch attendance was recorded under.
     const attRecords = await Attendance.find({
       tenantId,
-      batchCode,
+      'students.studentId': sid,
       ...(Object.keys(dateFilter).length ? { date: dateFilter } : {}),
       isdeleted: false
     })
@@ -424,9 +426,11 @@ const getStudentAttendanceBulkReport = async (req, res, next) => {
     const studentMap = new Map(students.map((s) => [s.admissionNo, s]));
     const batchCodes = [...new Set(students.map((s) => s.batchCode).filter(Boolean))];
     const batchNameMap = await buildBatchNameMap(tenantId, batchCodes);
+    // Not scoped to each student's current batchCode — see getStudentAttendance for why.
+    const studentIds = students.map((s) => s.studentId);
     const attQuery = {
       tenantId,
-      batchCode: { $in: batchCodes },
+      'students.studentId': { $in: studentIds },
       isdeleted: false
     };
     if (fromDate || toDate) {
@@ -437,7 +441,7 @@ const getStudentAttendanceBulkReport = async (req, res, next) => {
     const pipeline = [
       { $match: attQuery },
       { $unwind: '$students' },
-      { $match: { 'students.studentId': { $in: students.map((s) => s.studentId) } } },
+      { $match: { 'students.studentId': { $in: studentIds } } },
       {
         $addFields: {
           subjectObjId: {

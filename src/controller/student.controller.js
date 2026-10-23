@@ -1058,9 +1058,11 @@ const getStudentAttendance = async (req, res, next) => {
     if (!student) {
       return res.status(404).json({ status: false, message: 'Student profile not found' });
     }
+    // Not scoped to the student's current batchCode — a student transferred batches mid-term would
+    // otherwise lose visibility into attendance recorded while in their old batch.
     const attendanceRecords = await Attendance.find({
       tenantId,
-      batchCode: student.batchCode,
+      'students.studentId': student.studentId,
       date: targetDate,
       isdeleted: false
     }).lean();
@@ -1348,9 +1350,12 @@ const getStudentAttendanceReport = async (req, res, next) => {
     if (!student) {
       return res.status(404).json({ status: false, message: 'Student profile not found' });
     }
+    // Not scoped to the student's current batchCode — see getStudentAttendance for why. The
+    // students.studentId match below is what actually scopes results to this student; batchCode
+    // would only wrongly exclude attendance from a batch they've since been moved out of.
     const matchQuery = {
       tenantId,
-      batchCode: student.batchCode,
+      'students.studentId': student.studentId,
       isdeleted: false
     };
     if (fromDate || toDate) {
