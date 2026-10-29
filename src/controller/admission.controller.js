@@ -309,6 +309,8 @@ const createAdmissionDraft = async (req, res, next) => {
         });
       }
     }
+    const scholarshipRecord = regNo ? await ScholarshipTest.findOne({ tenantId, registrationNumber: regNo, isdeleted: false }, { schoolName: 1 }).lean() : null;
+
     const program = await Program.findOne({ tenantId, programId, isdeleted: false }, { duration: 1, startingClass: 1 }).lean();
     if (!program) {
       return res.status(400).json({ status: false, message: 'Program not found' });
@@ -381,6 +383,7 @@ const createAdmissionDraft = async (req, res, next) => {
       workflow: { stage: 'DRAFT' },
       status: 'Active',
       schoolMarks: {
+        schoolName: safeTrim(scholarshipRecord?.schoolName) || null,
         overallPct: sm.overallPct === '' || sm.overallPct === null || sm.overallPct === undefined ? null : toNum(sm.overallPct),
         coreSubjectPct: sm.coreSubjectPct === '' || sm.coreSubjectPct === null || sm.coreSubjectPct === undefined ? null : toNum(sm.coreSubjectPct),
         remarks: safeTrim(sm.remarks) || null

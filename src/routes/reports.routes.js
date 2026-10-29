@@ -13,6 +13,7 @@ import admissionReCtrl from '../controller/admissionReports.controller.js';
 const rv = requirePermission('reports:view');
 
 routes.post('/admission/registration', validatetoken, rv, admissionReCtrl.getRegistrationReport);
+routes.post('/admission/registration/filters', validatetoken, rv, admissionReCtrl.getRegistrationReportFilters);
 routes.post('/admission/enrollment', validatetoken, rv, admissionReCtrl.getEnrollmentReport);
 routes.post('/admission/snj', validatetoken, rv, admissionReCtrl.getSnjReport);
 routes.post('/admission/analysis', validatetoken, rv, admissionReCtrl.getAdmissionAnalysisReport);

@@ -44,6 +44,41 @@ const getRegistrationReport = async (req, res, next) => {
   }
 };
 
+// 1b. Registration report filter options — distinct values for the dropdowns on the filter panel.
+const getRegistrationReportFilters = async (req, res, next) => {
+  try {
+    const tenantId = pickTid(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+
+    const match = { tenantId, isdeleted: false };
+    const clean = (values) => values.filter((v) => safeTrim(v)).sort((a, b) => a.localeCompare(b));
+
+    const [programCode, programOffered, testCity, testCentre, centerCode, testResultStatus] = await Promise.all([
+      ScholarshipTest.distinct('programCode', match),
+      ScholarshipTest.distinct('programOffered1', match),
+      ScholarshipTest.distinct('testCity', match),
+      ScholarshipTest.distinct('testCentre', match),
+      ScholarshipTest.distinct('centerCode', match),
+      ScholarshipTest.distinct('testResultStatus', match)
+    ]);
+
+    return res.status(200).json({
+      status: true,
+      message: 'Registration report filter options loaded',
+      data: {
+        programCode: clean(programCode),
+        programOffered: clean(programOffered),
+        testCity: clean(testCity),
+        testCentre: clean(testCentre),
+        centerCode: clean(centerCode),
+        testResultStatus: clean(testResultStatus)
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 // 2. Enrollment report — StudentProfile rows (actually-joined students) by courseStartYear.
 const getEnrollmentReport = async (req, res, next) => {
   try {
@@ -205,4 +240,4 @@ const getAdmissionAnalysisReport = async (req, res, next) => {
   }
 };
 
-export default { getRegistrationReport, getEnrollmentReport, getSnjReport, getAdmissionAnalysisReport };
+export default { getRegistrationReport, getRegistrationReportFilters, getEnrollmentReport, getSnjReport, getAdmissionAnalysisReport };

@@ -129,6 +129,7 @@ const admissionSchema = new mongoose.Schema(
     },
     status: { type: String, enum: ['Active', 'Inactive'], default: 'Active' },
     schoolMarks: {
+      schoolName: { type: String, required: false, trim: true, default: null },
       overallPct: { type: Number, required: false, default: null },
       coreSubjectPct: { type: Number, required: false, default: null },
       remarks: { type: String, required: false, trim: true, default: null }
