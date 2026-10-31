@@ -147,6 +147,16 @@ const upsertAcademicYearConfigIfMissing = async ({ tenantId, programId, cohortAy
   );
 };
 
+// Serialized registration number for DIRECT admissions (no scholarship-portal record to draw one
+// from) — leading '3' keeps these out of the namespace real portal regNos use (observed to always
+// start 1/6/7/8/9), so a generated number can never collide with a real one.
+const nextDirectRegistrationNumber = async (tenantId) => {
+  const key = 'ADM_DIRECT_REGNO';
+  const counter = await Counter.findOneAndUpdate({ tenantId, key }, { $inc: { seq: 1 } }, { new: true, upsert: true }).lean();
+  const seq = Number(counter?.seq || 0);
+  return `3${padN(seq, 18)}`;
+};
+
 const nextAdmissionRegNo = async ({ tenantId, programCode, centerCode, academicYear }) => {
   const p = safeTrim(programCode).toUpperCase();
   const c = safeTrim(centerCode).toUpperCase();
@@ -298,7 +308,7 @@ const createAdmissionDraft = async (req, res, next) => {
     if (!safeTrim(student.name) || !safeTrim(student.phone)) {
       return res.status(400).json({ status: false, message: 'student.name and student.phone are required' });
     }
-    const regNo = safeTrim(p.registrationNumber) || null;
+    let regNo = safeTrim(p.registrationNumber) || null;
     if (regNo) {
       const exists = await Admission.findOne({ tenantId, registrationNumber: regNo, isdeleted: false }, { _id: 0, admissionId: 1, admissionNo: 1 }).lean();
       if (exists) {
@@ -308,6 +318,9 @@ const createAdmissionDraft = async (req, res, next) => {
           data: exists
         });
       }
+    }
+    if (!regNo && sourceType === 'DIRECT') {
+      regNo = await nextDirectRegistrationNumber(tenantId);
     }
     const scholarshipRecord = regNo ? await ScholarshipTest.findOne({ tenantId, registrationNumber: regNo, isdeleted: false }, { schoolName: 1 }).lean() : null;
 
@@ -413,6 +426,7 @@ const saveAdmissionPayments = async (req, res, next) => {
     const admission = await Admission.findOne({ tenantId, admissionId, isdeleted: false });
     if (!admission) return res.status(404).json({ status: false, message: 'Admission not found' });
     const neftRefs = Array.isArray(req.body?.neftRefs) ? req.body.neftRefs : [];
+    const cdcRefs = Array.isArray(req.body?.cdcRefs) ? req.body.cdcRefs : [];
     const cheques = Array.isArray(req.body?.cheques) ? req.body.cheques : [];
     const otherPayments = Array.isArray(req.body?.otherPayments) ? req.body.otherPayments : [];
     const locked = await Payment.exists({
@@ -542,6 +556,48 @@ const saveAdmissionPayments = async (req, res, next) => {
           instalmentDate: dueDate || null
         },
         audit: [{ action: 'CREATE', by: userId || null, remarks: 'Created from admission payments' }]
+      });
+    }
+    // CDC cheques entered in the NEFT (pay-now) block — stored as ordinary CHEQUE payments, same as
+    // instalment cheques above, just not tied to a future instalment due date: mode is always CDC and
+    // dueDate/plannedDepositDate default to the cheque's own date since it's deposit-ready immediately.
+    for (const c of cdcRefs) {
+      const chequeNo = safeTrim(c.chequeNo);
+      const chequeDate = toEpochOrNull(c.chequeDate);
+      const favourOf = safeTrim(c.favourOf) || safeTrim(admission?.centerName) || null;
+      const amt = toNum(c.amount);
+      if (!chequeNo || !chequeDate || !favourOf || amt <= 0) continue;
+      docs.push({
+        tenantId,
+        admissionId,
+        admissionNo: admission.admissionNo || null,
+        academicYear: admission.academicYear || null,
+        centerId: admission.centerId || null,
+        centerName: admission.centerName,
+        programId: admission.programId || null,
+        programName: admission.programName,
+        programCode: admission.programCode || null,
+        studentName: admission.student?.name || '',
+        studentPhone: admission.student?.phone || null,
+        registrationNumber: admission.registrationNumber || null,
+        paymentType: 'CHEQUE',
+        amount: amt,
+        remarks: safeTrim(c.remarks) || null,
+        status: 'PENDING',
+        cheque: {
+          sno: c.sno ?? null,
+          chequeNo,
+          chequeDate,
+          dueDate: chequeDate,
+          favourOf,
+          mode: 'CDC',
+          bankName: safeTrim(c.bankName) || null,
+          branchName: safeTrim(c.branchName) || null,
+          plannedDepositDate: chequeDate,
+          instalmentLabel: 'Immediate Payment (NEFT Block)',
+          instalmentDate: 0
+        },
+        audit: [{ action: 'CREATE', by: userId || null, remarks: 'Created from admission payments (NEFT block - CDC)' }]
       });
     }
     for (const o of otherPayments) {
