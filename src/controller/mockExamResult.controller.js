@@ -2317,8 +2317,8 @@ const getParticipantReport = async (req, res, next) => {
     const results = await MockExamResult.find({ tenantId, examId, isdeleted: false }, { admissionNo: 1, studentId: 1, obtainedMarks: 1, totalMarks: 1, rank: 1, sectionResults: 1 }).lean();
     if (!results.length) return res.status(200).json({ status: true, data: [], sections: [], examName: exam.examName });
     const admissionNos = results.map((r) => r.admissionNo).filter(Boolean);
-    const profiles = await StudentProfile.find({ tenantId, admissionNo: { $in: admissionNos }, isdeleted: false }, { admissionNo: 1, 'student.name': 1 }).lean();
-    const profileMap = new Map(profiles.map((p) => [p.admissionNo, p.student?.name || '']));
+    const profiles = await StudentProfile.find({ tenantId, admissionNo: { $in: admissionNos }, isdeleted: false }, { admissionNo: 1, 'student.name': 1, classNo: 1 }).lean();
+    const profileMap = new Map(profiles.map((p) => [p.admissionNo, { name: p.student?.name || '', classNo: p.classNo ?? null }]));
     const sectionMap = new Map((exam.sections || []).map((s) => [safeTrim(s.sectionId), safeTrim(s.sectionName)]));
     const data = results.map((r) => {
       const pct = r.totalMarks > 0 ? round2((r.obtainedMarks / r.totalMarks) * 100) : 0;
@@ -2334,9 +2334,11 @@ const getParticipantReport = async (req, res, next) => {
           skippedCount: sec.skippedCount || 0
         };
       }
+      const profile = profileMap.get(r.admissionNo);
       return {
         admissionNo: r.admissionNo,
-        studentName: profileMap.get(r.admissionNo) || '—',
+        studentName: profile?.name || '—',
+        classNo: profile?.classNo ?? null,
         obtainedMarks: r.obtainedMarks || 0,
         totalMarks: r.totalMarks || 0,
         percentage: pct,
