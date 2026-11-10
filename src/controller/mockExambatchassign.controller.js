@@ -4,6 +4,7 @@ import MockExamBatchAssign from '../models/mockExambatchmapping.model.js';
 import StudentProfile from '../models/studentProfile.model.js';
 import MockExam from '../models/mockExam.model.js';
 import MockExamResult from '../models/mockExamResult.model.js';
+import Batch from '../models/batch.model.js';
 import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
 import { resolveBatchId, resolveBatchIds } from '../helpers/batch.helper.js';
 
@@ -123,12 +124,36 @@ export const listBatchesByExam = async (req, res, next) => {
     })
       .sort({ enabledAt: -1 })
       .lean();
+    // MockExamBatchAssign.batchId has been observed holding a batchCode instead of the real batchId
+    // on some older records (see helpers/batch.helper.js) — match on either field defensively.
+    const batchIds = [...new Set(rows.map((r) => r.batchId).filter(Boolean))];
+    const batches = batchIds.length ? await Batch.find({ tenantId, $or: [{ batchId: { $in: batchIds } }, { batchCode: { $in: batchIds } }] }, { batchId: 1, batchName: 1, batchCode: 1 }).lean() : [];
+    const batchMap = new Map();
+    for (const b of batches) {
+      batchMap.set(b.batchId, b);
+      batchMap.set(b.batchCode, b);
+    }
     const data = rows.map((r) => {
       const total = (r.students || []).length;
       const completed = (r.students || []).filter((s) => s.status === 'completed').length;
       const started = (r.students || []).filter((s) => s.status === 'started').length;
       const assigned = (r.students || []).filter((s) => s.status === 'assigned').length;
-      return { batchId: r.batchId, centerId: r.centerId, classNo: r.classNo, status: r.status, enabledAt: r.enabledAt, enabledBy: r.enabledBy, disabledAt: r.disabledAt, studentCount: total, completedCount: completed, startedCount: started, assignedCount: assigned };
+      const batch = batchMap.get(r.batchId);
+      return {
+        batchId: r.batchId,
+        batchName: batch?.batchName || null,
+        batchCode: batch?.batchCode || null,
+        centerId: r.centerId,
+        classNo: r.classNo,
+        status: r.status,
+        enabledAt: r.enabledAt,
+        enabledBy: r.enabledBy,
+        disabledAt: r.disabledAt,
+        studentCount: total,
+        completedCount: completed,
+        startedCount: started,
+        assignedCount: assigned
+      };
     });
     return res.status(200).json({ status: true, message: 'Batch assignments loaded', data, count: data.length });
   } catch (err) {

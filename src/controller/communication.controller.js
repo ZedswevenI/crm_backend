@@ -8,6 +8,9 @@ import { processCommunicationCampaign } from '../services/communicationProcessor
 import CommunicationEventConfig from '../models/communicationeventconfig.model.js';
 import { uploadPublicEmailImageToS3 } from '../middlewares/s3.service.js';
 import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
+import MockExam from '../models/mockExam.model.js';
+import MockExamResult from '../models/mockExamResult.model.js';
+import StudentProfile from '../models/studentProfile.model.js';
 
 const pickTenantId = (req) => String(req.body?.entiId || req.body?.tenantId || '').trim();
 const safeTrim = (v) => (v === null || v === undefined ? '' : String(v).trim());
@@ -17,6 +20,32 @@ const extractVariables = (subject = '', body = '') => {
   const text = `${subject || ''} ${body || ''}`;
   const matches = text.match(/{{\s*[\w.]+\s*}}/g) || [];
   return Array.from(new Set(matches.map((x) => x.replace('{{', '').replace('}}', '').trim()).filter(Boolean)));
+};
+
+const isValidEmailAddress = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
+
+// Section names on MockExam already double as subject names (confirmed live: "PHYSICS"/"CHEMISTRY"/
+// "MATHS"), so no separate Subject lookup is needed for the per-subject marks table.
+const buildExamResultEmailData = (result, exam) => {
+  const sectionNameMap = new Map((exam.sections || []).map((s) => [safeTrim(s.sectionId), safeTrim(s.sectionName)]));
+  const rowsHtml = (result.sectionResults || [])
+    .map((sec) => {
+      const name = sectionNameMap.get(safeTrim(sec.sectionId)) || safeTrim(sec.sectionId);
+      return `<tr><td style="padding:6px 12px;border:1px solid #ccc;">${name}</td><td style="padding:6px 12px;border:1px solid #ccc;text-align:center;">${sec.obtainedMarks ?? 0}</td><td style="padding:6px 12px;border:1px solid #ccc;text-align:center;">${sec.totalMarks ?? 0}</td></tr>`;
+    })
+    .join('');
+  const marksTable = `<table style="border-collapse:collapse;margin:12px 0;"><thead><tr><th style="padding:6px 12px;border:1px solid #ccc;">Subject</th><th style="padding:6px 12px;border:1px solid #ccc;">Obtained</th><th style="padding:6px 12px;border:1px solid #ccc;">Total</th></tr></thead><tbody>${rowsHtml}</tbody></table>`;
+  const totalMarks = result.totalMarks || exam.totalMarks || 0;
+  const obtainedMarks = result.obtainedMarks || 0;
+  const percentage = totalMarks > 0 ? Math.round((obtainedMarks / totalMarks) * 10000) / 100 : 0;
+  return {
+    examName: exam.examName || '',
+    examCode: exam.examCode || '',
+    totalMarks: String(totalMarks),
+    obtainedMarks: String(obtainedMarks),
+    percentage: String(percentage),
+    marksTable
+  };
 };
 
 const createTemplate = async (req, res, next) => {
@@ -739,6 +768,190 @@ const uploadEmailAsset = async (req, res, next) => {
   }
 };
 
+// Emails a student's (or, with no admissionNo, every participant's) exam result to the address on
+// file — exam name, subject-wise marks and total marks. Reuses the campaign/log/send pipeline the
+// batch-communication feature already has; only the recipient resolution and per-student data are
+// exam-specific. Requires the exam's results to be officially published first.
+const sendExamResultEmail = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = pickUserId(req);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId (entiId) is required' });
+    const examId = safeTrim(req.body?.examId);
+    if (!examId) return res.status(400).json({ status: false, message: 'examId is required' });
+    const admissionNo = safeTrim(req.body?.admissionNo) || null;
+
+    const templateId = safeTrim(req.body?.templateId);
+    const rawSubject = safeTrim(req.body?.subject);
+    const rawBody = req.body?.body || '';
+    if (templateId && (rawSubject || safeTrim(rawBody))) {
+      return res.status(400).json({ status: false, message: 'Provide either templateId or subject/body, not both' });
+    }
+    if (!templateId && (!rawSubject || !safeTrim(rawBody))) {
+      return res.status(400).json({ status: false, message: 'templateId, or both subject and body, is required' });
+    }
+
+    const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }, { examName: 1, examCode: 1, totalMarks: 1, sections: 1, status: 1 }).lean();
+    if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
+    if (exam.status !== 'result_published') {
+      return res.status(400).json({ status: false, message: 'Results for this exam are not published yet' });
+    }
+
+    let subjectTemplate;
+    let bodyTemplate;
+    let category;
+    let resolvedTemplateId;
+    let templateName;
+    if (templateId) {
+      const template = await CommunicationTemplate.findOne({ tenantId, templateId, channel: 'email', status: 'ACTIVE', isdeleted: false }).lean();
+      if (!template) return res.status(404).json({ status: false, message: 'Active email template not found' });
+      subjectTemplate = template.subject || '';
+      bodyTemplate = template.body || '';
+      category = template.category;
+      resolvedTemplateId = template.templateId;
+      templateName = template.name;
+    } else {
+      subjectTemplate = rawSubject;
+      bodyTemplate = rawBody;
+      category = 'EXAM_RESULT';
+      resolvedTemplateId = `EXAM_RESULT_${Date.now()}`;
+      templateName = `Exam Result Mail ${Date.now()}`;
+    }
+
+    const resultQuery = { tenantId, examId, isdeleted: false };
+    if (admissionNo) resultQuery.admissionNo = admissionNo;
+    const results = await MockExamResult.find(resultQuery, { admissionNo: 1, studentId: 1, obtainedMarks: 1, totalMarks: 1, sectionResults: 1 }).lean();
+    if (!results.length) {
+      return res.status(404).json({ status: false, message: admissionNo ? 'Result not found for this student' : 'No participants found for this exam' });
+    }
+
+    const admissionNos = results.map((r) => r.admissionNo).filter(Boolean);
+    const profiles = await StudentProfile.find(
+      { tenantId, admissionNo: { $in: admissionNos }, isdeleted: false },
+      {
+        admissionNo: 1,
+        studentId: 1,
+        'student.name': 1,
+        'student.email': 1,
+        'student.parentName': 1,
+        classNo: 1,
+        batchId: 1,
+        batchCode: 1,
+        centerId: 1,
+        centerCode: 1,
+        centerName: 1,
+        programId: 1,
+        programCode: 1,
+        programName: 1,
+        academicYear: 1
+      }
+    ).lean();
+    const profileMap = new Map(profiles.map((p) => [safeTrim(p.admissionNo), p]));
+
+    const title = safeTrim(req.body?.title) || `${exam.examName} - Result Mail`;
+    const sendType = safeTrim(req.body?.sendType).toUpperCase() === 'SCHEDULED' ? 'SCHEDULED' : 'NOW';
+    const scheduledAt = Number(req.body?.scheduledAt || 0);
+    if (sendType === 'SCHEDULED' && (!scheduledAt || scheduledAt <= Date.now())) {
+      return res.status(400).json({ status: false, message: 'Valid future scheduledAt is required' });
+    }
+
+    const campaign = await CommunicationCampaign.create({
+      tenantId,
+      title,
+      templateId: resolvedTemplateId,
+      templateName,
+      category,
+      channel: 'email',
+      subject: subjectTemplate || null,
+      body: bodyTemplate || null,
+      recipientFilters: { examId, admissionNo: admissionNo || null },
+      sendType,
+      scheduledAt: sendType === 'SCHEDULED' ? scheduledAt : null,
+      status: sendType === 'SCHEDULED' ? 'SCHEDULED' : 'QUEUED',
+      isdeleted: false,
+      createdBy: userId || null,
+      updatedBy: userId || null
+    });
+
+    let validEmailCount = 0;
+    let missingEmailCount = 0;
+    const logDocs = results.map((r) => {
+      const profile = profileMap.get(safeTrim(r.admissionNo)) || {};
+      const email = safeTrim(profile?.student?.email).toLowerCase();
+      const hasValidEmail = isValidEmailAddress(email);
+      if (hasValidEmail) validEmailCount++;
+      else missingEmailCount++;
+      const studentData = buildTemplateDataFromStudent({
+        studentName: profile?.student?.name,
+        parentName: profile?.student?.parentName,
+        admissionNo: r.admissionNo,
+        recipientEmail: email,
+        classNo: profile?.classNo,
+        batchCode: profile?.batchCode,
+        centerName: profile?.centerName,
+        programName: profile?.programName,
+        academicYear: profile?.academicYear
+      });
+      const data = { ...studentData, ...buildExamResultEmailData(r, exam) };
+      const subject = renderTemplate(subjectTemplate || '', data);
+      const body = renderTemplate(bodyTemplate || '', data);
+      return {
+        tenantId,
+        campaignId: campaign.campaignId,
+        templateId: resolvedTemplateId,
+        templateName,
+        channel: 'email',
+        studentId: profile?.studentId || null,
+        admissionNo: r.admissionNo || null,
+        studentName: profile?.student?.name || null,
+        parentName: profile?.student?.parentName || null,
+        recipientEmail: email || null,
+        classNo: profile?.classNo ?? null,
+        batchId: profile?.batchId || null,
+        batchCode: profile?.batchCode || null,
+        centerId: profile?.centerId || null,
+        centerCode: profile?.centerCode || null,
+        programId: profile?.programId || null,
+        programName: profile?.programName || null,
+        subject,
+        body,
+        status: hasValidEmail ? 'QUEUED' : 'SKIPPED',
+        error: hasValidEmail ? null : 'Student email missing/invalid',
+        createdBy: userId || null,
+        updatedBy: userId || null
+      };
+    });
+    if (logDocs.length) await CommunicationRecipientLog.insertMany(logDocs);
+
+    campaign.totalRecipients = results.length;
+    campaign.validEmailCount = validEmailCount;
+    campaign.missingEmailCount = missingEmailCount;
+    campaign.queuedCount = validEmailCount;
+    campaign.skippedCount = missingEmailCount;
+    await campaign.save();
+
+    if (sendType === 'NOW') {
+      setImmediate(() => {
+        processCommunicationCampaign({ tenantId, campaignId: campaign.campaignId }).catch((e) => console.error('[exam result mail send failed]', e));
+      });
+    }
+
+    return res.status(200).json({
+      status: true,
+      message: sendType === 'SCHEDULED' ? 'Exam result email scheduled' : 'Exam result email queued for sending',
+      data: {
+        campaignId: campaign.campaignId,
+        totalRecipients: results.length,
+        validEmailCount,
+        missingEmailCount,
+        status: campaign.status
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   createTemplate,
   updateTemplate,
@@ -757,5 +970,6 @@ export default {
   toggleEventConfig,
   deleteEventConfig,
   sendExcelBulkMail,
-  uploadEmailAsset
+  uploadEmailAsset,
+  sendExamResultEmail
 };

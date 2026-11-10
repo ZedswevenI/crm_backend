@@ -2098,6 +2098,84 @@ const getExamQuestionWiseReport = async (req, res, next) => {
   }
 };
 
+// One row per student, one column per question — shaped for a direct Excel export (frontend maps
+// `questions[]` to header columns and each row's `marks[]` to the matching column, in order).
+const getQuestionWiseMarksExport = async (req, res, next) => {
+  try {
+    const tenantId = pickTid(req);
+    const examId = safeTrim(req.body?.examId);
+    if (!tenantId || !examId) return res.status(400).json({ status: false, message: 'tenantId and examId are required' });
+
+    const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }, { examName: 1, examCode: 1, startTime: 1, totalMarks: 1 }).lean();
+    if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
+
+    const matchQ = { tenantId, examId, isdeleted: false };
+    if (safeTrim(req.body?.batchId)) matchQ.batchId = await resolveBatchId(tenantId, req.body.batchId);
+    if (safeTrim(req.body?.centerId)) matchQ.centerId = safeTrim(req.body.centerId);
+
+    const [questions, results] = await Promise.all([
+      MockExamQns.find({ tenantId, examId, isdeleted: false }, { questionId: 1, sectionId: 1, sortOrder: 1 })
+        .sort({ sectionId: 1, sortOrder: 1 })
+        .lean(),
+      MockExamResult.find(matchQ, { admissionNo: 1, studentId: 1, classNo: 1, batchId: 1, answers: 1 }).lean()
+    ]);
+
+    const questionCols = questions.map((q, idx) => ({ qNo: idx + 1, questionId: safeTrim(q.questionId), label: `Q${idx + 1} Marks` }));
+    const qIndexById = new Map(questionCols.map((q, idx) => [q.questionId, idx]));
+
+    const withNames = await populateStudentNames(tenantId, results);
+
+    const admissionNos = results.map((r) => r.admissionNo).filter(Boolean);
+    const profiles = await StudentProfile.find({ tenantId, admissionNo: { $in: admissionNos }, isdeleted: false }, { admissionNo: 1, classNo: 1, batchId: 1 }).lean();
+    const profileMap = new Map(profiles.map((p) => [safeTrim(p.admissionNo), p]));
+
+    // batchId on MockExamResult/StudentProfile has been observed holding a batchCode on some
+    // records rather than the real batchId — match on either field defensively (see batch.helper.js).
+    const batchKeys = [...new Set(withNames.map((r) => r.batchId || profileMap.get(safeTrim(r.admissionNo))?.batchId).filter(Boolean))];
+    const batches = batchKeys.length ? await Batch.find({ tenantId, $or: [{ batchId: { $in: batchKeys } }, { batchCode: { $in: batchKeys } }] }, { batchId: 1, batchName: 1, batchCode: 1 }).lean() : [];
+    const batchMap = new Map();
+    for (const b of batches) {
+      batchMap.set(b.batchId, b);
+      batchMap.set(b.batchCode, b);
+    }
+
+    const data = withNames.map((r, idx) => {
+      const profile = profileMap.get(safeTrim(r.admissionNo));
+      const batchKey = r.batchId || profile?.batchId || null;
+      const batch = batchKey ? batchMap.get(batchKey) : null;
+      const marks = new Array(questionCols.length).fill(0);
+      for (const a of r.answers || []) {
+        const i = qIndexById.get(safeTrim(a.questionId));
+        if (i !== undefined) marks[i] = toNum(a.marksAwarded);
+      }
+      return {
+        sNo: idx + 1,
+        classNo: r.classNo ?? profile?.classNo ?? null,
+        batchCode: batch?.batchCode || null,
+        batchName: batch?.batchName || null,
+        admissionNo: r.admissionNo,
+        studentName: r.studentName,
+        marks
+      };
+    });
+    data.sort((a, b) => safeTrim(a.studentName).localeCompare(safeTrim(b.studentName)));
+    data.forEach((row, idx) => {
+      row.sNo = idx + 1;
+    });
+
+    return res.status(200).json({
+      status: true,
+      message: 'Question-wise marks export loaded',
+      exam: { examId, examName: exam.examName, examCode: exam.examCode, startTime: exam.startTime, totalMarks: exam.totalMarks },
+      questions: questionCols,
+      data,
+      count: data.length
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 const getExamParticipantsReport = async (req, res, next) => {
   try {
     const tenantId = pickTid(req);
@@ -2314,11 +2392,37 @@ const getParticipantReport = async (req, res, next) => {
     if (!tenantId || !examId) return res.status(400).json({ status: false, message: 'tenantId and examId are required' });
     const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }, { sections: 1, examName: 1, totalMarks: 1 }).lean();
     if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
-    const results = await MockExamResult.find({ tenantId, examId, isdeleted: false }, { admissionNo: 1, studentId: 1, obtainedMarks: 1, totalMarks: 1, rank: 1, sectionResults: 1 }).lean();
-    if (!results.length) return res.status(200).json({ status: true, data: [], sections: [], examName: exam.examName });
-    const admissionNos = results.map((r) => r.admissionNo).filter(Boolean);
-    const profiles = await StudentProfile.find({ tenantId, admissionNo: { $in: admissionNos }, isdeleted: false }, { admissionNo: 1, 'student.name': 1, classNo: 1 }).lean();
-    const profileMap = new Map(profiles.map((p) => [p.admissionNo, { name: p.student?.name || '', classNo: p.classNo ?? null }]));
+    const results = await MockExamResult.find({ tenantId, examId, isdeleted: false }, { admissionNo: 1, studentId: 1, batchId: 1, obtainedMarks: 1, totalMarks: 1, rank: 1, sectionResults: 1, completedAt: 1, status: 1 }).lean();
+
+    // Nothing ever flips an assignment's status to 'absent' — a student is absent if they were
+    // assigned to this exam (via MockExamBatchAssign) but never completed a result (see
+    // getExamAbsenteesReport, which uses the same inference).
+    const assignments = await MockExamBatchAssign.find({ tenantId, examId, isdeleted: false, status: 'enabled' }, { batchId: 1, students: 1 }).lean();
+    const completedAdmissionNos = new Set(results.filter((r) => r.completedAt || ['completed', 'evaluated', 'result_published'].includes(r.status)).map((r) => safeTrim(r.admissionNo)));
+    const absenteeRows = [];
+    for (const a of assignments) {
+      for (const s of a.students || []) {
+        const admNo = safeTrim(s.admissionNo);
+        if (admNo && !completedAdmissionNos.has(admNo)) absenteeRows.push({ admissionNo: admNo, batchId: a.batchId });
+      }
+    }
+
+    const admissionNos = [...new Set([...results.map((r) => r.admissionNo), ...absenteeRows.map((a) => a.admissionNo)].filter(Boolean))];
+    const profiles = admissionNos.length ? await StudentProfile.find({ tenantId, admissionNo: { $in: admissionNos }, isdeleted: false }, { admissionNo: 1, 'student.name': 1, classNo: 1, batchId: 1 }).lean() : [];
+    const profileMap = new Map(profiles.map((p) => [p.admissionNo, { name: p.student?.name || '', classNo: p.classNo ?? null, batchId: p.batchId ?? null }]));
+
+    // batchId has been observed holding a batchCode instead of the real batchId on some records
+    // (see helpers/batch.helper.js) — resolve defensively by matching either field.
+    const batchKeys = [
+      ...new Set([...results.map((r) => r.batchId || profileMap.get(r.admissionNo)?.batchId), ...absenteeRows.map((a) => a.batchId || profileMap.get(a.admissionNo)?.batchId)].filter(Boolean))
+    ];
+    const batches = batchKeys.length ? await Batch.find({ tenantId, $or: [{ batchId: { $in: batchKeys } }, { batchCode: { $in: batchKeys } }] }, { batchId: 1, batchCode: 1, batchName: 1 }).lean() : [];
+    const batchMap = new Map();
+    for (const b of batches) {
+      batchMap.set(b.batchId, b);
+      batchMap.set(b.batchCode, b);
+    }
+
     const sectionMap = new Map((exam.sections || []).map((s) => [safeTrim(s.sectionId), safeTrim(s.sectionName)]));
     const data = results.map((r) => {
       const pct = r.totalMarks > 0 ? round2((r.obtainedMarks / r.totalMarks) * 100) : 0;
@@ -2335,10 +2439,14 @@ const getParticipantReport = async (req, res, next) => {
         };
       }
       const profile = profileMap.get(r.admissionNo);
+      const batchKey = r.batchId || profile?.batchId || null;
+      const batch = batchKey ? batchMap.get(batchKey) : null;
       return {
         admissionNo: r.admissionNo,
         studentName: profile?.name || '—',
         classNo: profile?.classNo ?? null,
+        batchCode: batch?.batchCode || null,
+        batchName: batch?.batchName || null,
         obtainedMarks: r.obtainedMarks || 0,
         totalMarks: r.totalMarks || 0,
         percentage: pct,
@@ -2347,6 +2455,20 @@ const getParticipantReport = async (req, res, next) => {
       };
     });
     data.sort((a, b) => (a.rank || 999) - (b.rank || 999));
+
+    const absentees = absenteeRows.map((a) => {
+      const profile = profileMap.get(a.admissionNo);
+      const batchKey = a.batchId || profile?.batchId || null;
+      const batch = batchKey ? batchMap.get(batchKey) : null;
+      return {
+        admissionNo: a.admissionNo,
+        studentName: profile?.name || '—',
+        classNo: profile?.classNo ?? null,
+        batchCode: batch?.batchCode || null,
+        batchName: batch?.batchName || null
+      };
+    });
+
     const sections = Array.from(sectionMap.values());
     return res.status(200).json({
       status: true,
@@ -2354,7 +2476,9 @@ const getParticipantReport = async (req, res, next) => {
       totalMarks: exam.totalMarks,
       sections,
       data,
-      count: data.length
+      count: data.length,
+      absentees,
+      absentCount: absentees.length
     });
   } catch (err) {
     return next(err);
@@ -2382,6 +2506,7 @@ export default {
   getBatchPerformanceReport,
   compareWithTopper,
   getExamQuestionWiseReport,
+  getQuestionWiseMarksExport,
   getExamParticipantsReport,
   getStudentResultAdmin,
   getBatchSubjectStats,

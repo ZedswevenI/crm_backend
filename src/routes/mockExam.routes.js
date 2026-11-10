@@ -82,6 +82,7 @@ routes.post('/result/absentees-report', validatetoken, requirePermission('exam:v
 routes.post('/result/batch-performance', mockExamResultController.getBatchPerformanceReport);
 routes.post('/result/compare-topper', mockExamResultController.compareWithTopper);
 routes.post('/result/analytics/question-wise', validatetoken, requirePermission('exam:view'), mockExamResultController.getExamQuestionWiseReport);
+routes.post('/result/question-wise-marks-export', validatetoken, requirePermission('exam:view'), mockExamResultController.getQuestionWiseMarksExport);
 routes.post('/result/analytics/participants', validatetoken, requirePermission('exam:view'), mockExamResultController.getExamParticipantsReport);
 routes.post('/result/bulk-upload-historical', validatetoken, requirePermission('exam:marksImport'), mockExamController.bulkUploadHistorical);
 routes.post('/result/my-result/analysis', mockExamResultController.getStudentResultAdmin);
