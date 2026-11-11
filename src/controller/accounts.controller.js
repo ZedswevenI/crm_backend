@@ -418,7 +418,7 @@ const createDepositBatch = async (req, res, next) => {
     }
     if (!paymentIds.length) return res.status(400).json({ status: false, message: 'paymentIds is required' });
     session.startTransaction();
-    const cheques = await Payment.find({ tenantId, paymentId: { $in: paymentIds }, isdeleted: false, paymentType: 'CHEQUE' }, { _id: 1, paymentId: 1, amount: 1, status: 1 })
+    const cheques = await Payment.find({ tenantId, paymentId: { $in: paymentIds }, isdeleted: false, paymentType: 'CHEQUE' }, { _id: 1, paymentId: 1, amount: 1, status: 1, admissionNo: 1, 'cheque.chequeNo': 1 })
       .session(session)
       .lean();
     if (cheques.length !== paymentIds.length) {
@@ -461,6 +461,25 @@ const createDepositBatch = async (req, res, next) => {
       { session }
     );
     await session.commitTransaction();
+    for (const c of cheques) {
+      if (!c.admissionNo) continue;
+      triggerCommunicationEventSafe({
+        tenantId,
+        eventCode: 'CHEQUE_DEPOSITED',
+        admissionNo: c.admissionNo,
+        sourceModule: 'FEE',
+        sourceRefId: c.paymentId,
+        userId,
+        extraData: {
+          paymentId: c.paymentId,
+          chequeNo: c?.cheque?.chequeNo || '',
+          bankName: bankName || '',
+          depositDate: depositDate || '',
+          amount: c.amount,
+          depositBatchId: batchDoc.depositBatchId
+        }
+      });
+    }
     return res.status(200).json({
       status: true,
       message: 'Deposit batch created',

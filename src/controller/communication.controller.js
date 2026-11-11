@@ -13,6 +13,7 @@ import MockExamResult from '../models/mockExamResult.model.js';
 import MockExamBatchAssign from '../models/mockExambatchmapping.model.js';
 import StudentProfile from '../models/studentProfile.model.js';
 import Batch from '../models/batch.model.js';
+import { sendEmail } from '../services/mail.service.js';
 
 const pickTenantId = (req) => String(req.body?.entiId || req.body?.tenantId || '').trim();
 const safeTrim = (v) => (v === null || v === undefined ? '' : String(v).trim());
@@ -67,6 +68,24 @@ const EXAM_ABSENT_SUBJECT = '{{examName}} - Absence Notice';
 const EXAM_ABSENT_BODY = `<p>Dear {{parentName}},</p>
 <p>We wish to inform you that <b>{{studentName}}</b> (Class {{classNo}}, Batch {{batchName}}) was marked absent for <b>{{examName}}</b>.</p>
 <p>Please reach out to the center if you believe this is incorrect.</p>`;
+
+const escapeHtml = (v) =>
+  String(v ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+
+const ADMISSION_ACK_SUBJECT = 'Admission Acknowledgement - {{studentName}}';
+const ADMISSION_ACK_BODY = `<p>Dear Parent,</p>
+<p>Warm greetings from Z7i !</p>
+<p>We are pleased to formally acknowledge and confirm the admission of <b>{{studentName}}</b> to Z7i for the <b>{{programName}}</b> Program.</p>
+<p>We are delighted to welcome <b>{{studentName}}</b> to the Z7i learning community and look forward to a rewarding educational partnership.</p>
+<p>At Z7i, we remain committed to fostering academic excellence, nurturing individual potential, and providing an enriching and impactful learning experience.</p>
+<p>Should you require any further information or assistance, please do not hesitate to contact us at 9626292233 / 9159391122.</p>
+<p>We look forward to a meaningful and rewarding association with your family.</p>
+<p>We sincerely appreciate your decision to entrust Z7i with your ward's educational journey.</p>
+<p>Warm regards,<br/>Admissions Team<br/>Z7i</p>`;
 
 const createTemplate = async (req, res, next) => {
   try {
@@ -1002,6 +1021,47 @@ const sendExamResultEmail = async (req, res, next) => {
   }
 };
 
+// Standalone admission-acknowledgement email — fixed content, no campaign/log tracking, no DB
+// lookups at all. Frontend supplies everything (studentName, programName, recipient email(s));
+// this just fills the fixed template and sends, one send per recipient.
+const sendAdmissionAcknowledgement = async (req, res, next) => {
+  try {
+    const rawEmails = Array.isArray(req.body?.emails) ? req.body.emails : safeTrim(req.body?.email) ? [req.body.email] : [];
+    const emails = [...new Set(rawEmails.map((e) => safeTrim(e).toLowerCase()).filter(Boolean))];
+    const validEmails = emails.filter(isValidEmailAddress);
+    if (!validEmails.length) return res.status(400).json({ status: false, message: 'At least one valid email (emails[] or email) is required' });
+
+    const studentName = safeTrim(req.body?.studentName);
+    const programName = safeTrim(req.body?.programName);
+    if (!studentName) return res.status(400).json({ status: false, message: 'studentName is required' });
+    if (!programName) return res.status(400).json({ status: false, message: 'programName is required' });
+
+    const data = { studentName: escapeHtml(studentName), programName: escapeHtml(programName) };
+    const subject = renderTemplate(ADMISSION_ACK_SUBJECT, data);
+    const body = renderTemplate(ADMISSION_ACK_BODY, data);
+
+    const results = [];
+    for (const to of validEmails) {
+      try {
+        const resp = await sendEmail({ to, subject, html: body, text: '' });
+        results.push({ email: to, status: 'SENT', provider: resp?.provider || null });
+      } catch (err) {
+        results.push({ email: to, status: 'FAILED', error: err?.message || 'Mail send failed' });
+      }
+    }
+    const sentCount = results.filter((r) => r.status === 'SENT').length;
+    const failedCount = results.length - sentCount;
+
+    return res.status(200).json({
+      status: true,
+      message: 'Admission acknowledgement email processed',
+      data: { sentCount, failedCount, results }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   createTemplate,
   updateTemplate,
@@ -1021,5 +1081,6 @@ export default {
   deleteEventConfig,
   sendExcelBulkMail,
   uploadEmailAsset,
-  sendExamResultEmail
+  sendExamResultEmail,
+  sendAdmissionAcknowledgement
 };
