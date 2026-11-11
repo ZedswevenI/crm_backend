@@ -10,7 +10,9 @@ import { uploadPublicEmailImageToS3 } from '../middlewares/s3.service.js';
 import { triggerCommunicationEventSafe } from '../services/communicationEvent.service.js';
 import MockExam from '../models/mockExam.model.js';
 import MockExamResult from '../models/mockExamResult.model.js';
+import MockExamBatchAssign from '../models/mockExambatchmapping.model.js';
 import StudentProfile from '../models/studentProfile.model.js';
+import Batch from '../models/batch.model.js';
 
 const pickTenantId = (req) => String(req.body?.entiId || req.body?.tenantId || '').trim();
 const safeTrim = (v) => (v === null || v === undefined ? '' : String(v).trim());
@@ -47,6 +49,24 @@ const buildExamResultEmailData = (result, exam) => {
     marksTable
   };
 };
+
+// Fixed content — no user-authored template allowed for exam-result mail by design.
+const EXAM_RESULT_SUBJECT = '{{examName}} - Exam Result';
+const EXAM_RESULT_BODY = `<p>Dear {{parentName}},</p>
+<p>Please find below the exam result for <b>{{studentName}}</b>.</p>
+<table style="border-collapse:collapse;margin:12px 0;">
+<tr><td style="padding:6px 12px;border:1px solid #ccc;"><b>Student Name</b></td><td style="padding:6px 12px;border:1px solid #ccc;">{{studentName}}</td></tr>
+<tr><td style="padding:6px 12px;border:1px solid #ccc;"><b>Class</b></td><td style="padding:6px 12px;border:1px solid #ccc;">{{classNo}}</td></tr>
+<tr><td style="padding:6px 12px;border:1px solid #ccc;"><b>Batch</b></td><td style="padding:6px 12px;border:1px solid #ccc;">{{batchName}}</td></tr>
+</table>
+<p>Exam: <b>{{examName}}</b></p>
+{{marksTable}}
+<p>Total Marks: <b>{{obtainedMarks}} / {{totalMarks}}</b> ({{percentage}}%)</p>`;
+
+const EXAM_ABSENT_SUBJECT = '{{examName}} - Absence Notice';
+const EXAM_ABSENT_BODY = `<p>Dear {{parentName}},</p>
+<p>We wish to inform you that <b>{{studentName}}</b> (Class {{classNo}}, Batch {{batchName}}) was marked absent for <b>{{examName}}</b>.</p>
+<p>Please reach out to the center if you believe this is incorrect.</p>`;
 
 const createTemplate = async (req, res, next) => {
   try {
@@ -768,10 +788,13 @@ const uploadEmailAsset = async (req, res, next) => {
   }
 };
 
-// Emails a student's (or, with no admissionNo, every participant's) exam result to the address on
-// file — exam name, subject-wise marks and total marks. Reuses the campaign/log/send pipeline the
-// batch-communication feature already has; only the recipient resolution and per-student data are
-// exam-specific. Requires the exam's results to be officially published first.
+// Emails exam results to parents — fixed content only (no user-authored template, by design).
+// Targeting is inferred from which params are sent:
+//   admissionNo given           -> that one student
+//   batchId given (no admNo)    -> every student assigned to this exam in that batch
+//   neither given               -> every student assigned to this exam, across all batches
+// notifyAbsentees controls whether assigned-but-absent students get a separate "absence notice"
+// email instead of being silently skipped. Requires the exam's results to be officially published.
 const sendExamResultEmail = async (req, res, next) => {
   try {
     const tenantId = pickTenantId(req);
@@ -780,16 +803,8 @@ const sendExamResultEmail = async (req, res, next) => {
     const examId = safeTrim(req.body?.examId);
     if (!examId) return res.status(400).json({ status: false, message: 'examId is required' });
     const admissionNo = safeTrim(req.body?.admissionNo) || null;
-
-    const templateId = safeTrim(req.body?.templateId);
-    const rawSubject = safeTrim(req.body?.subject);
-    const rawBody = req.body?.body || '';
-    if (templateId && (rawSubject || safeTrim(rawBody))) {
-      return res.status(400).json({ status: false, message: 'Provide either templateId or subject/body, not both' });
-    }
-    if (!templateId && (!rawSubject || !safeTrim(rawBody))) {
-      return res.status(400).json({ status: false, message: 'templateId, or both subject and body, is required' });
-    }
+    const batchIdInput = safeTrim(req.body?.batchId) || null;
+    const notifyAbsentees = req.body?.notifyAbsentees === true;
 
     const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }, { examName: 1, examCode: 1, totalMarks: 1, sections: 1, status: 1 }).lean();
     if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
@@ -797,56 +812,62 @@ const sendExamResultEmail = async (req, res, next) => {
       return res.status(400).json({ status: false, message: 'Results for this exam are not published yet' });
     }
 
-    let subjectTemplate;
-    let bodyTemplate;
-    let category;
-    let resolvedTemplateId;
-    let templateName;
-    if (templateId) {
-      const template = await CommunicationTemplate.findOne({ tenantId, templateId, channel: 'email', status: 'ACTIVE', isdeleted: false }).lean();
-      if (!template) return res.status(404).json({ status: false, message: 'Active email template not found' });
-      subjectTemplate = template.subject || '';
-      bodyTemplate = template.body || '';
-      category = template.category;
-      resolvedTemplateId = template.templateId;
-      templateName = template.name;
+    // Resolve the roster to target.
+    let rosterAdmissionNos = [];
+    if (admissionNo) {
+      const profileExists = await StudentProfile.exists({ tenantId, admissionNo, isdeleted: false });
+      if (!profileExists) return res.status(404).json({ status: false, message: 'Student not found' });
+      rosterAdmissionNos = [admissionNo];
     } else {
-      subjectTemplate = rawSubject;
-      bodyTemplate = rawBody;
-      category = 'EXAM_RESULT';
-      resolvedTemplateId = `EXAM_RESULT_${Date.now()}`;
-      templateName = `Exam Result Mail ${Date.now()}`;
-    }
-
-    const resultQuery = { tenantId, examId, isdeleted: false };
-    if (admissionNo) resultQuery.admissionNo = admissionNo;
-    const results = await MockExamResult.find(resultQuery, { admissionNo: 1, studentId: 1, obtainedMarks: 1, totalMarks: 1, sectionResults: 1 }).lean();
-    if (!results.length) {
-      return res.status(404).json({ status: false, message: admissionNo ? 'Result not found for this student' : 'No participants found for this exam' });
-    }
-
-    const admissionNos = results.map((r) => r.admissionNo).filter(Boolean);
-    const profiles = await StudentProfile.find(
-      { tenantId, admissionNo: { $in: admissionNos }, isdeleted: false },
-      {
-        admissionNo: 1,
-        studentId: 1,
-        'student.name': 1,
-        'student.email': 1,
-        'student.parentName': 1,
-        classNo: 1,
-        batchId: 1,
-        batchCode: 1,
-        centerId: 1,
-        centerCode: 1,
-        centerName: 1,
-        programId: 1,
-        programCode: 1,
-        programName: 1,
-        academicYear: 1
+      const assignQuery = { tenantId, examId, isdeleted: false, status: 'enabled' };
+      if (batchIdInput) {
+        // MockExamBatchAssign.batchId has been observed holding a batchCode instead of the real
+        // batchId on some records — resolve the input to both forms before matching.
+        const batchDoc = await Batch.findOne({ tenantId, $or: [{ batchId: batchIdInput }, { batchCode: batchIdInput }] }, { batchId: 1, batchCode: 1 }).lean();
+        const candidates = [...new Set([batchIdInput, batchDoc?.batchId, batchDoc?.batchCode].filter(Boolean))];
+        assignQuery.batchId = { $in: candidates };
       }
-    ).lean();
+      const assignments = await MockExamBatchAssign.find(assignQuery, { batchId: 1, students: 1 }).lean();
+      if (batchIdInput && !assignments.length) {
+        return res.status(404).json({ status: false, message: 'No assignment found for this exam and batch' });
+      }
+      const seen = new Set();
+      for (const a of assignments) {
+        for (const s of a.students || []) {
+          const admNo = safeTrim(s.admissionNo);
+          if (admNo) seen.add(admNo);
+        }
+      }
+      rosterAdmissionNos = [...seen];
+      if (!rosterAdmissionNos.length) {
+        return res.status(200).json({ status: true, message: 'No students assigned', data: { totalTargeted: 0, queuedMarksCount: 0, queuedAbsentCount: 0, skippedNoResultCount: 0, skippedNoEmailCount: 0 } });
+      }
+    }
+
+    const [results, profiles] = await Promise.all([
+      MockExamResult.find({ tenantId, examId, admissionNo: { $in: rosterAdmissionNos }, isdeleted: false }, { admissionNo: 1, obtainedMarks: 1, totalMarks: 1, sectionResults: 1 }).lean(),
+      StudentProfile.find(
+        { tenantId, admissionNo: { $in: rosterAdmissionNos }, isdeleted: false },
+        { admissionNo: 1, studentId: 1, 'student.name': 1, 'student.email': 1, 'student.parentName': 1, classNo: 1, batchId: 1, centerId: 1, centerCode: 1, programId: 1, programName: 1 }
+      ).lean()
+    ]);
+    const resultMap = new Map(results.map((r) => [safeTrim(r.admissionNo), r]));
     const profileMap = new Map(profiles.map((p) => [safeTrim(p.admissionNo), p]));
+
+    const withResult = rosterAdmissionNos.filter((a) => resultMap.has(a));
+    const absentList = rosterAdmissionNos.filter((a) => !resultMap.has(a));
+
+    if (admissionNo && !withResult.length && !notifyAbsentees) {
+      return res.status(404).json({ status: false, message: 'Result not found for this student' });
+    }
+
+    const batchKeys = [...new Set(profiles.map((p) => p.batchId).filter(Boolean))];
+    const batches = batchKeys.length ? await Batch.find({ tenantId, $or: [{ batchId: { $in: batchKeys } }, { batchCode: { $in: batchKeys } }] }, { batchId: 1, batchCode: 1, batchName: 1 }).lean() : [];
+    const batchMap = new Map();
+    for (const b of batches) {
+      batchMap.set(b.batchId, b);
+      batchMap.set(b.batchCode, b);
+    }
 
     const title = safeTrim(req.body?.title) || `${exam.examName} - Result Mail`;
     const sendType = safeTrim(req.body?.sendType).toUpperCase() === 'SCHEDULED' ? 'SCHEDULED' : 'NOW';
@@ -855,16 +876,18 @@ const sendExamResultEmail = async (req, res, next) => {
       return res.status(400).json({ status: false, message: 'Valid future scheduledAt is required' });
     }
 
+    const resolvedTemplateId = `EXAM_RESULT_${Date.now()}`;
+    const templateName = `${exam.examName} Result Mail`;
     const campaign = await CommunicationCampaign.create({
       tenantId,
       title,
       templateId: resolvedTemplateId,
       templateName,
-      category,
+      category: 'EXAM_RESULT',
       channel: 'email',
-      subject: subjectTemplate || null,
-      body: bodyTemplate || null,
-      recipientFilters: { examId, admissionNo: admissionNo || null },
+      subject: EXAM_RESULT_SUBJECT,
+      body: EXAM_RESULT_BODY,
+      recipientFilters: { examId, admissionNo: admissionNo || null, batchId: batchIdInput || null, notifyAbsentees },
       sendType,
       scheduledAt: sendType === 'SCHEDULED' ? scheduledAt : null,
       status: sendType === 'SCHEDULED' ? 'SCHEDULED' : 'QUEUED',
@@ -873,64 +896,89 @@ const sendExamResultEmail = async (req, res, next) => {
       updatedBy: userId || null
     });
 
-    let validEmailCount = 0;
-    let missingEmailCount = 0;
-    const logDocs = results.map((r) => {
-      const profile = profileMap.get(safeTrim(r.admissionNo)) || {};
+    const buildLogBase = (admNo, profile, subject, body, hasValidEmail, email) => ({
+      tenantId,
+      campaignId: campaign.campaignId,
+      templateId: resolvedTemplateId,
+      templateName,
+      channel: 'email',
+      studentId: profile?.studentId || null,
+      admissionNo: admNo,
+      studentName: profile?.student?.name || null,
+      parentName: profile?.student?.parentName || null,
+      recipientEmail: email || null,
+      classNo: profile?.classNo ?? null,
+      batchId: profile?.batchId || null,
+      batchCode: batchMap.get(profile?.batchId)?.batchCode || null,
+      centerId: profile?.centerId || null,
+      centerCode: profile?.centerCode || null,
+      programId: profile?.programId || null,
+      programName: profile?.programName || null,
+      subject,
+      body,
+      status: hasValidEmail ? 'QUEUED' : 'SKIPPED',
+      error: hasValidEmail ? null : 'Student email missing/invalid',
+      createdBy: userId || null,
+      updatedBy: userId || null
+    });
+
+    let queuedMarksCount = 0;
+    let queuedAbsentCount = 0;
+    let skippedNoEmailCount = 0;
+    const logDocs = [];
+
+    for (const admNo of withResult) {
+      const profile = profileMap.get(admNo) || {};
+      const result = resultMap.get(admNo);
       const email = safeTrim(profile?.student?.email).toLowerCase();
       const hasValidEmail = isValidEmailAddress(email);
-      if (hasValidEmail) validEmailCount++;
-      else missingEmailCount++;
-      const studentData = buildTemplateDataFromStudent({
-        studentName: profile?.student?.name,
-        parentName: profile?.student?.parentName,
-        admissionNo: r.admissionNo,
-        recipientEmail: email,
-        classNo: profile?.classNo,
-        batchCode: profile?.batchCode,
-        centerName: profile?.centerName,
-        programName: profile?.programName,
-        academicYear: profile?.academicYear
-      });
-      const data = { ...studentData, ...buildExamResultEmailData(r, exam) };
-      const subject = renderTemplate(subjectTemplate || '', data);
-      const body = renderTemplate(bodyTemplate || '', data);
-      return {
-        tenantId,
-        campaignId: campaign.campaignId,
-        templateId: resolvedTemplateId,
-        templateName,
-        channel: 'email',
-        studentId: profile?.studentId || null,
-        admissionNo: r.admissionNo || null,
-        studentName: profile?.student?.name || null,
-        parentName: profile?.student?.parentName || null,
-        recipientEmail: email || null,
-        classNo: profile?.classNo ?? null,
-        batchId: profile?.batchId || null,
-        batchCode: profile?.batchCode || null,
-        centerId: profile?.centerId || null,
-        centerCode: profile?.centerCode || null,
-        programId: profile?.programId || null,
-        programName: profile?.programName || null,
-        subject,
-        body,
-        status: hasValidEmail ? 'QUEUED' : 'SKIPPED',
-        error: hasValidEmail ? null : 'Student email missing/invalid',
-        createdBy: userId || null,
-        updatedBy: userId || null
+      if (hasValidEmail) queuedMarksCount++;
+      else skippedNoEmailCount++;
+      const batch = profile.batchId ? batchMap.get(profile.batchId) : null;
+      const data = {
+        studentName: profile?.student?.name || '',
+        parentName: safeTrim(profile?.student?.parentName) || 'Parent',
+        classNo: profile?.classNo ?? '',
+        batchName: batch?.batchName || '',
+        ...buildExamResultEmailData(result, exam)
       };
-    });
+      const subject = renderTemplate(EXAM_RESULT_SUBJECT, data);
+      const body = renderTemplate(EXAM_RESULT_BODY, data);
+      logDocs.push(buildLogBase(admNo, profile, subject, body, hasValidEmail, email));
+    }
+
+    if (notifyAbsentees) {
+      for (const admNo of absentList) {
+        const profile = profileMap.get(admNo) || {};
+        const email = safeTrim(profile?.student?.email).toLowerCase();
+        const hasValidEmail = isValidEmailAddress(email);
+        if (hasValidEmail) queuedAbsentCount++;
+        else skippedNoEmailCount++;
+        const batch = profile.batchId ? batchMap.get(profile.batchId) : null;
+        const data = {
+          studentName: profile?.student?.name || '',
+          parentName: safeTrim(profile?.student?.parentName) || 'Parent',
+          classNo: profile?.classNo ?? '',
+          batchName: batch?.batchName || '',
+          examName: exam.examName || ''
+        };
+        const subject = renderTemplate(EXAM_ABSENT_SUBJECT, data);
+        const body = renderTemplate(EXAM_ABSENT_BODY, data);
+        logDocs.push(buildLogBase(admNo, profile, subject, body, hasValidEmail, email));
+      }
+    }
+    const skippedNoResultCount = notifyAbsentees ? 0 : absentList.length;
+
     if (logDocs.length) await CommunicationRecipientLog.insertMany(logDocs);
 
-    campaign.totalRecipients = results.length;
-    campaign.validEmailCount = validEmailCount;
-    campaign.missingEmailCount = missingEmailCount;
-    campaign.queuedCount = validEmailCount;
-    campaign.skippedCount = missingEmailCount;
+    campaign.totalRecipients = logDocs.length;
+    campaign.validEmailCount = queuedMarksCount + queuedAbsentCount;
+    campaign.missingEmailCount = skippedNoEmailCount;
+    campaign.queuedCount = queuedMarksCount + queuedAbsentCount;
+    campaign.skippedCount = skippedNoEmailCount;
     await campaign.save();
 
-    if (sendType === 'NOW') {
+    if (sendType === 'NOW' && logDocs.length) {
       setImmediate(() => {
         processCommunicationCampaign({ tenantId, campaignId: campaign.campaignId }).catch((e) => console.error('[exam result mail send failed]', e));
       });
@@ -941,9 +989,11 @@ const sendExamResultEmail = async (req, res, next) => {
       message: sendType === 'SCHEDULED' ? 'Exam result email scheduled' : 'Exam result email queued for sending',
       data: {
         campaignId: campaign.campaignId,
-        totalRecipients: results.length,
-        validEmailCount,
-        missingEmailCount,
+        totalTargeted: rosterAdmissionNos.length,
+        queuedMarksCount,
+        queuedAbsentCount,
+        skippedNoResultCount,
+        skippedNoEmailCount,
         status: campaign.status
       }
     });
