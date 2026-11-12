@@ -49,7 +49,7 @@ app.use('/api/crm', routerIndex);
 app.use(errorHandler);
 const PORT = process.env.PORT;
 connectDB();
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
   logger.info(`Server started , running on ${PORT}`);
   startCommunicationScheduler();
   startScholarshipSyncScheduler();

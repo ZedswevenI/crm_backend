@@ -860,6 +860,231 @@ const getAttendanceRangeReport = async (req, res, next) => {
   }
 };
 
+const getFirstBatchAttendanceReport = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const batchCode = safeTrim(req.body?.batchCode);
+    const reportType = safeTrim(req.body?.reportType || 'ALL').toUpperCase(); // 'PRESENT', 'ABSENT', or 'ALL'
+    let fromDate = toInt(req.body?.fromDate);
+    let toDate = toInt(req.body?.toDate);
+    const month = toInt(req.body?.month);
+    const year = toInt(req.body?.year);
+
+    if (!tenantId || !batchCode) {
+      return res.status(400).json({ status: false, message: 'tenantId and batchCode are required' });
+    }
+
+    if (month && year) {
+      fromDate = Date.UTC(year, month - 1, 1);
+      const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+      toDate = Date.UTC(year, month - 1, lastDay);
+    }
+
+    if (!fromDate || !toDate) {
+      return res.status(400).json({ status: false, message: 'Either month & year or fromDate & toDate are required' });
+    }
+    if (fromDate > toDate) {
+      return res.status(400).json({ status: false, message: 'fromDate must be before or equal to toDate' });
+    }
+
+    const batch = await Batch.findOne(
+      { tenantId, batchCode, isdeleted: false },
+      { batchId: 1, batchCode: 1, batchName: 1, section: 1, classNo: 1, academicYear: 1 }
+    ).lean();
+
+    if (!batch) {
+      return res.status(404).json({ status: false, message: 'Batch not found' });
+    }
+
+    // 1. Fetch all students whose FIRST batch is this batch
+    // If firstBatchCode / firstBatchId is set, match on it.
+    // Fallback: If not set yet on existing data, match if current batch is this batch.
+    const studentProfiles = await StudentProfile.find(
+      {
+        tenantId,
+        isdeleted: false,
+        $or: [
+          { firstBatchCode: batch.batchCode },
+          { firstBatchId: batch.batchId },
+          {
+            $and: [
+              { $or: [{ firstBatchCode: null }, { firstBatchCode: '' }] },
+              { $or: [{ firstBatchId: null }, { firstBatchId: '' }] },
+              { $or: [{ batchCode: batch.batchCode }, { batchId: batch.batchId }] }
+            ]
+          }
+        ]
+      },
+      {
+        studentId: 1,
+        admissionNo: 1,
+        'student.name': 1,
+        'student.gender': 1,
+        batchId: 1,
+        batchCode: 1,
+        firstBatchId: 1,
+        firstBatchCode: 1
+      }
+    )
+      .sort({ 'student.name': 1 })
+      .lean();
+
+    if (!studentProfiles.length) {
+      return res.status(200).json({
+        status: true,
+        data: {
+          batch,
+          fromDate,
+          toDate,
+          workingDays: 0,
+          dates: [],
+          holidays: [],
+          rows: [],
+          allRows: [],
+          totalEligibleStudents: 0,
+          filteredCount: 0,
+          reportType
+        }
+      });
+    }
+
+    const studentIds = new Set(studentProfiles.map((s) => safeTrim(s.studentId)));
+    const admissionNoMap = new Map(studentProfiles.map((s) => [safeTrim(s.admissionNo), safeTrim(s.studentId)]));
+
+    // 2. Query all attendance records in the tenant across this date range
+    // Since students may have migrated to other batches, we look across records for matching students.
+    const allRecords = await SchoolAttendance.find({
+      tenantId,
+      date: { $gte: fromDate, $lte: toDate },
+      isdeleted: false
+    })
+      .sort({ date: 1 })
+      .lean();
+
+    // Batch-specific and tenant-wide holidays
+    const holidaysForBatch = allRecords.filter(
+      (r) => HOLIDAY_TYPES.includes(r.type) && (r.batchCode === batch.batchCode || !r.batchCode)
+    );
+    const holidayDateMap = new Map();
+    holidaysForBatch.forEach((h) => {
+      holidayDateMap.set(h.date, { name: h.holidayName || h.type, type: h.type });
+    });
+
+    // Map student attendance by date
+    const dateStudentAttMap = new Map();
+    const dateMarkedSet = new Set();
+
+    allRecords.forEach((rec) => {
+      if (rec.type === 'ATTENDANCE') {
+        dateMarkedSet.add(rec.date);
+        let stuMap = dateStudentAttMap.get(rec.date);
+        if (!stuMap) {
+          stuMap = new Map();
+          dateStudentAttMap.set(rec.date, stuMap);
+        }
+        (rec.students || []).forEach((s) => {
+          const sid = safeTrim(s.studentId);
+          const adm = safeTrim(s.admissionNo);
+          if (studentIds.has(sid)) {
+            stuMap.set(sid, { status: s.status, remarks: s.remarks || null });
+          } else if (admissionNoMap.has(adm)) {
+            stuMap.set(admissionNoMap.get(adm), { status: s.status, remarks: s.remarks || null });
+          }
+        });
+      }
+    });
+
+    // 3. Generate date list
+    const dates = [];
+    for (let d = fromDate; d <= toDate; d += 86400000) {
+      dates.push(d);
+    }
+
+    const workingDays = dateMarkedSet.size;
+
+    // 4. Build student rows
+    const allRows = studentProfiles.map((stu) => {
+      const studentId = safeTrim(stu.studentId);
+      let presentCount = 0;
+      let absentCount = 0;
+      let lateCount = 0;
+      const remarks = [];
+
+      const attendance = dates.map((dateMs) => {
+        if (holidayDateMap.has(dateMs)) {
+          remarks.push(null);
+          return 'H';
+        }
+        if (!dateMarkedSet.has(dateMs)) {
+          remarks.push(null);
+          return '';
+        }
+        const stuMap = dateStudentAttMap.get(dateMs);
+        const entry = stuMap ? stuMap.get(studentId) : null;
+        const status = entry?.status || 'ABSENT';
+        remarks.push(entry?.remarks || null);
+
+        if (status === 'PRESENT') {
+          presentCount++;
+          return 'P';
+        }
+        if (status === 'LATE') {
+          presentCount++;
+          lateCount++;
+          return 'L';
+        }
+        absentCount++;
+        return 'A';
+      });
+
+      const pct = workingDays > 0 ? Math.round((presentCount / workingDays) * 100) : 0;
+
+      return {
+        studentId,
+        admissionNo: safeTrim(stu.admissionNo),
+        name: safeTrim(stu.student?.name || stu.admissionNo),
+        attendance,
+        remarks,
+        presentCount,
+        absentCount,
+        lateCount,
+        percentage: pct
+      };
+    });
+
+    // 5. Filter by reportType
+    let filteredRows = allRows;
+    if (reportType === 'PRESENT') {
+      filteredRows = allRows.filter((r) => r.presentCount > 0);
+    } else if (reportType === 'ABSENT') {
+      filteredRows = allRows.filter((r) => r.absentCount > 0);
+    }
+
+    const holidays = Array.from(holidayDateMap.entries()).map(([date, h]) => ({
+      date: Number(date),
+      holidayName: h.name,
+      type: h.type
+    }));
+
+    return res.status(200).json({
+      status: true,
+      data: {
+        batch,
+        dates,
+        holidays,
+        workingDays,
+        rows: filteredRows,
+        allRows,
+        totalEligibleStudents: allRows.length,
+        filteredCount: filteredRows.length,
+        reportType
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   listBatchesForSchoolAttendance,
   getSchoolAttendanceStudents,
@@ -872,6 +1097,7 @@ export default {
   checkMarkedBatches,
   getMonthlyAttendanceReport,
   getAttendanceRangeReport,
+  getFirstBatchAttendanceReport,
   finaliseAttendance,
   getBatchAttendanceStatusReport
 };

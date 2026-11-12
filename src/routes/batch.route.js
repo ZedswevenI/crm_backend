@@ -34,6 +34,7 @@ routes.post('/school-attendance/mark', validatetoken, requirePermission('schoolA
 routes.post('/school-attendance/summary', validatetoken, requirePermission('schoolAttendance:list'), sclAtdnceCtrl.getSchoolAttendanceSummary);
 routes.post('/school-attendance/monthly-report', validatetoken, requirePermission('schoolAttendance:export'), sclAtdnceCtrl.getMonthlyAttendanceReport);
 routes.post('/school-attendance/range-report', validatetoken, requirePermission('schoolAttendance:export'), sclAtdnceCtrl.getAttendanceRangeReport);
+routes.post('/school-attendance/first-batch-report', validatetoken, requirePermission('schoolAttendance:export'), sclAtdnceCtrl.getFirstBatchAttendanceReport);
 routes.post('/school-attendance/marked-check', validatetoken, requirePermission('schoolAttendance:list'), sclAtdnceCtrl.checkMarkedBatches);
 
 routes.post('/school-attendance/holiday/declare', validatetoken, requirePermission('schoolAttendance:declareHoliday'), sclAtdnceCtrl.declareHoliday);

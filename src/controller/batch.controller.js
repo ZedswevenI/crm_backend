@@ -770,6 +770,23 @@ const assignStudentsToBatch = async (req, res, next) => {
     try {
       session.startTransaction();
       await StudentProfile.updateMany({ tenantId, isdeleted: false, status: 'ACTIVE', studentId: { $in: studentIds }, batchId: null }, { $set: { batchId: b.batchId, batchCode: b.batchCode, updatedBy } }, { session });
+      await StudentProfile.updateMany(
+        {
+          tenantId,
+          isdeleted: false,
+          status: 'ACTIVE',
+          studentId: { $in: studentIds },
+          $or: [{ firstBatchId: null }, { firstBatchId: { $exists: false } }]
+        },
+        {
+          $set: {
+            firstBatchId: b.batchId,
+            firstBatchCode: b.batchCode,
+            firstBatchName: b.batchName || null
+          }
+        },
+        { session }
+      );
       await backfillStudentsIntoEnabledTests(tenantId, b.batchId, studentIds, session);
       const cnt = await refreshStudentCount(tenantId, b.batchId, session);
       await Batch.updateOne({ tenantId, batchId: b.batchId, isdeleted: false }, { $set: { updatedBy } }, { session });

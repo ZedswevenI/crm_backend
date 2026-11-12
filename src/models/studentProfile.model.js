@@ -67,6 +67,9 @@ const StudentProfileSchema = new mongoose.Schema(
     centerName: { type: String, trim: true },
     batchId: { type: String, trim: true, index: true, ref: 'batch', default: null },
     batchCode: { type: String, trim: true, default: null },
+    firstBatchId: { type: String, trim: true, index: true, ref: 'batch', default: null },
+    firstBatchCode: { type: String, trim: true, index: true, default: null },
+    firstBatchName: { type: String, trim: true, default: null },
     courseStartYear: { type: Number, required: false, default: null, index: true },
     currentAcademicYear: { type: String, required: false, trim: true, default: null, index: true },
     yearNo: { type: Number, required: false, default: 1 },
@@ -92,6 +95,8 @@ StudentProfileSchema.index({ tenantId: 1, admissionNo: 1 }, { unique: true });
 StudentProfileSchema.index({ tenantId: 1, registrationNumber: 1 });
 StudentProfileSchema.index({ tenantId: 1, studentRpa: 1 });
 StudentProfileSchema.index({ tenantId: 1, studentSchoolId: 1 });
+StudentProfileSchema.index({ tenantId: 1, firstBatchCode: 1 });
+StudentProfileSchema.index({ tenantId: 1, firstBatchId: 1 });
 
 const StudentProfile = mongoose.model('studentprofile', StudentProfileSchema);
 export default StudentProfile;
