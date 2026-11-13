@@ -1798,6 +1798,200 @@ const uncancelDay = async (req, res, next) => {
   }
 };
 
+const syncGeneratorTimetable = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = safeTrim(req.body?.userId || req.user?.userId);
+    const { wkStartOn, publish = false, timetables = [] } = req.body || {};
+
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+    if (!wkStartOn) return res.status(400).json({ status: false, message: 'wkStartOn is required' });
+    if (!Array.isArray(timetables) || !timetables.length) {
+      return res.status(400).json({ status: false, message: 'timetables array is required' });
+    }
+
+    const correctedMonday = getPreviousMonday(toInt(wkStartOn));
+
+    // Preload staff, subjects and batches for fast lookup
+    const [allStaff, allSubjects, allBatches] = await Promise.all([
+      Staff.find({ tenantId, isdeleted: false }).lean(),
+      Subject.find({ tenantId, isdeleted: false }).lean(),
+      Batch.find({ tenantId, isdeleted: false }, { batchCode: 1, centerCode: 1, programId: 1, staffMap: 1 }).lean()
+    ]);
+
+    const staffByCode = new Map();
+    const staffById = new Map();
+    for (const s of allStaff) {
+      if (s.staffCode) staffByCode.set(String(s.staffCode).toUpperCase().trim(), s);
+      if (s.staffId) staffById.set(String(s.staffId), s);
+    }
+
+    const subjectByName = new Map();
+    const subjectByCode = new Map();
+    const subjectById = new Map();
+    for (const sub of allSubjects) {
+      if (sub.subjectName) subjectByName.set(String(sub.subjectName).toLowerCase().trim(), sub);
+      if (sub.subjectCode) subjectByCode.set(String(sub.subjectCode).toUpperCase().trim(), sub);
+      if (sub._id) subjectById.set(String(sub._id), sub);
+    }
+
+    const batchMap = new Map();
+    for (const b of allBatches) {
+      if (b.batchCode) batchMap.set(String(b.batchCode).trim(), b);
+    }
+
+    const savedResults = [];
+
+    for (const item of timetables) {
+      const batchCode = safeTrim(item.batchCode);
+      if (!batchCode) continue;
+
+      const batchDoc = batchMap.get(batchCode);
+      const centerCode = safeTrim(item.centerCode) || safeTrim(batchDoc?.centerCode) || null;
+      const phase = safeTrim(item.phase) || null;
+
+      const weekIn = Array.isArray(item.week) ? item.week : [];
+      const normalizedWeek = [];
+
+      for (const d of weekIn) {
+        const day = normDay(d?.day);
+        if (!isValidDay(day)) continue;
+
+        const periods = [];
+        for (const p of d?.periods || []) {
+          const periodNo = toInt(p?.periodNo, 0);
+          if (periodNo <= 0) continue;
+
+          // Resolve faculty
+          let faculty = null;
+          const inputFacultyCode = safeTrim(p?.facultyCode).toUpperCase();
+          const inputFacultyId = safeTrim(p?.facultyId);
+          if (inputFacultyCode && staffByCode.has(inputFacultyCode)) {
+            faculty = staffByCode.get(inputFacultyCode);
+          } else if (inputFacultyId && staffById.has(inputFacultyId)) {
+            faculty = staffById.get(inputFacultyId);
+          }
+
+          // Resolve subject
+          let subject = null;
+          const inputSubjName = safeTrim(p?.subjectName).toLowerCase();
+          const inputSubjCode = safeTrim(p?.subjectCode).toUpperCase();
+          const inputSubjId = safeTrim(p?.subjectId);
+          if (inputSubjName && subjectByName.has(inputSubjName)) {
+            subject = subjectByName.get(inputSubjName);
+          } else if (inputSubjCode && subjectByCode.has(inputSubjCode)) {
+            subject = subjectByCode.get(inputSubjCode);
+          } else if (inputSubjId && subjectById.has(inputSubjId)) {
+            subject = subjectById.get(inputSubjId);
+          }
+
+          const periodType = safeTrim(p?.periodType) || (p?.isExam ? 'EXAM' : 'LECTURE');
+          const time = p?.time || {};
+          const vr = validateTimeRange(time);
+          const timeRange = vr.ok
+            ? { startMin: vr.startMin, endMin: vr.endMin, startLabel: safeTrim(time.startLabel) || null, endLabel: safeTrim(time.endLabel) || null }
+            : { startMin: 510, endMin: 555, startLabel: '08:30 AM', endLabel: '09:15 AM' };
+
+          periods.push({
+            periodNo,
+            time: timeRange,
+            periodType: ['LECTURE', 'EXAM', 'LAB', 'TUTORIAL', 'TEST', 'REVISION', 'PT', 'YOGA'].includes(periodType) ? periodType : 'LECTURE',
+            examId: safeTrim(p?.examId) || null,
+            examDescription: safeTrim(p?.examDescription) || null,
+            facultyId: faculty?.staffId || inputFacultyId || 'FAC-GEN',
+            facultyName: faculty?.staffName || safeTrim(p?.facultyName) || faculty?.staffCode || null,
+            subjectId: subject?._id ? String(subject._id) : (inputSubjId || null),
+            subjectCode: subject?.subjectCode || inputSubjCode || null,
+            subjectName: subject?.subjectName || safeTrim(p?.subjectName) || null,
+            mode: safeTrim(p?.mode) === 'ONLINE' ? 'ONLINE' : 'OFFLINE',
+            zoomUrl: safeTrim(p?.zoomUrl) || null,
+            venue: safeTrim(p?.venue) || null,
+            topic: safeTrim(p?.topic) || null,
+            isCancelled: !!p?.isCancelled,
+            notes: safeTrim(p?.notes) || null
+          });
+        }
+        normalizedWeek.push({ day, periods });
+      }
+
+      // Upsert into TimeTable
+      let ttDoc = await TimeTable.findOne({
+        tenantId,
+        batchCode,
+        wkStartOn: correctedMonday,
+        isdeleted: false
+      });
+
+      const isActivating = !!publish;
+
+      if (ttDoc) {
+        ttDoc.week = normalizedWeek;
+        ttDoc.centerCode = centerCode || ttDoc.centerCode;
+        ttDoc.phase = phase || ttDoc.phase;
+        ttDoc.status = isActivating ? 'Active' : 'DRAFT';
+        if (isActivating) {
+          ttDoc.publishedAt = Date.now();
+          ttDoc.publishedBy = userId || null;
+        }
+        ttDoc.updatedBy = userId || null;
+        await ttDoc.save();
+        savedResults.push({ batchCode, timetableId: ttDoc._id, status: ttDoc.status, updated: true });
+      } else {
+        ttDoc = await TimeTable.create({
+          tenantId,
+          batchCode,
+          centerCode,
+          phase,
+          wkStartOn: correctedMonday,
+          status: isActivating ? 'Active' : 'DRAFT',
+          publishedAt: isActivating ? Date.now() : null,
+          publishedBy: isActivating ? (userId || null) : null,
+          week: normalizedWeek,
+          createdBy: userId || null,
+          updatedBy: userId || null,
+          isdeleted: false
+        });
+        savedResults.push({ batchCode, timetableId: ttDoc._id, status: ttDoc.status, created: true });
+      }
+    }
+
+    return res.status(200).json({
+      status: true,
+      message: `Successfully ${publish ? 'published' : 'saved (draft)'} ${savedResults.length} batch timetable(s)`,
+      count: savedResults.length,
+      published: !!publish,
+      wkStartOn: correctedMonday,
+      data: savedResults
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const getGeneratorTimetable = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const wkStart = toInt(req.body?.wkStartOn || req.body?.date, 0);
+    if (!tenantId) return res.status(400).json({ status: false, message: 'tenantId is required' });
+    const correctedMonday = wkStart ? getPreviousMonday(wkStart) : getPreviousMonday(Date.now());
+
+    const timetables = await TimeTable.find({
+      tenantId,
+      wkStartOn: correctedMonday,
+      isdeleted: false
+    }).lean();
+
+    return res.status(200).json({
+      status: true,
+      wkStartOn: correctedMonday,
+      count: timetables.length,
+      data: timetables
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   createTimeTable,
   publishTimeTable,
@@ -1824,5 +2018,7 @@ export default {
   listTimeTablesByBatch,
   subjectHoursReport,
   cloneWeek,
-  uncancelDay
+  uncancelDay,
+  syncGeneratorTimetable,
+  getGeneratorTimetable
 };

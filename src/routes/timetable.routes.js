@@ -37,6 +37,9 @@ routes.post('/delete', validatetoken, requirePermission('timetable:delete'), tim
 routes.post('/clone-week', validatetoken, requirePermission('timetable:create'), timeTableController.cloneWeek);
 routes.post('/day/uncancel', validatetoken, requirePermission('timetable:edit'), timeTableController.uncancelDay);
 
+routes.post('/generator/sync-publish', validatetoken, requirePermission('timetable:create'), timeTableController.syncGeneratorTimetable);
+routes.post('/generator/get-schedule', validatetoken, requirePermission('timetable:view'), timeTableController.getGeneratorTimetable);
+
 routes.use('/', (req, res, next) => res.json({ message: 'Inside Timetable routes' }));
 
 export default routes;
