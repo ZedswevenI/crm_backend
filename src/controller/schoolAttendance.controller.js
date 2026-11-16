@@ -440,12 +440,25 @@ const getMonthlyAttendanceReport = async (req, res, next) => {
     const toDate = Date.UTC(year, month - 1, lastDay);
     const batch = await Batch.findOne({ tenantId, batchCode, isdeleted: false }, { batchId: 1, batchName: 1, section: 1, classNo: 1 }).lean();
     if (!batch) return res.status(404).json({ status: false, message: 'Batch not found' });
-    const [studentProfiles, allRecords] = await Promise.all([
+    const [studentProfiles, recordsUpToEnd] = await Promise.all([
       StudentProfile.find({ tenantId, isdeleted: false, batchId: batch.batchId }, { studentId: 1, admissionNo: 1, 'student.name': 1 }).sort({ 'student.name': 1 }).lean(),
-      SchoolAttendance.find({ tenantId, batchCode, date: { $gte: fromDate, $lte: toDate }, isdeleted: false })
+      SchoolAttendance.find({ tenantId, batchCode, date: { $lte: toDate }, isdeleted: false })
         .sort({ date: 1 })
         .lean()
     ]);
+    const allRecords = recordsUpToEnd.filter((r) => r.date >= fromDate);
+    const priorAttendanceRecords = recordsUpToEnd.filter((r) => r.date < fromDate && r.type === 'ATTENDANCE');
+    const priorWorkingDays = priorAttendanceRecords.length;
+    const priorPresentByStudent = new Map();
+    priorAttendanceRecords.forEach((rec) => {
+      (rec.students || []).forEach((s) => {
+        if (s.status === 'PRESENT' || s.status === 'LATE') {
+          const sid = safeTrim(s.studentId);
+          priorPresentByStudent.set(sid, (priorPresentByStudent.get(sid) || 0) + 1);
+        }
+      });
+    });
+
     const attendanceRecords = allRecords.filter((r) => r.type === 'ATTENDANCE');
     const holidayRecords = allRecords.filter((r) => HOLIDAY_TYPES.includes(r.type));
     const dateAttMap = new Map();
@@ -458,6 +471,7 @@ const getMonthlyAttendanceReport = async (req, res, next) => {
     holidayRecords.forEach((rec) => holidayDateMap.set(rec.date, { name: rec.holidayName || rec.type, type: rec.type }));
     const days = Array.from({ length: lastDay }, (_, i) => i + 1);
     const workingDays = attendanceRecords.length;
+    const cumulativeWorkingDays = priorWorkingDays + workingDays;
     const rows = studentProfiles.map((stu) => {
       const studentId = safeTrim(stu.studentId);
       let presentCount = 0,
@@ -482,6 +496,10 @@ const getMonthlyAttendanceReport = async (req, res, next) => {
         return 'A';
       });
       const pct = workingDays > 0 ? Math.round((presentCount / workingDays) * 100) : 0;
+      const priorPresentCount = priorPresentByStudent.get(studentId) || 0;
+      const cumulativePresentCount = priorPresentCount + presentCount;
+      const cumulativePercentage =
+        cumulativeWorkingDays > 0 ? Math.round((cumulativePresentCount / cumulativeWorkingDays) * 100) : 0;
       return {
         studentId,
         admissionNo: safeTrim(stu.admissionNo),
@@ -491,7 +509,10 @@ const getMonthlyAttendanceReport = async (req, res, next) => {
         workingDays,
         lateCount,
         absentCount,
-        percentage: pct
+        percentage: pct,
+        priorPresentCount,
+        cumulativePresentCount,
+        cumulativePercentage
       };
     });
     const holidays = Array.from(holidayDateMap.entries())
@@ -506,6 +527,8 @@ const getMonthlyAttendanceReport = async (req, res, next) => {
         lastDay,
         days,
         workingDays,
+        priorWorkingDays,
+        cumulativeWorkingDays,
         totalDaysInMonth: lastDay,
         holidayCount: holidays.length,
         holidays,
@@ -713,7 +736,20 @@ const getBatchAttendanceStatusReport = async (req, res, next) => {
 
 // Builds the per-batch report object (dates/rows/holidays) shared by both the single-batch and
 // multi-batch response paths below, from pre-fetched student/attendance records for that one batch.
-const buildRangeReportForBatch = (batch, fromDate, toDate, studentProfiles, allRecords) => {
+const buildRangeReportForBatch = (batch, fromDate, toDate, studentProfiles, recordsUpToEnd) => {
+  const allRecords = recordsUpToEnd.filter((r) => r.date >= fromDate);
+  const priorAttendanceRecords = recordsUpToEnd.filter((r) => r.date < fromDate && r.type === 'ATTENDANCE');
+  const priorWorkingDays = priorAttendanceRecords.length;
+  const priorPresentByStudent = new Map();
+  priorAttendanceRecords.forEach((rec) => {
+    (rec.students || []).forEach((s) => {
+      if (s.status === 'PRESENT' || s.status === 'LATE') {
+        const sid = safeTrim(s.studentId);
+        priorPresentByStudent.set(sid, (priorPresentByStudent.get(sid) || 0) + 1);
+      }
+    });
+  });
+
   const attendanceRecords = allRecords.filter((r) => r.type === 'ATTENDANCE');
   const holidayRecords = allRecords.filter((r) => HOLIDAY_TYPES.includes(r.type));
   const dateAttMap = new Map();
@@ -727,6 +763,7 @@ const buildRangeReportForBatch = (batch, fromDate, toDate, studentProfiles, allR
   const dates = [];
   for (let d = fromDate; d <= toDate; d += 86400000) dates.push(d);
   const workingDays = attendanceRecords.length;
+  const cumulativeWorkingDays = priorWorkingDays + workingDays;
   const rows = studentProfiles.map((stu) => {
     const studentId = safeTrim(stu.studentId);
     let presentCount = 0,
@@ -759,17 +796,24 @@ const buildRangeReportForBatch = (batch, fromDate, toDate, studentProfiles, allR
       return 'A';
     });
     const pct = workingDays > 0 ? Math.round((presentCount / workingDays) * 100) : 0;
+    const priorPresentCount = priorPresentByStudent.get(studentId) || 0;
+    const cumulativePresentCount = priorPresentCount + presentCount;
+    const cumulativePercentage =
+      cumulativeWorkingDays > 0 ? Math.round((cumulativePresentCount / cumulativeWorkingDays) * 100) : 0;
     return {
       studentId,
       admissionNo: safeTrim(stu.admissionNo),
       name: safeTrim(stu.student?.name || stu.admissionNo),
       attendance,
-      remarks, // positionally aligned with `dates`/`attendance` — per-student remark entered when that day was marked, null where none
+      remarks,
       presentCount,
       workingDays,
       lateCount,
       absentCount,
-      percentage: pct
+      percentage: pct,
+      priorPresentCount,
+      cumulativePresentCount,
+      cumulativePercentage
     };
   });
   const holidays = Array.from(holidayDateMap.entries())
@@ -783,6 +827,8 @@ const buildRangeReportForBatch = (batch, fromDate, toDate, studentProfiles, allR
     toDate,
     dates,
     workingDays,
+    priorWorkingDays,
+    cumulativeWorkingDays,
     holidayCount: holidays.length,
     holidays,
     rows
@@ -830,7 +876,7 @@ const getAttendanceRangeReport = async (req, res, next) => {
       StudentProfile.find({ tenantId, isdeleted: false, batchId: { $in: batchIds } }, { studentId: 1, admissionNo: 1, batchId: 1, 'student.name': 1 })
         .sort({ 'student.name': 1 })
         .lean(),
-      SchoolAttendance.find({ tenantId, batchCode: { $in: batchCodes }, date: { $gte: fromDate, $lte: toDate }, isdeleted: false })
+      SchoolAttendance.find({ tenantId, batchCode: { $in: batchCodes }, date: { $lte: toDate }, isdeleted: false })
         .sort({ date: 1 })
         .lean()
     ]);
@@ -951,15 +997,35 @@ const getFirstBatchAttendanceReport = async (req, res, next) => {
     const studentIds = new Set(studentProfiles.map((s) => safeTrim(s.studentId)));
     const admissionNoMap = new Map(studentProfiles.map((s) => [safeTrim(s.admissionNo), safeTrim(s.studentId)]));
 
-    // 2. Query all attendance records in the tenant across this date range
-    // Since students may have migrated to other batches, we look across records for matching students.
-    const allRecords = await SchoolAttendance.find({
+    // 2. Query all attendance records in the tenant up to toDate (for both range and prior cumulative counts)
+    const recordsUpToEnd = await SchoolAttendance.find({
       tenantId,
-      date: { $gte: fromDate, $lte: toDate },
+      date: { $lte: toDate },
       isdeleted: false
     })
       .sort({ date: 1 })
       .lean();
+
+    const allRecords = recordsUpToEnd.filter((r) => r.date >= fromDate);
+    const priorRecords = recordsUpToEnd.filter((r) => r.date < fromDate && r.type === 'ATTENDANCE');
+    const priorDateMarkedSet = new Set();
+    const priorDateStuPresentMap = new Map();
+    priorRecords.forEach((rec) => {
+      if (rec.batchCode === batch.batchCode) priorDateMarkedSet.add(rec.date);
+      (rec.students || []).forEach((s) => {
+        const sid = safeTrim(s.studentId);
+        const adm = safeTrim(s.admissionNo);
+        const matchedSid = studentIds.has(sid) ? sid : admissionNoMap.get(adm);
+        if (matchedSid) {
+          priorDateMarkedSet.add(rec.date);
+          if (s.status === 'PRESENT' || s.status === 'LATE') {
+            if (!priorDateStuPresentMap.has(matchedSid)) priorDateStuPresentMap.set(matchedSid, new Set());
+            priorDateStuPresentMap.get(matchedSid).add(rec.date);
+          }
+        }
+      });
+    });
+    const priorWorkingDays = priorDateMarkedSet.size;
 
     // Batch-specific and tenant-wide holidays
     const holidaysForBatch = allRecords.filter(
@@ -1038,6 +1104,11 @@ const getFirstBatchAttendanceReport = async (req, res, next) => {
       });
 
       const pct = workingDays > 0 ? Math.round((presentCount / workingDays) * 100) : 0;
+      const priorPresentCount = priorDateStuPresentMap.get(studentId)?.size || 0;
+      const cumulativeWorkingDays = priorWorkingDays + workingDays;
+      const cumulativePresentCount = priorPresentCount + presentCount;
+      const cumulativePercentage =
+        cumulativeWorkingDays > 0 ? Math.round((cumulativePresentCount / cumulativeWorkingDays) * 100) : 0;
 
       return {
         studentId,
@@ -1048,7 +1119,10 @@ const getFirstBatchAttendanceReport = async (req, res, next) => {
         presentCount,
         absentCount,
         lateCount,
-        percentage: pct
+        percentage: pct,
+        priorPresentCount,
+        cumulativePresentCount,
+        cumulativePercentage
       };
     });
 
@@ -1073,6 +1147,8 @@ const getFirstBatchAttendanceReport = async (req, res, next) => {
         dates,
         holidays,
         workingDays,
+        priorWorkingDays,
+        cumulativeWorkingDays: priorWorkingDays + workingDays,
         rows: filteredRows,
         allRows,
         totalEligibleStudents: allRows.length,
