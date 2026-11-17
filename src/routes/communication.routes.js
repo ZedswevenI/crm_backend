@@ -16,6 +16,9 @@ routes.post('/recipients/preview', validatetoken, requirePermission('communicati
 routes.post('/send', validatetoken, requirePermission('communication:send'), communicationCtrl.sendCommunication);
 routes.post('/send/batch', validatetoken, requirePermission('communication:send'), communicationCtrl.sendBatchCommunication);
 routes.post('/exam-result/send', validatetoken, requirePermission('communication:send'), communicationCtrl.sendExamResultEmail);
+routes.post('/exam-result/preview', validatetoken, requirePermission('communication:send'), communicationCtrl.previewExamResultEmail);
+routes.post('/exam-result/report-pdf', validatetoken, requirePermission('communication:send'), communicationCtrl.downloadPerformanceReportPdf);
+routes.post('/exam-result/batch-students', validatetoken, requirePermission('communication:send'), communicationCtrl.listExamResultBatchStudents);
 routes.post('/acknowledgement/send', validatetoken, requirePermission('communication:send'), communicationCtrl.sendAdmissionAcknowledgement);
 routes.post('/campaign/list', validatetoken, requirePermission('communicationLog:list'), communicationCtrl.listCampaigns);
 routes.post('/logs/list', validatetoken, requirePermission('communicationLog:list'), communicationCtrl.listLogs);

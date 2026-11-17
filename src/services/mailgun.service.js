@@ -13,13 +13,13 @@ const getClient = () => {
   });
 };
 
-export const sendMailgunEmail = async ({ to, subject, html, text }) => {
+export const sendMailgunEmail = async ({ to, subject, html, text, attachments = [] }) => {
   if (!process.env.MAILGUN_DOMAIN) throw new Error('MAILGUN_DOMAIN missing');
   if (!process.env.MAILGUN_FROM_EMAIL) throw new Error('MAILGUN_FROM_EMAIL missing');
 
   const mg = getClient();
 
-  return await mg.messages.create(String(process.env.MAILGUN_DOMAIN).trim(), {
+  const payload = {
     from: String(process.env.MAILGUN_FROM_EMAIL).trim(),
     to,
     subject,
@@ -28,5 +28,14 @@ export const sendMailgunEmail = async ({ to, subject, html, text }) => {
     'o:tracking': true,
     'o:tracking-clicks': true,
     'o:tracking-opens': true
-  });
+  };
+  if (Array.isArray(attachments) && attachments.length) {
+    payload.attachment = attachments.map((att) => ({
+      filename: att.filename,
+      data: Buffer.isBuffer(att.data) ? att.data : Buffer.from(att.data, 'base64'),
+      contentType: att.contentType || 'application/pdf'
+    }));
+  }
+
+  return await mg.messages.create(String(process.env.MAILGUN_DOMAIN).trim(), payload);
 };

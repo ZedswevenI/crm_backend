@@ -23,6 +23,7 @@ const communicationRecipientLogSchema = new mongoose.Schema(
     programName: { type: String, trim: true, default: null },
     subject: { type: String, trim: false, default: null },
     body: { type: String, trim: false, default: null },
+    reportPayload: { type: mongoose.Schema.Types.Mixed, default: null },
     status: { type: String, enum: ['QUEUED', 'SENT', 'DELIVERED', 'FAILED', 'SKIPPED'], default: 'QUEUED', index: true },
     retries: { type: Number, default: 0 },
     maxRetries: { type: Number, default: 3 },

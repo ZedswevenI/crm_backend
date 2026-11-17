@@ -14,6 +14,7 @@ import MockExamBatchAssign from '../models/mockExambatchmapping.model.js';
 import StudentProfile from '../models/studentProfile.model.js';
 import Batch from '../models/batch.model.js';
 import { sendEmail } from '../services/mail.service.js';
+import { buildPerformanceReportFilename, generatePerformanceReportPdfBuffer } from '../helpers/performanceReportPdf.helper.js';
 
 const pickTenantId = (req) => String(req.body?.entiId || req.body?.tenantId || '').trim();
 const safeTrim = (v) => (v === null || v === undefined ? '' : String(v).trim());
@@ -51,18 +52,158 @@ const buildExamResultEmailData = (result, exam) => {
   };
 };
 
+const computeExamStats = async (tenantId, examId) => {
+  const allResults = await MockExamResult.find(
+    { tenantId, examId, isdeleted: false },
+    { obtainedMarks: 1, sectionResults: 1 }
+  ).lean();
+
+  const sectionBuckets = new Map();
+  let overallHighest = 0;
+  let overallSum = 0;
+
+  for (const r of allResults) {
+    const tot = Number(r.obtainedMarks ?? 0);
+    if (tot > overallHighest) overallHighest = tot;
+    overallSum += tot;
+    for (const sec of r.sectionResults || []) {
+      const sid = safeTrim(sec.sectionId);
+      if (!sid) continue;
+      const val = Number(sec.obtainedMarks ?? 0);
+      const cur = sectionBuckets.get(sid) || { max: -Infinity, sum: 0, count: 0 };
+      if (val > cur.max) cur.max = val;
+      cur.sum += val;
+      cur.count += 1;
+      sectionBuckets.set(sid, cur);
+    }
+  }
+
+  const sectionStats = new Map();
+  for (const [sid, cur] of sectionBuckets.entries()) {
+    sectionStats.set(sid, {
+      highest: cur.max === -Infinity ? 0 : cur.max,
+      average: cur.count > 0 ? Math.round(cur.sum / cur.count) : 0
+    });
+  }
+
+  return {
+    sectionStats,
+    overallHighest: allResults.length ? overallHighest : 0,
+    overallAverage: allResults.length ? Math.round(overallSum / allResults.length) : 0
+  };
+};
+
+const buildStudentPerformanceReportData = (profile, result, exam, batch, stats) => {
+  const studentName = safeTrim(profile?.student?.name) || safeTrim(profile?.admissionNo) || 'Student';
+  const admissionNo = safeTrim(profile?.admissionNo);
+  const regNo = safeTrim(profile?.registrationNumber) || admissionNo;
+  const enrollmentNo = safeTrim(profile?.portalStudentId) || regNo || admissionNo;
+  const batchName = safeTrim(batch?.batchName) || safeTrim(batch?.batchCode) || '-';
+  const programName = safeTrim(profile?.programName) || '-';
+  const examName = safeTrim(exam?.examName) || 'Exam';
+
+  const sectionNameMap = new Map((exam?.sections || []).map((s) => [safeTrim(s.sectionId), safeTrim(s.sectionName)]));
+  const rows = (result?.sectionResults || []).map((sec) => {
+    const sid = safeTrim(sec.sectionId);
+    const subject = sectionNameMap.get(sid) || sid;
+    const secStat = stats?.sectionStats?.get(sid) || { highest: 0, average: 0 };
+    return {
+      subject,
+      yourMarks: Number(sec.obtainedMarks ?? 0),
+      outOf: Number(sec.totalMarks ?? 0),
+      highest: secStat.highest,
+      average: secStat.average
+    };
+  });
+
+  const outOfTotal = Number(result?.totalMarks || exam?.totalMarks || 0);
+  const yourTotal = Number(result?.obtainedMarks ?? 0);
+
+  return {
+    studentName,
+    regNo,
+    enrollmentNo,
+    admissionNo,
+    batchName,
+    programName,
+    examName,
+    filename: buildPerformanceReportFilename(studentName, regNo),
+    rows,
+    total: {
+      yourMarks: yourTotal,
+      outOf: outOfTotal,
+      highest: stats?.overallHighest ?? yourTotal,
+      average: stats?.overallAverage ?? yourTotal
+    }
+  };
+};
+
+const buildStudentDetailsHtml = (reportData) => {
+  const rows = [
+    ['Name', reportData?.studentName || '-'],
+    ['Enrollment No', reportData?.enrollmentNo || '-'],
+    ['Admission No', reportData?.admissionNo || '-'],
+    ['Batch Name', reportData?.batchName || '-'],
+    ['Program', reportData?.programName || '-']
+  ];
+  const trs = rows
+    .map(
+      ([label, val]) =>
+        `<tr>
+          <td style="padding:2px 8px 2px 0;font-weight:bold;white-space:nowrap;">${escapeHtml(label)}</td>
+          <td style="padding:2px 6px;font-weight:bold;">:</td>
+          <td style="padding:2px 0;">${escapeHtml(val)}</td>
+        </tr>`
+    )
+    .join('');
+  return `<table style="border-collapse:collapse;margin:10px 0 12px 0;"><tbody>${trs}</tbody></table>`;
+};
+
+const buildResultGridHtml = (reportData) => {
+  const rows = Array.isArray(reportData?.rows) ? reportData.rows : [];
+  const tot = reportData?.total || { yourMarks: 0, outOf: 0, highest: 0, average: 0 };
+  const rowsHtml = rows
+    .map(
+      (r) =>
+        `<tr>
+          <td style="padding:7px 14px;border:1px solid #000;text-align:center;">${escapeHtml(r.subject)}</td>
+          <td style="padding:7px 14px;border:1px solid #000;text-align:center;">${r.yourMarks}</td>
+          <td style="padding:7px 14px;border:1px solid #000;text-align:center;font-weight:bold;">${r.outOf}</td>
+          <td style="padding:7px 14px;border:1px solid #000;text-align:center;">${r.highest}</td>
+          <td style="padding:7px 14px;border:1px solid #000;text-align:center;">${r.average}</td>
+        </tr>`
+    )
+    .join('');
+
+  return `<table style="border-collapse:collapse;margin:14px 0;width:100%;max-width:640px;">
+    <thead>
+      <tr>
+        <th style="padding:8px 14px;border:1px solid #000;text-align:center;">Subject</th>
+        <th style="padding:8px 14px;border:1px solid #000;text-align:center;">Your Marks</th>
+        <th style="padding:8px 14px;border:1px solid #000;text-align:center;">Out of</th>
+        <th style="padding:8px 14px;border:1px solid #000;text-align:center;">Highest</th>
+        <th style="padding:8px 14px;border:1px solid #000;text-align:center;">Average</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${rowsHtml}
+      <tr style="font-weight:bold;">
+        <td style="padding:8px 14px;border:1px solid #000;text-align:center;">Total</td>
+        <td style="padding:8px 14px;border:1px solid #000;text-align:center;">${tot.yourMarks}</td>
+        <td style="padding:8px 14px;border:1px solid #000;text-align:center;">${tot.outOf}</td>
+        <td style="padding:8px 14px;border:1px solid #000;text-align:center;">${tot.highest}</td>
+        <td style="padding:8px 14px;border:1px solid #000;text-align:center;">${tot.average}</td>
+      </tr>
+    </tbody>
+  </table>`;
+};
+
 // Fixed content — no user-authored template allowed for exam-result mail by design.
-const EXAM_RESULT_SUBJECT = '{{examName}} - Exam Result';
-const EXAM_RESULT_BODY = `<p>Dear {{parentName}},</p>
-<p>Please find below the exam result for <b>{{studentName}}</b>.</p>
-<table style="border-collapse:collapse;margin:12px 0;">
-<tr><td style="padding:6px 12px;border:1px solid #ccc;"><b>Student Name</b></td><td style="padding:6px 12px;border:1px solid #ccc;">{{studentName}}</td></tr>
-<tr><td style="padding:6px 12px;border:1px solid #ccc;"><b>Class</b></td><td style="padding:6px 12px;border:1px solid #ccc;">{{classNo}}</td></tr>
-<tr><td style="padding:6px 12px;border:1px solid #ccc;"><b>Batch</b></td><td style="padding:6px 12px;border:1px solid #ccc;">{{batchName}}</td></tr>
-</table>
-<p>Exam: <b>{{examName}}</b></p>
-{{marksTable}}
-<p>Total Marks: <b>{{obtainedMarks}} / {{totalMarks}}</b> ({{percentage}}%)</p>`;
+const EXAM_RESULT_SUBJECT = '{{examName}} - Academic Performance Report';
+const EXAM_RESULT_BODY = `<p>Dear {{studentName}} :</p>
+<p>Please find the performance report of the <b>{{examName}}</b> attached below.</p>
+{{studentDetails}}
+{{resultGrid}}`;
 
 const EXAM_ABSENT_SUBJECT = '{{examName}} - Absence Notice';
 const EXAM_ABSENT_BODY = `<p>Dear {{parentName}},</p>
@@ -822,7 +963,14 @@ const sendExamResultEmail = async (req, res, next) => {
     const examId = safeTrim(req.body?.examId);
     if (!examId) return res.status(400).json({ status: false, message: 'examId is required' });
     const admissionNo = safeTrim(req.body?.admissionNo) || null;
+    const admissionNosInput = Array.isArray(req.body?.admissionNos)
+      ? [...new Set(req.body.admissionNos.map(safeTrim).filter(Boolean))]
+      : [];
     const batchIdInput = safeTrim(req.body?.batchId) || null;
+    const batchIdsInput = Array.isArray(req.body?.batchIds)
+      ? [...new Set(req.body.batchIds.map(safeTrim).filter(Boolean))]
+      : [];
+    const targetBatchInputs = batchIdsInput.length ? batchIdsInput : batchIdInput ? [batchIdInput] : [];
     const notifyAbsentees = req.body?.notifyAbsentees === true;
 
     const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }, { examName: 1, examCode: 1, totalMarks: 1, sections: 1, status: 1 }).lean();
@@ -837,18 +985,32 @@ const sendExamResultEmail = async (req, res, next) => {
       const profileExists = await StudentProfile.exists({ tenantId, admissionNo, isdeleted: false });
       if (!profileExists) return res.status(404).json({ status: false, message: 'Student not found' });
       rosterAdmissionNos = [admissionNo];
+    } else if (admissionNosInput.length) {
+      const matchingProfiles = await StudentProfile.find(
+        { tenantId, admissionNo: { $in: admissionNosInput }, isdeleted: false },
+        { admissionNo: 1 }
+      ).lean();
+      rosterAdmissionNos = matchingProfiles.map((p) => safeTrim(p.admissionNo)).filter(Boolean);
+      if (!rosterAdmissionNos.length) {
+        return res.status(404).json({ status: false, message: 'No matching students found' });
+      }
     } else {
       const assignQuery = { tenantId, examId, isdeleted: false, status: 'enabled' };
-      if (batchIdInput) {
+      if (targetBatchInputs.length) {
         // MockExamBatchAssign.batchId has been observed holding a batchCode instead of the real
         // batchId on some records — resolve the input to both forms before matching.
-        const batchDoc = await Batch.findOne({ tenantId, $or: [{ batchId: batchIdInput }, { batchCode: batchIdInput }] }, { batchId: 1, batchCode: 1 }).lean();
-        const candidates = [...new Set([batchIdInput, batchDoc?.batchId, batchDoc?.batchCode].filter(Boolean))];
+        const batchDocs = await Batch.find(
+          { tenantId, $or: [{ batchId: { $in: targetBatchInputs } }, { batchCode: { $in: targetBatchInputs } }] },
+          { batchId: 1, batchCode: 1 }
+        ).lean();
+        const candidates = [
+          ...new Set([...targetBatchInputs, ...batchDocs.map((b) => b.batchId), ...batchDocs.map((b) => b.batchCode)].filter(Boolean))
+        ];
         assignQuery.batchId = { $in: candidates };
       }
       const assignments = await MockExamBatchAssign.find(assignQuery, { batchId: 1, students: 1 }).lean();
-      if (batchIdInput && !assignments.length) {
-        return res.status(404).json({ status: false, message: 'No assignment found for this exam and batch' });
+      if (targetBatchInputs.length && !assignments.length) {
+        return res.status(404).json({ status: false, message: 'No assignment found for this exam and selected batch(es)' });
       }
       const seen = new Set();
       for (const a of assignments) {
@@ -863,12 +1025,13 @@ const sendExamResultEmail = async (req, res, next) => {
       }
     }
 
-    const [results, profiles] = await Promise.all([
+    const [results, profiles, examStats] = await Promise.all([
       MockExamResult.find({ tenantId, examId, admissionNo: { $in: rosterAdmissionNos }, isdeleted: false }, { admissionNo: 1, obtainedMarks: 1, totalMarks: 1, sectionResults: 1 }).lean(),
       StudentProfile.find(
         { tenantId, admissionNo: { $in: rosterAdmissionNos }, isdeleted: false },
-        { admissionNo: 1, studentId: 1, 'student.name': 1, 'student.email': 1, 'student.parentName': 1, classNo: 1, batchId: 1, centerId: 1, centerCode: 1, programId: 1, programName: 1 }
-      ).lean()
+        { admissionNo: 1, registrationNumber: 1, portalStudentId: 1, studentId: 1, 'student.name': 1, 'student.email': 1, 'student.parentName': 1, classNo: 1, batchId: 1, centerId: 1, centerCode: 1, programId: 1, programName: 1 }
+      ).lean(),
+      computeExamStats(tenantId, examId)
     ]);
     const resultMap = new Map(results.map((r) => [safeTrim(r.admissionNo), r]));
     const profileMap = new Map(profiles.map((p) => [safeTrim(p.admissionNo), p]));
@@ -906,7 +1069,14 @@ const sendExamResultEmail = async (req, res, next) => {
       channel: 'email',
       subject: EXAM_RESULT_SUBJECT,
       body: EXAM_RESULT_BODY,
-      recipientFilters: { examId, admissionNo: admissionNo || null, batchId: batchIdInput || null, notifyAbsentees },
+      recipientFilters: {
+        examId,
+        admissionNo: admissionNo || null,
+        admissionNos: admissionNosInput.length ? admissionNosInput : null,
+        batchId: batchIdInput || null,
+        batchIds: targetBatchInputs.length ? targetBatchInputs : null,
+        notifyAbsentees
+      },
       sendType,
       scheduledAt: sendType === 'SCHEDULED' ? scheduledAt : null,
       status: sendType === 'SCHEDULED' ? 'SCHEDULED' : 'QUEUED',
@@ -915,7 +1085,7 @@ const sendExamResultEmail = async (req, res, next) => {
       updatedBy: userId || null
     });
 
-    const buildLogBase = (admNo, profile, subject, body, hasValidEmail, email) => ({
+    const buildLogBase = (admNo, profile, subject, body, hasValidEmail, email, reportPayload = null) => ({
       tenantId,
       campaignId: campaign.campaignId,
       templateId: resolvedTemplateId,
@@ -935,6 +1105,7 @@ const sendExamResultEmail = async (req, res, next) => {
       programName: profile?.programName || null,
       subject,
       body,
+      reportPayload,
       status: hasValidEmail ? 'QUEUED' : 'SKIPPED',
       error: hasValidEmail ? null : 'Student email missing/invalid',
       createdBy: userId || null,
@@ -954,16 +1125,17 @@ const sendExamResultEmail = async (req, res, next) => {
       if (hasValidEmail) queuedMarksCount++;
       else skippedNoEmailCount++;
       const batch = profile.batchId ? batchMap.get(profile.batchId) : null;
+      const reportPayload = buildStudentPerformanceReportData(profile, result, exam, batch, examStats);
       const data = {
-        studentName: profile?.student?.name || '',
-        parentName: safeTrim(profile?.student?.parentName) || 'Parent',
-        classNo: profile?.classNo ?? '',
-        batchName: batch?.batchName || '',
-        ...buildExamResultEmailData(result, exam)
+        studentName: reportPayload.studentName,
+        regNo: reportPayload.regNo,
+        examName: reportPayload.examName,
+        studentDetails: buildStudentDetailsHtml(reportPayload),
+        resultGrid: buildResultGridHtml(reportPayload)
       };
       const subject = renderTemplate(EXAM_RESULT_SUBJECT, data);
       const body = renderTemplate(EXAM_RESULT_BODY, data);
-      logDocs.push(buildLogBase(admNo, profile, subject, body, hasValidEmail, email));
+      logDocs.push(buildLogBase(admNo, profile, subject, body, hasValidEmail, email, reportPayload));
     }
 
     if (notifyAbsentees) {
@@ -1062,6 +1234,182 @@ const sendAdmissionAcknowledgement = async (req, res, next) => {
   }
 };
 
+const resolveSingleSamplePerformanceReport = async ({ tenantId, examId, admissionNo, batchId, batchIds = [] }) => {
+  const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }, { examName: 1, examCode: 1, totalMarks: 1, sections: 1, status: 1 }).lean();
+  if (!exam) return { error: { status: 404, message: 'Exam not found' } };
+
+  let targetAdmNo = safeTrim(admissionNo);
+  if (!targetAdmNo) {
+    const assignQuery = { tenantId, examId, isdeleted: false, status: 'enabled' };
+    const targetBatches = Array.isArray(batchIds) && batchIds.length ? batchIds.map(safeTrim).filter(Boolean) : batchId ? [safeTrim(batchId)] : [];
+    if (targetBatches.length) {
+      const batchDocs = await Batch.find(
+        { tenantId, $or: [{ batchId: { $in: targetBatches } }, { batchCode: { $in: targetBatches } }] },
+        { batchId: 1, batchCode: 1 }
+      ).lean();
+      const candidates = [
+        ...new Set([...targetBatches, ...batchDocs.map((b) => b.batchId), ...batchDocs.map((b) => b.batchCode)].filter(Boolean))
+      ];
+      assignQuery.batchId = { $in: candidates };
+    }
+    const assignments = await MockExamBatchAssign.find(assignQuery, { students: 1 }).lean();
+    const roster = [];
+    for (const a of assignments) {
+      for (const s of a.students || []) {
+        const adm = safeTrim(s.admissionNo);
+        if (adm) roster.push(adm);
+      }
+    }
+    const firstResult = roster.length
+      ? await MockExamResult.findOne({ tenantId, examId, admissionNo: { $in: roster }, isdeleted: false }, { admissionNo: 1 }).lean()
+      : await MockExamResult.findOne({ tenantId, examId, isdeleted: false }, { admissionNo: 1 }).lean();
+    targetAdmNo = safeTrim(firstResult?.admissionNo || roster[0]);
+  }
+
+  if (!targetAdmNo) return { error: { status: 404, message: 'No student result found for preview' } };
+
+  const [profile, result, examStats] = await Promise.all([
+    StudentProfile.findOne(
+      { tenantId, admissionNo: targetAdmNo, isdeleted: false },
+      { admissionNo: 1, registrationNumber: 1, portalStudentId: 1, 'student.name': 1, 'student.email': 1, batchId: 1, programName: 1 }
+    ).lean(),
+    MockExamResult.findOne({ tenantId, examId, admissionNo: targetAdmNo, isdeleted: false }, { admissionNo: 1, obtainedMarks: 1, totalMarks: 1, sectionResults: 1 }).lean(),
+    computeExamStats(tenantId, examId)
+  ]);
+
+  if (!profile) return { error: { status: 404, message: 'Student not found' } };
+  const batch = profile.batchId
+    ? await Batch.findOne({ tenantId, $or: [{ batchId: profile.batchId }, { batchCode: profile.batchId }] }, { batchId: 1, batchCode: 1, batchName: 1 }).lean()
+    : null;
+
+  const reportData = buildStudentPerformanceReportData(profile, result || { sectionResults: [], obtainedMarks: 0, totalMarks: exam.totalMarks || 0 }, exam, batch, examStats);
+  return { reportData, recipientEmail: safeTrim(profile?.student?.email) };
+};
+
+const previewExamResultEmail = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const examId = safeTrim(req.body?.examId);
+    const admissionNo = safeTrim(req.body?.admissionNo);
+    const batchId = safeTrim(req.body?.batchId);
+    const batchIds = Array.isArray(req.body?.batchIds) ? req.body.batchIds.map(safeTrim).filter(Boolean) : [];
+    if (!tenantId || !examId) return res.status(400).json({ status: false, message: 'tenantId and examId are required' });
+
+    const resolved = await resolveSingleSamplePerformanceReport({ tenantId, examId, admissionNo, batchId, batchIds });
+    if (resolved.error) return res.status(resolved.error.status).json({ status: false, message: resolved.error.message });
+
+    const { reportData, recipientEmail } = resolved;
+    const data = {
+      studentName: reportData.studentName,
+      regNo: reportData.regNo,
+      examName: reportData.examName,
+      studentDetails: buildStudentDetailsHtml(reportData),
+      resultGrid: buildResultGridHtml(reportData)
+    };
+    return res.status(200).json({
+      status: true,
+      data: {
+        recipientEmail,
+        subject: renderTemplate(EXAM_RESULT_SUBJECT, data),
+        body: renderTemplate(EXAM_RESULT_BODY, data),
+        reportData
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const downloadPerformanceReportPdf = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const examId = safeTrim(req.body?.examId);
+    const admissionNo = safeTrim(req.body?.admissionNo);
+    const batchId = safeTrim(req.body?.batchId);
+    if (!tenantId || !examId) return res.status(400).json({ status: false, message: 'tenantId and examId are required' });
+
+    const resolved = await resolveSingleSamplePerformanceReport({ tenantId, examId, admissionNo, batchId });
+    if (resolved.error) return res.status(resolved.error.status).json({ status: false, message: resolved.error.message });
+
+    const { reportData } = resolved;
+    const pdfBuffer = await generatePerformanceReportPdfBuffer(reportData);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${reportData.filename}"`);
+    return res.status(200).send(pdfBuffer);
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const listExamResultBatchStudents = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const examId = safeTrim(req.body?.examId);
+    const batchIdInput = safeTrim(req.body?.batchId);
+    const batchIdsInput = Array.isArray(req.body?.batchIds)
+      ? [...new Set(req.body.batchIds.map(safeTrim).filter(Boolean))]
+      : [];
+    const targetBatches = batchIdsInput.length ? batchIdsInput : batchIdInput ? [batchIdInput] : [];
+    if (!tenantId || !examId || !targetBatches.length) {
+      return res.status(400).json({ status: false, message: 'tenantId, examId and batchIds (or batchId) are required' });
+    }
+
+    const batchDocs = await Batch.find(
+      { tenantId, $or: [{ batchId: { $in: targetBatches } }, { batchCode: { $in: targetBatches } }] },
+      { batchId: 1, batchCode: 1, batchName: 1 }
+    ).lean();
+    const candidates = [
+      ...new Set([...targetBatches, ...batchDocs.map((b) => b.batchId), ...batchDocs.map((b) => b.batchCode)].filter(Boolean))
+    ];
+    const batchNameMap = new Map();
+    for (const b of batchDocs) {
+      batchNameMap.set(b.batchId, b.batchName || b.batchCode);
+      batchNameMap.set(b.batchCode, b.batchName || b.batchCode);
+    }
+
+    const assignments = await MockExamBatchAssign.find(
+      { tenantId, examId, batchId: { $in: candidates }, isdeleted: false, status: 'enabled' },
+      { students: 1 }
+    ).lean();
+
+    const admSet = new Set();
+    for (const a of assignments) {
+      for (const s of a.students || []) {
+        const adm = safeTrim(s.admissionNo);
+        if (adm) admSet.add(adm);
+      }
+    }
+    const roster = [...admSet];
+    if (!roster.length) {
+      return res.status(200).json({ status: true, data: [] });
+    }
+
+    const [profiles, results] = await Promise.all([
+      StudentProfile.find(
+        { tenantId, admissionNo: { $in: roster }, isdeleted: false },
+        { admissionNo: 1, batchId: 1, 'student.name': 1, 'student.email': 1 }
+      )
+        .sort({ 'student.name': 1 })
+        .lean(),
+      MockExamResult.find({ tenantId, examId, admissionNo: { $in: roster }, isdeleted: false }, { admissionNo: 1 }).lean()
+    ]);
+
+    const resultAdmSet = new Set(results.map((r) => safeTrim(r.admissionNo)));
+    const data = profiles.map((p) => ({
+      admissionNo: safeTrim(p.admissionNo),
+      name: safeTrim(p.student?.name) || safeTrim(p.admissionNo),
+      email: safeTrim(p.student?.email) || null,
+      batchId: safeTrim(p.batchId) || null,
+      batchName: batchNameMap.get(safeTrim(p.batchId)) || null,
+      hasResult: resultAdmSet.has(safeTrim(p.admissionNo))
+    }));
+
+    return res.status(200).json({ status: true, data });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   createTemplate,
   updateTemplate,
@@ -1082,5 +1430,8 @@ export default {
   sendExcelBulkMail,
   uploadEmailAsset,
   sendExamResultEmail,
+  previewExamResultEmail,
+  downloadPerformanceReportPdf,
+  listExamResultBatchStudents,
   sendAdmissionAcknowledgement
 };

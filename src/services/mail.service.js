@@ -5,8 +5,11 @@ import { sendSesEmail } from './ses.service.js';
 // Flip EMAIL_PROVIDER back to MAILGUN for an instant rollback if SES has delivery issues.
 export const getActiveEmailProvider = () => (String(process.env.EMAIL_PROVIDER || 'MAILGUN').trim().toUpperCase() === 'SES' ? 'SES' : 'MAILGUN');
 
-export const sendEmail = async ({ to, subject, html, text }) => {
+export const sendEmail = async ({ to, subject, html, text, attachments }) => {
   const provider = getActiveEmailProvider();
-  const resp = provider === 'SES' ? await sendSesEmail({ to, subject, html, text }) : await sendMailgunEmail({ to, subject, html, text });
+  const resp =
+    provider === 'SES'
+      ? await sendSesEmail({ to, subject, html, text, attachments })
+      : await sendMailgunEmail({ to, subject, html, text, attachments });
   return { provider, ...resp };
 };

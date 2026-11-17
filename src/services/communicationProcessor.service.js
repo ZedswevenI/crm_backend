@@ -1,6 +1,7 @@
 import CommunicationCampaign from '../models/communicationcampaign.model.js';
 import CommunicationRecipientLog from '../models/communicationrecipientlog.model.js';
 import { sendEmail } from './mail.service.js';
+import { buildPerformanceReportFilename, generatePerformanceReportPdfBuffer } from '../helpers/performanceReportPdf.helper.js';
 
 export const processCommunicationCampaign = async ({ tenantId, campaignId }) => {
   console.log('method called for email');
@@ -24,11 +25,20 @@ export const processCommunicationCampaign = async ({ tenantId, campaignId }) => 
     .limit(100);
   for (const log of logs) {
     try {
+      const attachments = [];
+      if (log.reportPayload) {
+        const pdfBuffer = await generatePerformanceReportPdfBuffer(log.reportPayload);
+        const filename =
+          log.reportPayload.filename ||
+          buildPerformanceReportFilename(log.reportPayload.studentName || log.studentName, log.reportPayload.regNo || log.admissionNo);
+        attachments.push({ filename, contentType: 'application/pdf', data: pdfBuffer });
+      }
       const resp = await sendEmail({
         to: log.recipientEmail,
         subject: log.subject,
         html: log.body,
-        text: ''
+        text: '',
+        attachments
       });
       log.status = 'SENT';
       log.sentAt = Date.now();
