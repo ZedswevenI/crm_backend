@@ -35,15 +35,15 @@ export const generatePerformanceReportPdfBuffer = (reportData) =>
       const mr = 40;
       const contentW = pageW - ml - mr;
 
-      // Top-right Z7i logo in header (larger)
-      const logoW = 128;
-      let lineY = 90;
+      // Top-right Z7i logo in header (larger, with header line close below)
+      const logoW = 165;
+      let lineY = 68;
       if (fs.existsSync(LOGO_PATH)) {
         try {
-          doc.image(LOGO_PATH, pageW - mr - logoW, 24, { width: logoW });
-          lineY = 92;
+          doc.image(LOGO_PATH, pageW - mr - logoW, 20, { width: logoW });
+          lineY = 66;
         } catch {
-          lineY = 64;
+          lineY = 56;
         }
       }
 
@@ -55,7 +55,7 @@ export const generatePerformanceReportPdfBuffer = (reportData) =>
         .stroke();
 
       // Heading below the header: Academic Performance Report
-      let y = lineY + 14;
+      let y = lineY + 12;
       doc
         .font('Helvetica-Bold')
         .fontSize(15)
@@ -66,7 +66,7 @@ export const generatePerformanceReportPdfBuffer = (reportData) =>
         });
 
       // Student Details sub-heading on the left side
-      y = doc.y + 12;
+      y = doc.y + 10;
       doc
         .font('Helvetica-Bold')
         .fontSize(11)
@@ -97,30 +97,31 @@ export const generatePerformanceReportPdfBuffer = (reportData) =>
         y += 18;
       }
 
-      // Scorecard heading
+      // Score Card heading
       y += 14;
       doc
         .font('Helvetica-Bold')
         .fontSize(14)
         .fillColor('#111111')
-        .text('Scorecard', ml, y, {
+        .text('Score Card', ml, y, {
           width: contentW,
           align: 'center'
         });
 
-      // Exam Name below Scorecard on the left side
+      // Exam Name below Score Card on the left side
       y = doc.y + 10;
       doc
         .font('Helvetica-Bold')
         .fontSize(11)
         .fillColor('#111111')
-        .text(reportData.examName || 'Exam Performance', ml, y, {
+        .text(`Exam Name: ${reportData.examName || 'Exam Performance'}`, ml, y, {
           width: contentW,
           align: 'left'
         });
       y = doc.y + 10;
 
       // Grid: Subject | Your Marks | Out of | Highest | Average
+      // Header row and Total row in bold; all data rows in normal weight
       const colWidths = [
         Math.round(contentW * 0.28),
         Math.round(contentW * 0.18),
@@ -138,10 +139,10 @@ export const generatePerformanceReportPdfBuffer = (reportData) =>
       const drawRow = (cells, rowY, { isHeader = false, isTotal = false } = {}) => {
         let x = ml;
         doc.lineWidth(0.8).strokeColor('#000000');
+        const useBold = isHeader || isTotal;
         for (let i = 0; i < cells.length; i++) {
           const w = colWidths[i];
           doc.rect(x, rowY, w, rowH).stroke();
-          const useBold = isHeader || isTotal || i === 2;
           doc
             .font(useBold ? 'Helvetica-Bold' : 'Helvetica')
             .fontSize(10)
@@ -171,7 +172,8 @@ export const generatePerformanceReportPdfBuffer = (reportData) =>
       // Regards footer
       y += rowH + 24;
       doc.font('Helvetica').fontSize(10.5).fillColor('#222222').text('Regards,', ml, y);
-      doc.font('Helvetica-Bold').fontSize(10.5).fillColor('#111111').text('Team Z7i', ml, y + 16);
+      doc.font('Helvetica-Bold').fontSize(10.5).fillColor('#111111').text('Team Z7i', ml, y + 15);
+      doc.font('Helvetica').fontSize(10.5).fillColor('#222222').text('Coimbatore', ml, y + 30);
 
       doc.end();
     } catch (err) {

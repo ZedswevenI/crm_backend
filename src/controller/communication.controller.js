@@ -72,20 +72,24 @@ const buildExamResultEmailData = (result, exam) => {
 const computeExamStats = async (tenantId, examId) => {
   const allResults = await MockExamResult.find(
     { tenantId, examId, isdeleted: false },
-    { obtainedMarks: 1, sectionResults: 1 }
+    { obtainedMarks: 1, totalMarks: 1, sectionResults: 1 }
   ).lean();
 
   const sectionBuckets = new Map();
+  const sectionTotalMarks = new Map();
   let overallHighest = 0;
   let overallSum = 0;
+  let overallTotalMarks = 0;
 
   for (const r of allResults) {
     const tot = Number(r.obtainedMarks ?? 0);
     if (tot > overallHighest) overallHighest = tot;
     overallSum += tot;
+    if (!overallTotalMarks && r.totalMarks) overallTotalMarks = Number(r.totalMarks);
     for (const sec of r.sectionResults || []) {
       const sid = safeTrim(sec.sectionId);
       if (!sid) continue;
+      if (!sectionTotalMarks.has(sid) && sec.totalMarks) sectionTotalMarks.set(sid, Number(sec.totalMarks));
       const val = Number(sec.obtainedMarks ?? 0);
       const cur = sectionBuckets.get(sid) || { max: -Infinity, sum: 0, count: 0 };
       if (val > cur.max) cur.max = val;
@@ -105,6 +109,8 @@ const computeExamStats = async (tenantId, examId) => {
 
   return {
     sectionStats,
+    sectionTotalMarks,
+    overallTotalMarks,
     overallHighest: allResults.length ? overallHighest : 0,
     overallAverage: allResults.length ? Math.round(overallSum / allResults.length) : 0
   };
@@ -155,6 +161,53 @@ const buildStudentPerformanceReportData = (profile, result, exam, batch, stats) 
   };
 };
 
+const buildAbsentStudentPerformanceReportData = (profile, exam, batch, stats) => {
+  const studentName = safeTrim(profile?.student?.name) || safeTrim(profile?.admissionNo) || 'Student';
+  const admissionNo = safeTrim(profile?.admissionNo);
+  const regNo = safeTrim(profile?.registrationNumber) || admissionNo;
+  const enrollmentNo = safeTrim(profile?.portalStudentId) || regNo || admissionNo;
+  const batchName = safeTrim(batch?.batchName) || safeTrim(batch?.batchCode) || '-';
+  const programName = safeTrim(profile?.programName) || '-';
+  const examName = safeTrim(exam?.examName) || 'Exam';
+
+  const sections = Array.isArray(exam?.sections) ? exam.sections : [];
+  const rows = sections.map((sec) => {
+    const sid = safeTrim(sec.sectionId);
+    const subject = safeTrim(sec.sectionName) || sid;
+    const secStat = stats?.sectionStats?.get(sid) || { highest: 0, average: 0 };
+    const outOf = stats?.sectionTotalMarks?.get(sid) ?? Number(sec.totalMarks ?? 0);
+    return {
+      subject,
+      yourMarks: 'AB',
+      outOf,
+      highest: secStat.highest,
+      average: secStat.average
+    };
+  });
+
+  const outOfTotal = Number(exam?.totalMarks || stats?.overallTotalMarks || 0);
+
+  return {
+    isAbsent: true,
+    classNo: profile?.classNo ?? '',
+    studentName,
+    regNo,
+    enrollmentNo,
+    admissionNo,
+    batchName,
+    programName,
+    examName,
+    filename: null,
+    rows,
+    total: {
+      yourMarks: 'AB',
+      outOf: outOfTotal,
+      highest: stats?.overallHighest ?? 0,
+      average: stats?.overallAverage ?? 0
+    }
+  };
+};
+
 const buildStudentDetailsHtml = (reportData) => {
   const rows = [
     ['Name', reportData?.studentName || '-'],
@@ -184,8 +237,8 @@ const buildResultGridHtml = (reportData) => {
       (r) =>
         `<tr>
           <td style="padding:7px 14px;border:1px solid #000;text-align:center;">${escapeHtml(r.subject)}</td>
-          <td style="padding:7px 14px;border:1px solid #000;text-align:center;">${r.yourMarks}</td>
-          <td style="padding:7px 14px;border:1px solid #000;text-align:center;font-weight:bold;">${r.outOf}</td>
+          <td style="padding:7px 14px;border:1px solid #000;text-align:center;">${escapeHtml(r.yourMarks)}</td>
+          <td style="padding:7px 14px;border:1px solid #000;text-align:center;">${r.outOf}</td>
           <td style="padding:7px 14px;border:1px solid #000;text-align:center;">${r.highest}</td>
           <td style="padding:7px 14px;border:1px solid #000;text-align:center;">${r.average}</td>
         </tr>`
@@ -194,26 +247,29 @@ const buildResultGridHtml = (reportData) => {
 
   return `<table style="border-collapse:collapse;margin:14px 0;width:100%;max-width:640px;">
     <thead>
-      <tr>
-        <th style="padding:8px 14px;border:1px solid #000;text-align:center;">Subject</th>
-        <th style="padding:8px 14px;border:1px solid #000;text-align:center;">Your Marks</th>
-        <th style="padding:8px 14px;border:1px solid #000;text-align:center;">Out of</th>
-        <th style="padding:8px 14px;border:1px solid #000;text-align:center;">Highest</th>
-        <th style="padding:8px 14px;border:1px solid #000;text-align:center;">Average</th>
+      <tr style="font-weight:bold;">
+        <th style="padding:8px 14px;border:1px solid #000;text-align:center;font-weight:bold;">Subject</th>
+        <th style="padding:8px 14px;border:1px solid #000;text-align:center;font-weight:bold;">Your Marks</th>
+        <th style="padding:8px 14px;border:1px solid #000;text-align:center;font-weight:bold;">Out of</th>
+        <th style="padding:8px 14px;border:1px solid #000;text-align:center;font-weight:bold;">Highest</th>
+        <th style="padding:8px 14px;border:1px solid #000;text-align:center;font-weight:bold;">Average</th>
       </tr>
     </thead>
     <tbody>
       ${rowsHtml}
       <tr style="font-weight:bold;">
-        <td style="padding:8px 14px;border:1px solid #000;text-align:center;">Total</td>
-        <td style="padding:8px 14px;border:1px solid #000;text-align:center;">${tot.yourMarks}</td>
-        <td style="padding:8px 14px;border:1px solid #000;text-align:center;">${tot.outOf}</td>
-        <td style="padding:8px 14px;border:1px solid #000;text-align:center;">${tot.highest}</td>
-        <td style="padding:8px 14px;border:1px solid #000;text-align:center;">${tot.average}</td>
+        <td style="padding:8px 14px;border:1px solid #000;text-align:center;font-weight:bold;">Total</td>
+        <td style="padding:8px 14px;border:1px solid #000;text-align:center;font-weight:bold;">${escapeHtml(tot.yourMarks)}</td>
+        <td style="padding:8px 14px;border:1px solid #000;text-align:center;font-weight:bold;">${tot.outOf}</td>
+        <td style="padding:8px 14px;border:1px solid #000;text-align:center;font-weight:bold;">${tot.highest}</td>
+        <td style="padding:8px 14px;border:1px solid #000;text-align:center;font-weight:bold;">${tot.average}</td>
       </tr>
     </tbody>
   </table>`;
 };
+
+const buildAbsentMessageHtml = ({ studentName, classNo, batchName, examName }) =>
+  `<p style="margin-top:12px;">We like to inform you that <b>${escapeHtml(studentName)}</b> (Class ${escapeHtml(classNo || '-')}, Batch ${escapeHtml(batchName || '-')}) was marked absent for <b>${escapeHtml(examName)}</b>.<br/>Please reach out to the center if you believe this is incorrect.</p>`;
 
 // Fixed content — no user-authored template allowed for exam-result mail by design.
 const EXAM_RESULT_SUBJECT = '{{examName}} - Academic Performance Report';
@@ -221,13 +277,18 @@ const EXAM_RESULT_BODY = `<p>Dear Parents,</p>
 <p>Please find the performance report of the <b>{{examName}}</b> attached below.</p>
 {{studentDetails}}
 {{resultGrid}}
+{{absentMessage}}
 {{noteBlock}}
-<p style="margin-top:16px;">Regards,<br/><b>Team Z7i</b></p>`;
+<p style="margin-top:16px;">Regards,<br/><b>Team Z7i</b><br/>Coimbatore</p>`;
 
 const EXAM_ABSENT_SUBJECT = '{{examName}} - Absence Notice';
-const EXAM_ABSENT_BODY = `<p>Dear {{parentName}},</p>
-<p>We wish to inform you that <b>{{studentName}}</b> (Class {{classNo}}, Batch {{batchName}}) was marked absent for <b>{{examName}}</b>.</p>
-<p>Please reach out to the center if you believe this is incorrect.</p>`;
+const EXAM_ABSENT_BODY = `<p>Dear Parents,</p>
+<p>Please find the performance report of the <b>{{examName}}</b> below.</p>
+{{studentDetails}}
+{{resultGrid}}
+{{absentMessage}}
+{{noteBlock}}
+<p style="margin-top:16px;">Regards,<br/><b>Team Z7i</b><br/>Coimbatore</p>`;
 
 const escapeHtml = (v) =>
   String(v ?? '')
@@ -1154,6 +1215,7 @@ const sendExamResultEmail = async (req, res, next) => {
         examName: reportPayload.examName,
         studentDetails: buildStudentDetailsHtml(reportPayload),
         resultGrid: buildResultGridHtml(reportPayload),
+        absentMessage: '',
         noteBlock: buildNoteBlockHtml(note)
       };
       const subject = renderTemplate(EXAM_RESULT_SUBJECT, data);
@@ -1170,16 +1232,23 @@ const sendExamResultEmail = async (req, res, next) => {
         if (hasValidEmail) queuedAbsentCount++;
         else skippedNoEmailCount++;
         const batch = profile.batchId ? batchMap.get(profile.batchId) : null;
+        const absentReport = buildAbsentStudentPerformanceReportData(profile, exam, batch, examStats);
         const data = {
-          studentName: profile?.student?.name || '',
-          parentName: safeTrim(profile?.student?.parentName) || 'Parent',
-          classNo: profile?.classNo ?? '',
-          batchName: batch?.batchName || '',
-          examName: exam.examName || ''
+          studentName: absentReport.studentName,
+          examName: absentReport.examName,
+          studentDetails: buildStudentDetailsHtml(absentReport),
+          resultGrid: buildResultGridHtml(absentReport),
+          absentMessage: buildAbsentMessageHtml({
+            studentName: absentReport.studentName,
+            classNo: profile?.classNo ?? '',
+            batchName: absentReport.batchName,
+            examName: absentReport.examName
+          }),
+          noteBlock: buildNoteBlockHtml(note)
         };
         const subject = renderTemplate(EXAM_ABSENT_SUBJECT, data);
         const body = renderTemplate(EXAM_ABSENT_BODY, data);
-        logDocs.push(buildLogBase(admNo, profile, subject, body, hasValidEmail, email));
+        logDocs.push(buildLogBase(admNo, profile, subject, body, hasValidEmail, email, null));
       }
     }
     const skippedNoResultCount = notifyAbsentees ? 0 : absentList.length;
@@ -1295,7 +1364,7 @@ const resolveSingleSamplePerformanceReport = async ({ tenantId, examId, admissio
   const [profile, result, examStats] = await Promise.all([
     StudentProfile.findOne(
       { tenantId, admissionNo: targetAdmNo, isdeleted: false },
-      { admissionNo: 1, registrationNumber: 1, portalStudentId: 1, 'student.name': 1, 'student.email': 1, 'student.email1': 1, 'student.email2': 1, batchId: 1, programName: 1 }
+      { admissionNo: 1, registrationNumber: 1, portalStudentId: 1, classNo: 1, 'student.name': 1, 'student.email': 1, 'student.email1': 1, 'student.email2': 1, batchId: 1, programName: 1 }
     ).lean(),
     MockExamResult.findOne({ tenantId, examId, admissionNo: targetAdmNo, isdeleted: false }, { admissionNo: 1, obtainedMarks: 1, totalMarks: 1, sectionResults: 1 }).lean(),
     computeExamStats(tenantId, examId)
@@ -1306,7 +1375,9 @@ const resolveSingleSamplePerformanceReport = async ({ tenantId, examId, admissio
     ? await Batch.findOne({ tenantId, $or: [{ batchId: profile.batchId }, { batchCode: profile.batchId }] }, { batchId: 1, batchCode: 1, batchName: 1 }).lean()
     : null;
 
-  const reportData = buildStudentPerformanceReportData(profile, result || { sectionResults: [], obtainedMarks: 0, totalMarks: exam.totalMarks || 0 }, exam, batch, examStats);
+  const reportData = result
+    ? buildStudentPerformanceReportData(profile, result, exam, batch, examStats)
+    : buildAbsentStudentPerformanceReportData(profile, exam, batch, examStats);
   return { reportData, recipientEmail: collectStudentEmails(profile).join(', ') };
 };
 
@@ -1330,14 +1401,23 @@ const previewExamResultEmail = async (req, res, next) => {
       examName: reportData.examName,
       studentDetails: buildStudentDetailsHtml(reportData),
       resultGrid: buildResultGridHtml(reportData),
+      absentMessage: reportData.isAbsent
+        ? buildAbsentMessageHtml({
+            studentName: reportData.studentName,
+            classNo: reportData.classNo,
+            batchName: reportData.batchName,
+            examName: reportData.examName
+          })
+        : '',
       noteBlock: buildNoteBlockHtml(note)
     };
+    const isAbsent = !!reportData.isAbsent;
     return res.status(200).json({
       status: true,
       data: {
         recipientEmail,
-        subject: renderTemplate(EXAM_RESULT_SUBJECT, data),
-        body: renderTemplate(EXAM_RESULT_BODY, data),
+        subject: renderTemplate(isAbsent ? EXAM_ABSENT_SUBJECT : EXAM_RESULT_SUBJECT, data),
+        body: renderTemplate(isAbsent ? EXAM_ABSENT_BODY : EXAM_RESULT_BODY, data),
         reportData
       }
     });
