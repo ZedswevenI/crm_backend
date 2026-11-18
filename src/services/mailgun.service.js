@@ -19,9 +19,11 @@ export const sendMailgunEmail = async ({ to, subject, html, text, attachments = 
 
   const mg = getClient();
 
+  const toList = Array.isArray(to) ? to : String(to || '').split(',').map((e) => e.trim()).filter(Boolean);
+
   const payload = {
     from: String(process.env.MAILGUN_FROM_EMAIL).trim(),
-    to,
+    to: toList,
     subject,
     html,
     text: text || '',

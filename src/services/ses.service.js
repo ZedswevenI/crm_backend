@@ -6,11 +6,16 @@ const sesClient = new SESClient({ region });
 
 const wrapBase64 = (buf) => (buf.toString('base64').match(/.{1,76}/g) || []).join('\r\n');
 
-const buildRawMimeMessage = ({ from, to, subject, html, text, attachments }) => {
+const normalizeToAddresses = (to) =>
+  (Array.isArray(to) ? to : String(to || '').split(','))
+    .map((e) => String(e || '').trim())
+    .filter(Boolean);
+
+const buildRawMimeMessage = ({ from, toAddresses, subject, html, text, attachments }) => {
   const boundary = `----=_Part_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   const lines = [
     `From: ${from}`,
-    `To: ${to}`,
+    `To: ${toAddresses.join(', ')}`,
     `Subject: =?UTF-8?B?${Buffer.from(subject || '', 'utf8').toString('base64')}?=`,
     'MIME-Version: 1.0',
     `Content-Type: multipart/mixed; boundary="${boundary}"`,
@@ -44,12 +49,14 @@ const buildRawMimeMessage = ({ from, to, subject, html, text, attachments }) => 
 export const sendSesEmail = async ({ to, subject, html, text, attachments = [] }) => {
   if (!process.env.AWS_SES_FROM_EMAIL) throw new Error('AWS_SES_FROM_EMAIL missing');
   const from = String(process.env.AWS_SES_FROM_EMAIL).trim();
+  const toAddresses = normalizeToAddresses(to);
+  if (!toAddresses.length) throw new Error('Recipient email missing');
 
   if (Array.isArray(attachments) && attachments.length) {
-    const rawData = buildRawMimeMessage({ from, to, subject, html, text, attachments });
+    const rawData = buildRawMimeMessage({ from, toAddresses, subject, html, text, attachments });
     const command = new SendRawEmailCommand({
       Source: from,
-      Destinations: [to],
+      Destinations: toAddresses,
       RawMessage: { Data: rawData }
     });
     const resp = await sesClient.send(command);
@@ -61,7 +68,7 @@ export const sendSesEmail = async ({ to, subject, html, text, attachments = [] }
 
   const command = new SendEmailCommand({
     Source: from,
-    Destination: { ToAddresses: [to] },
+    Destination: { ToAddresses: toAddresses },
     Message: {
       Subject: { Data: subject, Charset: 'UTF-8' },
       Body: body

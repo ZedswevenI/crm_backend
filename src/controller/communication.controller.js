@@ -28,6 +28,23 @@ const extractVariables = (subject = '', body = '') => {
 
 const isValidEmailAddress = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
 
+const collectStudentEmails = (profile) => {
+  const raw = [profile?.student?.email, profile?.student?.email1, profile?.student?.email2];
+  return [
+    ...new Set(
+      raw
+        .map((e) => safeTrim(e).toLowerCase())
+        .filter((e) => isValidEmailAddress(e))
+    )
+  ];
+};
+
+const buildNoteBlockHtml = (note) => {
+  const cleaned = safeTrim(note);
+  if (!cleaned) return '';
+  return `<p style="color:#0d6efd;margin:12px 0;"><b>Note:</b> ${escapeHtml(cleaned)}</p>`;
+};
+
 // Section names on MockExam already double as subject names (confirmed live: "PHYSICS"/"CHEMISTRY"/
 // "MATHS"), so no separate Subject lookup is needed for the per-subject marks table.
 const buildExamResultEmailData = (result, exam) => {
@@ -200,10 +217,12 @@ const buildResultGridHtml = (reportData) => {
 
 // Fixed content — no user-authored template allowed for exam-result mail by design.
 const EXAM_RESULT_SUBJECT = '{{examName}} - Academic Performance Report';
-const EXAM_RESULT_BODY = `<p>Dear {{studentName}} :</p>
+const EXAM_RESULT_BODY = `<p>Dear Parents,</p>
 <p>Please find the performance report of the <b>{{examName}}</b> attached below.</p>
 {{studentDetails}}
-{{resultGrid}}`;
+{{resultGrid}}
+{{noteBlock}}
+<p style="margin-top:16px;">Regards,<br/><b>Team Z7i</b></p>`;
 
 const EXAM_ABSENT_SUBJECT = '{{examName}} - Absence Notice';
 const EXAM_ABSENT_BODY = `<p>Dear {{parentName}},</p>
@@ -972,6 +991,7 @@ const sendExamResultEmail = async (req, res, next) => {
       : [];
     const targetBatchInputs = batchIdsInput.length ? batchIdsInput : batchIdInput ? [batchIdInput] : [];
     const notifyAbsentees = req.body?.notifyAbsentees === true;
+    const note = safeTrim(req.body?.note);
 
     const exam = await MockExam.findOne({ tenantId, examId, isdeleted: false }, { examName: 1, examCode: 1, totalMarks: 1, sections: 1, status: 1 }).lean();
     if (!exam) return res.status(404).json({ status: false, message: 'Exam not found' });
@@ -1029,7 +1049,7 @@ const sendExamResultEmail = async (req, res, next) => {
       MockExamResult.find({ tenantId, examId, admissionNo: { $in: rosterAdmissionNos }, isdeleted: false }, { admissionNo: 1, obtainedMarks: 1, totalMarks: 1, sectionResults: 1 }).lean(),
       StudentProfile.find(
         { tenantId, admissionNo: { $in: rosterAdmissionNos }, isdeleted: false },
-        { admissionNo: 1, registrationNumber: 1, portalStudentId: 1, studentId: 1, 'student.name': 1, 'student.email': 1, 'student.parentName': 1, classNo: 1, batchId: 1, centerId: 1, centerCode: 1, programId: 1, programName: 1 }
+        { admissionNo: 1, registrationNumber: 1, portalStudentId: 1, studentId: 1, 'student.name': 1, 'student.email': 1, 'student.email1': 1, 'student.email2': 1, 'student.parentName': 1, classNo: 1, batchId: 1, centerId: 1, centerCode: 1, programId: 1, programName: 1 }
       ).lean(),
       computeExamStats(tenantId, examId)
     ]);
@@ -1075,7 +1095,8 @@ const sendExamResultEmail = async (req, res, next) => {
         admissionNos: admissionNosInput.length ? admissionNosInput : null,
         batchId: batchIdInput || null,
         batchIds: targetBatchInputs.length ? targetBatchInputs : null,
-        notifyAbsentees
+        notifyAbsentees,
+        note: note || null
       },
       sendType,
       scheduledAt: sendType === 'SCHEDULED' ? scheduledAt : null,
@@ -1120,8 +1141,9 @@ const sendExamResultEmail = async (req, res, next) => {
     for (const admNo of withResult) {
       const profile = profileMap.get(admNo) || {};
       const result = resultMap.get(admNo);
-      const email = safeTrim(profile?.student?.email).toLowerCase();
-      const hasValidEmail = isValidEmailAddress(email);
+      const validEmails = collectStudentEmails(profile);
+      const hasValidEmail = validEmails.length > 0;
+      const email = validEmails.join(', ');
       if (hasValidEmail) queuedMarksCount++;
       else skippedNoEmailCount++;
       const batch = profile.batchId ? batchMap.get(profile.batchId) : null;
@@ -1131,7 +1153,8 @@ const sendExamResultEmail = async (req, res, next) => {
         regNo: reportPayload.regNo,
         examName: reportPayload.examName,
         studentDetails: buildStudentDetailsHtml(reportPayload),
-        resultGrid: buildResultGridHtml(reportPayload)
+        resultGrid: buildResultGridHtml(reportPayload),
+        noteBlock: buildNoteBlockHtml(note)
       };
       const subject = renderTemplate(EXAM_RESULT_SUBJECT, data);
       const body = renderTemplate(EXAM_RESULT_BODY, data);
@@ -1141,8 +1164,9 @@ const sendExamResultEmail = async (req, res, next) => {
     if (notifyAbsentees) {
       for (const admNo of absentList) {
         const profile = profileMap.get(admNo) || {};
-        const email = safeTrim(profile?.student?.email).toLowerCase();
-        const hasValidEmail = isValidEmailAddress(email);
+        const validEmails = collectStudentEmails(profile);
+        const hasValidEmail = validEmails.length > 0;
+        const email = validEmails.join(', ');
         if (hasValidEmail) queuedAbsentCount++;
         else skippedNoEmailCount++;
         const batch = profile.batchId ? batchMap.get(profile.batchId) : null;
@@ -1271,7 +1295,7 @@ const resolveSingleSamplePerformanceReport = async ({ tenantId, examId, admissio
   const [profile, result, examStats] = await Promise.all([
     StudentProfile.findOne(
       { tenantId, admissionNo: targetAdmNo, isdeleted: false },
-      { admissionNo: 1, registrationNumber: 1, portalStudentId: 1, 'student.name': 1, 'student.email': 1, batchId: 1, programName: 1 }
+      { admissionNo: 1, registrationNumber: 1, portalStudentId: 1, 'student.name': 1, 'student.email': 1, 'student.email1': 1, 'student.email2': 1, batchId: 1, programName: 1 }
     ).lean(),
     MockExamResult.findOne({ tenantId, examId, admissionNo: targetAdmNo, isdeleted: false }, { admissionNo: 1, obtainedMarks: 1, totalMarks: 1, sectionResults: 1 }).lean(),
     computeExamStats(tenantId, examId)
@@ -1283,7 +1307,7 @@ const resolveSingleSamplePerformanceReport = async ({ tenantId, examId, admissio
     : null;
 
   const reportData = buildStudentPerformanceReportData(profile, result || { sectionResults: [], obtainedMarks: 0, totalMarks: exam.totalMarks || 0 }, exam, batch, examStats);
-  return { reportData, recipientEmail: safeTrim(profile?.student?.email) };
+  return { reportData, recipientEmail: collectStudentEmails(profile).join(', ') };
 };
 
 const previewExamResultEmail = async (req, res, next) => {
@@ -1293,6 +1317,7 @@ const previewExamResultEmail = async (req, res, next) => {
     const admissionNo = safeTrim(req.body?.admissionNo);
     const batchId = safeTrim(req.body?.batchId);
     const batchIds = Array.isArray(req.body?.batchIds) ? req.body.batchIds.map(safeTrim).filter(Boolean) : [];
+    const note = safeTrim(req.body?.note);
     if (!tenantId || !examId) return res.status(400).json({ status: false, message: 'tenantId and examId are required' });
 
     const resolved = await resolveSingleSamplePerformanceReport({ tenantId, examId, admissionNo, batchId, batchIds });
@@ -1304,7 +1329,8 @@ const previewExamResultEmail = async (req, res, next) => {
       regNo: reportData.regNo,
       examName: reportData.examName,
       studentDetails: buildStudentDetailsHtml(reportData),
-      resultGrid: buildResultGridHtml(reportData)
+      resultGrid: buildResultGridHtml(reportData),
+      noteBlock: buildNoteBlockHtml(note)
     };
     return res.status(200).json({
       status: true,
@@ -1387,7 +1413,7 @@ const listExamResultBatchStudents = async (req, res, next) => {
     const [profiles, results] = await Promise.all([
       StudentProfile.find(
         { tenantId, admissionNo: { $in: roster }, isdeleted: false },
-        { admissionNo: 1, batchId: 1, 'student.name': 1, 'student.email': 1 }
+        { admissionNo: 1, batchId: 1, 'student.name': 1, 'student.email': 1, 'student.email1': 1, 'student.email2': 1 }
       )
         .sort({ 'student.name': 1 })
         .lean(),
@@ -1395,14 +1421,17 @@ const listExamResultBatchStudents = async (req, res, next) => {
     ]);
 
     const resultAdmSet = new Set(results.map((r) => safeTrim(r.admissionNo)));
-    const data = profiles.map((p) => ({
-      admissionNo: safeTrim(p.admissionNo),
-      name: safeTrim(p.student?.name) || safeTrim(p.admissionNo),
-      email: safeTrim(p.student?.email) || null,
-      batchId: safeTrim(p.batchId) || null,
-      batchName: batchNameMap.get(safeTrim(p.batchId)) || null,
-      hasResult: resultAdmSet.has(safeTrim(p.admissionNo))
-    }));
+    const data = profiles.map((p) => {
+      const emails = collectStudentEmails(p);
+      return {
+        admissionNo: safeTrim(p.admissionNo),
+        name: safeTrim(p.student?.name) || safeTrim(p.admissionNo),
+        email: emails.join(', ') || null,
+        batchId: safeTrim(p.batchId) || null,
+        batchName: batchNameMap.get(safeTrim(p.batchId)) || null,
+        hasResult: resultAdmSet.has(safeTrim(p.admissionNo))
+      };
+    });
 
     return res.status(200).json({ status: true, data });
   } catch (err) {

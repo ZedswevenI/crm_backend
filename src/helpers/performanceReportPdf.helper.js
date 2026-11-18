@@ -35,13 +35,13 @@ export const generatePerformanceReportPdfBuffer = (reportData) =>
       const mr = 40;
       const contentW = pageW - ml - mr;
 
-      // Top-right Z7i logo in header
-      const logoW = 82;
-      let lineY = 74;
+      // Top-right Z7i logo in header (larger)
+      const logoW = 128;
+      let lineY = 90;
       if (fs.existsSync(LOGO_PATH)) {
         try {
-          doc.image(LOGO_PATH, pageW - mr - logoW, 28, { width: logoW });
-          lineY = 78;
+          doc.image(LOGO_PATH, pageW - mr - logoW, 24, { width: logoW });
+          lineY = 92;
         } catch {
           lineY = 64;
         }
@@ -54,19 +54,30 @@ export const generatePerformanceReportPdfBuffer = (reportData) =>
         .strokeColor('#333333')
         .stroke();
 
-      // Heading below the header
+      // Heading below the header: Academic Performance Report
       let y = lineY + 14;
       doc
         .font('Helvetica-Bold')
-        .fontSize(16)
+        .fontSize(15)
         .fillColor('#111111')
         .text('Academic Performance Report', ml, y, {
           width: contentW,
           align: 'center'
         });
 
-      // Student Details under heading — aligned colons with close values
-      y = doc.y + 14;
+      // Student Details sub-heading on the left side
+      y = doc.y + 12;
+      doc
+        .font('Helvetica-Bold')
+        .fontSize(11)
+        .fillColor('#111111')
+        .text('Student Details', ml, y, {
+          width: contentW,
+          align: 'left'
+        });
+
+      // Student Details — aligned colons with close values
+      y = doc.y + 8;
       const detailRows = [
         ['Name', reportData.studentName || '-'],
         ['Enrollment No', reportData.enrollmentNo || '-'],
@@ -86,17 +97,28 @@ export const generatePerformanceReportPdfBuffer = (reportData) =>
         y += 18;
       }
 
-      // Exam Name as heading under student details
-      y += 12;
+      // Scorecard heading
+      y += 14;
       doc
         .font('Helvetica-Bold')
-        .fontSize(13)
+        .fontSize(14)
         .fillColor('#111111')
-        .text(reportData.examName || 'Exam Performance', ml, y, {
+        .text('Scorecard', ml, y, {
           width: contentW,
           align: 'center'
         });
-      y = doc.y + 14;
+
+      // Exam Name below Scorecard on the left side
+      y = doc.y + 10;
+      doc
+        .font('Helvetica-Bold')
+        .fontSize(11)
+        .fillColor('#111111')
+        .text(reportData.examName || 'Exam Performance', ml, y, {
+          width: contentW,
+          align: 'left'
+        });
+      y = doc.y + 10;
 
       // Grid: Subject | Your Marks | Out of | Highest | Average
       const colWidths = [
@@ -145,6 +167,11 @@ export const generatePerformanceReportPdfBuffer = (reportData) =>
 
       const tot = reportData.total || { yourMarks: 0, outOf: 0, highest: 0, average: 0 };
       drawRow(['Total', tot.yourMarks, tot.outOf, tot.highest, tot.average], y, { isTotal: true });
+
+      // Regards footer
+      y += rowH + 24;
+      doc.font('Helvetica').fontSize(10.5).fillColor('#222222').text('Regards,', ml, y);
+      doc.font('Helvetica-Bold').fontSize(10.5).fillColor('#111111').text('Team Z7i', ml, y + 16);
 
       doc.end();
     } catch (err) {
