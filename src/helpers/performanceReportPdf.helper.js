@@ -81,7 +81,6 @@ export const generatePerformanceReportPdfBuffer = (reportData) =>
       const detailRows = [
         ['Name', reportData.studentName || '-'],
         ['Enrollment No', reportData.enrollmentNo || '-'],
-        ['Admission No', reportData.admissionNo || '-'],
         ['Batch Name', reportData.batchName || '-'],
         ['Program', reportData.programName || '-']
       ];

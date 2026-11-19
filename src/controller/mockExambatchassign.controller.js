@@ -124,35 +124,99 @@ export const listBatchesByExam = async (req, res, next) => {
     })
       .sort({ enabledAt: -1 })
       .lean();
-    // MockExamBatchAssign.batchId has been observed holding a batchCode instead of the real batchId
-    // on some older records (see helpers/batch.helper.js) — match on either field defensively.
-    const batchIds = [...new Set(rows.map((r) => r.batchId).filter(Boolean))];
-    const batches = batchIds.length ? await Batch.find({ tenantId, $or: [{ batchId: { $in: batchIds } }, { batchCode: { $in: batchIds } }] }, { batchId: 1, batchName: 1, batchCode: 1 }).lean() : [];
-    const batchMap = new Map();
-    for (const b of batches) {
-      batchMap.set(b.batchId, b);
-      batchMap.set(b.batchCode, b);
+    if (rows.length > 0) {
+      // MockExamBatchAssign.batchId has been observed holding a batchCode instead of the real batchId
+      // on some older records (see helpers/batch.helper.js) — match on either field defensively.
+      const batchIds = [...new Set(rows.map((r) => r.batchId).filter(Boolean))];
+      const batches = batchIds.length ? await Batch.find({ tenantId, $or: [{ batchId: { $in: batchIds } }, { batchCode: { $in: batchIds } }] }, { batchId: 1, batchName: 1, batchCode: 1 }).lean() : [];
+      const batchMap = new Map();
+      for (const b of batches) {
+        batchMap.set(b.batchId, b);
+        batchMap.set(b.batchCode, b);
+      }
+      const data = rows.map((r) => {
+        const total = (r.students || []).length;
+        const completed = (r.students || []).filter((s) => s.status === 'completed').length;
+        const started = (r.students || []).filter((s) => s.status === 'started').length;
+        const assigned = (r.students || []).filter((s) => s.status === 'assigned').length;
+        const batch = batchMap.get(r.batchId);
+        return {
+          batchId: r.batchId,
+          batchName: batch?.batchName || null,
+          batchCode: batch?.batchCode || null,
+          centerId: r.centerId,
+          classNo: r.classNo,
+          status: r.status,
+          enabledAt: r.enabledAt,
+          enabledBy: r.enabledBy,
+          disabledAt: r.disabledAt,
+          studentCount: total,
+          completedCount: completed,
+          startedCount: started,
+          assignedCount: assigned
+        };
+      });
+      return res.status(200).json({ status: true, message: 'Batch assignments loaded', data, count: data.length });
     }
-    const data = rows.map((r) => {
-      const total = (r.students || []).length;
-      const completed = (r.students || []).filter((s) => s.status === 'completed').length;
-      const started = (r.students || []).filter((s) => s.status === 'started').length;
-      const assigned = (r.students || []).filter((s) => s.status === 'assigned').length;
-      const batch = batchMap.get(r.batchId);
+
+    // Fallback for imported exams (which have MockExamResult rows without MockExamBatchAssign)
+    const results = await MockExamResult.find(
+      { tenantId, examId, isdeleted: false },
+      { admissionNo: 1, batchId: 1, centerId: 1, classNo: 1 }
+    ).lean();
+    if (!results.length) {
+      return res.status(200).json({ status: true, message: 'Batch assignments loaded', data: [], count: 0 });
+    }
+    const missingBatchAdmNos = [...new Set(results.filter((r) => !safeTrim(r.batchId)).map((r) => safeTrim(r.admissionNo)).filter(Boolean))];
+    const profileBatchMap = new Map();
+    if (missingBatchAdmNos.length) {
+      const profiles = await StudentProfile.find(
+        { tenantId, admissionNo: { $in: missingBatchAdmNos }, isdeleted: false },
+        { admissionNo: 1, batchId: 1, centerId: 1, classNo: 1 }
+      ).lean();
+      for (const p of profiles) {
+        profileBatchMap.set(safeTrim(p.admissionNo), p);
+      }
+    }
+    const grouped = new Map();
+    for (const r of results) {
+      const prof = profileBatchMap.get(safeTrim(r.admissionNo));
+      const bId = safeTrim(r.batchId) || safeTrim(prof?.batchId);
+      if (!bId) continue;
+      const cur = grouped.get(bId) || {
+        batchId: bId,
+        centerId: safeTrim(r.centerId) || safeTrim(prof?.centerId) || null,
+        classNo: r.classNo ?? prof?.classNo ?? null,
+        count: 0
+      };
+      cur.count += 1;
+      grouped.set(bId, cur);
+    }
+    const derivedBatchIds = [...grouped.keys()];
+    const derivedBatches = derivedBatchIds.length
+      ? await Batch.find({ tenantId, $or: [{ batchId: { $in: derivedBatchIds } }, { batchCode: { $in: derivedBatchIds } }] }, { batchId: 1, batchName: 1, batchCode: 1 }).lean()
+      : [];
+    const derivedBatchMap = new Map();
+    for (const b of derivedBatches) {
+      derivedBatchMap.set(b.batchId, b);
+      derivedBatchMap.set(b.batchCode, b);
+    }
+    const data = [...grouped.values()].map((g) => {
+      const batch = derivedBatchMap.get(g.batchId);
       return {
-        batchId: r.batchId,
+        batchId: batch?.batchId || g.batchId,
         batchName: batch?.batchName || null,
         batchCode: batch?.batchCode || null,
-        centerId: r.centerId,
-        classNo: r.classNo,
-        status: r.status,
-        enabledAt: r.enabledAt,
-        enabledBy: r.enabledBy,
-        disabledAt: r.disabledAt,
-        studentCount: total,
-        completedCount: completed,
-        startedCount: started,
-        assignedCount: assigned
+        centerId: g.centerId,
+        classNo: g.classNo,
+        status: 'enabled',
+        enabledAt: null,
+        enabledBy: null,
+        disabledAt: null,
+        studentCount: g.count,
+        completedCount: g.count,
+        startedCount: 0,
+        assignedCount: 0
       };
     });
     return res.status(200).json({ status: true, message: 'Batch assignments loaded', data, count: data.length });
