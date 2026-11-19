@@ -72,24 +72,30 @@ const buildExamResultEmailData = (result, exam) => {
 const computeExamStats = async (tenantId, examId) => {
   const allResults = await MockExamResult.find(
     { tenantId, examId, isdeleted: false },
-    { obtainedMarks: 1, totalMarks: 1, sectionResults: 1 }
+    { obtainedMarks: 1, totalMarks: 1, isAbsent: 1, sectionResults: 1 }
   ).lean();
 
   const sectionBuckets = new Map();
   const sectionTotalMarks = new Map();
   let overallHighest = 0;
   let overallSum = 0;
+  let overallPresentCount = 0;
   let overallTotalMarks = 0;
 
   for (const r of allResults) {
-    const tot = Number(r.obtainedMarks ?? 0);
-    if (tot > overallHighest) overallHighest = tot;
-    overallSum += tot;
     if (!overallTotalMarks && r.totalMarks) overallTotalMarks = Number(r.totalMarks);
+    const isOverallAbsent = Boolean(r.isAbsent);
+    if (!isOverallAbsent) {
+      const tot = Number(r.obtainedMarks ?? 0);
+      if (tot > overallHighest) overallHighest = tot;
+      overallSum += tot;
+      overallPresentCount += 1;
+    }
     for (const sec of r.sectionResults || []) {
       const sid = safeTrim(sec.sectionId);
       if (!sid) continue;
       if (!sectionTotalMarks.has(sid) && sec.totalMarks) sectionTotalMarks.set(sid, Number(sec.totalMarks));
+      if (sec.isAbsent) continue;
       const val = Number(sec.obtainedMarks ?? 0);
       const cur = sectionBuckets.get(sid) || { max: -Infinity, sum: 0, count: 0 };
       if (val > cur.max) cur.max = val;
@@ -111,16 +117,16 @@ const computeExamStats = async (tenantId, examId) => {
     sectionStats,
     sectionTotalMarks,
     overallTotalMarks,
-    overallHighest: allResults.length ? overallHighest : 0,
-    overallAverage: allResults.length ? Math.round(overallSum / allResults.length) : 0
+    overallHighest: overallPresentCount ? overallHighest : 0,
+    overallAverage: overallPresentCount ? Math.round(overallSum / overallPresentCount) : 0
   };
 };
 
 const buildStudentPerformanceReportData = (profile, result, exam, batch, stats) => {
   const studentName = safeTrim(profile?.student?.name) || safeTrim(profile?.admissionNo) || 'Student';
-  const admissionNo = safeTrim(profile?.admissionNo);
-  const regNo = safeTrim(profile?.registrationNumber) || admissionNo;
-  const enrollmentNo = safeTrim(profile?.portalStudentId) || regNo || admissionNo;
+  const enrollmentNo = safeTrim(profile?.admissionNo) || '-';
+  const admissionNo = safeTrim(profile?.registrationNumber) || safeTrim(profile?.portalStudentId) || '-';
+  const regNo = safeTrim(profile?.registrationNumber) || enrollmentNo;
   const batchName = safeTrim(batch?.batchName) || safeTrim(batch?.batchCode) || '-';
   const programName = safeTrim(profile?.programName) || '-';
   const examName = safeTrim(exam?.examName) || 'Exam';
@@ -132,7 +138,7 @@ const buildStudentPerformanceReportData = (profile, result, exam, batch, stats) 
     const secStat = stats?.sectionStats?.get(sid) || { highest: 0, average: 0 };
     return {
       subject,
-      yourMarks: Number(sec.obtainedMarks ?? 0),
+      yourMarks: sec.isAbsent ? 'AB' : Number(sec.obtainedMarks ?? 0),
       outOf: Number(sec.totalMarks ?? 0),
       highest: secStat.highest,
       average: secStat.average
@@ -141,6 +147,7 @@ const buildStudentPerformanceReportData = (profile, result, exam, batch, stats) 
 
   const outOfTotal = Number(result?.totalMarks || exam?.totalMarks || 0);
   const yourTotal = Number(result?.obtainedMarks ?? 0);
+  const isOverallAbsent = Boolean(result?.isAbsent) || (rows.length > 0 && rows.every((r) => r.yourMarks === 'AB'));
 
   return {
     studentName,
@@ -153,7 +160,7 @@ const buildStudentPerformanceReportData = (profile, result, exam, batch, stats) 
     filename: buildPerformanceReportFilename(studentName, regNo),
     rows,
     total: {
-      yourMarks: yourTotal,
+      yourMarks: isOverallAbsent ? 'AB' : yourTotal,
       outOf: outOfTotal,
       highest: stats?.overallHighest ?? yourTotal,
       average: stats?.overallAverage ?? yourTotal
@@ -163,9 +170,9 @@ const buildStudentPerformanceReportData = (profile, result, exam, batch, stats) 
 
 const buildAbsentStudentPerformanceReportData = (profile, exam, batch, stats) => {
   const studentName = safeTrim(profile?.student?.name) || safeTrim(profile?.admissionNo) || 'Student';
-  const admissionNo = safeTrim(profile?.admissionNo);
-  const regNo = safeTrim(profile?.registrationNumber) || admissionNo;
-  const enrollmentNo = safeTrim(profile?.portalStudentId) || regNo || admissionNo;
+  const enrollmentNo = safeTrim(profile?.admissionNo) || '-';
+  const admissionNo = safeTrim(profile?.registrationNumber) || safeTrim(profile?.portalStudentId) || '-';
+  const regNo = safeTrim(profile?.registrationNumber) || enrollmentNo;
   const batchName = safeTrim(batch?.batchName) || safeTrim(batch?.batchCode) || '-';
   const programName = safeTrim(profile?.programName) || '-';
   const examName = safeTrim(exam?.examName) || 'Exam';
@@ -232,12 +239,13 @@ const buildStudentDetailsHtml = (reportData) => {
 const buildResultGridHtml = (reportData) => {
   const rows = Array.isArray(reportData?.rows) ? reportData.rows : [];
   const tot = reportData?.total || { yourMarks: 0, outOf: 0, highest: 0, average: 0 };
+  const isAbMarks = (v) => String(v ?? '').trim().toUpperCase() === 'AB';
   const rowsHtml = rows
     .map(
       (r) =>
         `<tr>
           <td style="padding:7px 14px;border:1px solid #000;text-align:center;">${escapeHtml(r.subject)}</td>
-          <td style="padding:7px 14px;border:1px solid #000;text-align:center;">${escapeHtml(r.yourMarks)}</td>
+          <td style="padding:7px 14px;border:1px solid #000;text-align:center;${isAbMarks(r.yourMarks) ? 'color:#dc2626;font-weight:bold;' : ''}">${escapeHtml(r.yourMarks)}</td>
           <td style="padding:7px 14px;border:1px solid #000;text-align:center;">${r.outOf}</td>
           <td style="padding:7px 14px;border:1px solid #000;text-align:center;">${r.highest}</td>
           <td style="padding:7px 14px;border:1px solid #000;text-align:center;">${r.average}</td>
@@ -259,7 +267,7 @@ const buildResultGridHtml = (reportData) => {
       ${rowsHtml}
       <tr style="font-weight:bold;">
         <td style="padding:8px 14px;border:1px solid #000;text-align:center;font-weight:bold;">Total</td>
-        <td style="padding:8px 14px;border:1px solid #000;text-align:center;font-weight:bold;">${escapeHtml(tot.yourMarks)}</td>
+        <td style="padding:8px 14px;border:1px solid #000;text-align:center;font-weight:bold;${isAbMarks(tot.yourMarks) ? 'color:#dc2626;' : ''}">${escapeHtml(tot.yourMarks)}</td>
         <td style="padding:8px 14px;border:1px solid #000;text-align:center;font-weight:bold;">${tot.outOf}</td>
         <td style="padding:8px 14px;border:1px solid #000;text-align:center;font-weight:bold;">${tot.highest}</td>
         <td style="padding:8px 14px;border:1px solid #000;text-align:center;font-weight:bold;">${tot.average}</td>

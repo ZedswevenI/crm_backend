@@ -33,6 +33,7 @@ const SectionResultSchema = new mongoose.Schema(
     skippedCount: { type: Number, default: null },
     totalMarks: { type: Number, default: 0 },
     obtainedMarks: { type: Number, default: 0 },
+    isAbsent: { type: Boolean, default: false },
     timeTaken: { type: Number, default: 0 }
   },
   { _id: false }
@@ -86,6 +87,7 @@ const MockExamResultSchema = new mongoose.Schema(
     skippedCount: { type: Number, default: null },
     totalMarks: { type: Number, default: 0 },
     obtainedMarks: { type: Number, default: 0 },
+    isAbsent: { type: Boolean, default: false },
     percentile: { type: Number, default: null },
     rank: { type: Number, default: null },
     sectionResults: { type: [SectionResultSchema], default: [] },

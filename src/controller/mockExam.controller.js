@@ -907,7 +907,7 @@ const bulkUploadHistorical = async (req, res, next) => {
           await session.abortTransaction();
           return res.status(400).json({
             status: false,
-            message: `sectionId "${sid}" not found in sections (admissionNo: ${s.admissionNo})`
+            message: `sectionId "${sid}" not found in sections (student: ${s.admissionNo || s.enrollmentNo || 'unknown'})`
           });
         }
       }
@@ -955,44 +955,95 @@ const bulkUploadHistorical = async (req, res, next) => {
       ],
       { session }
     );
-    const incomingAdmNos = students.map((s) => safeTrim(s.admissionNo)).filter(Boolean);
-    const seen = new Set();
+    const incomingIds = new Set();
+    for (const s of students) {
+      const admNo = safeTrim(s.admissionNo);
+      const enrNo = safeTrim(s.enrollmentNo);
+      if (admNo) incomingIds.add(admNo);
+      if (enrNo) incomingIds.add(enrNo);
+    }
+    const lookupValues = [...incomingIds];
+    const profiles = lookupValues.length
+      ? await StudentProfile.find(
+          {
+            tenantId,
+            isdeleted: false,
+            $or: [
+              { admissionNo: { $in: lookupValues } },
+              { registrationNumber: { $in: lookupValues } },
+              { portalStudentId: { $in: lookupValues } }
+            ]
+          },
+          { admissionNo: 1, registrationNumber: 1, portalStudentId: 1, studentId: 1, batchId: 1, centerId: 1, classNo: 1 }
+        )
+          .session(session)
+          .lean()
+      : [];
+
+    // Note: in StudentProfile, `admissionNo` holds Enrollment No and `registrationNumber` / `portalStudentId` holds Admission No.
+    const byEnrollmentMap = new Map();
+    const byRegistrationMap = new Map();
+    const byPortalIdMap = new Map();
+    for (const p of profiles) {
+      const pEnr = safeTrim(p.admissionNo);
+      const pReg = safeTrim(p.registrationNumber);
+      const pPortal = safeTrim(p.portalStudentId);
+      if (pEnr) byEnrollmentMap.set(pEnr, p);
+      if (pReg) byRegistrationMap.set(pReg, p);
+      if (pPortal) byPortalIdMap.set(pPortal, p);
+    }
+
+    const validStudents = [];
+    const notFoundErrors = [];
+    const seenProfileAdmNos = new Set();
     const dupes = [];
-    for (const no of incomingAdmNos) {
-      if (seen.has(no)) dupes.push(no);
-      else seen.add(no);
+    for (const s of students) {
+      const admNo = safeTrim(s.admissionNo);
+      const enrNo = safeTrim(s.enrollmentNo);
+      if (!admNo && !enrNo) continue;
+
+      let profile = null;
+      if (enrNo) {
+        profile = byEnrollmentMap.get(enrNo) || byRegistrationMap.get(enrNo) || byPortalIdMap.get(enrNo) || null;
+      }
+      if (!profile && admNo) {
+        profile = byRegistrationMap.get(admNo) || byPortalIdMap.get(admNo) || byEnrollmentMap.get(admNo) || null;
+      }
+
+      if (!profile) {
+        notFoundErrors.push({
+          ...(admNo ? { admissionNo: admNo } : {}),
+          ...(enrNo ? { enrollmentNo: enrNo } : {}),
+          message: 'Student not found in profiles'
+        });
+        continue;
+      }
+
+      const resolvedAdmNo = safeTrim(profile.admissionNo);
+      if (seenProfileAdmNos.has(resolvedAdmNo)) {
+        dupes.push(enrNo || admNo || resolvedAdmNo);
+        continue;
+      }
+      seenProfileAdmNos.add(resolvedAdmNo);
+      validStudents.push({ ...s, _profile: profile });
     }
     if (dupes.length) {
       await session.abortTransaction();
       return res.status(400).json({
         status: false,
-        message: 'Duplicate admissionNo(s) in students payload',
+        message: 'Duplicate student(s) in students payload',
         duplicates: dupes
       });
     }
-    const profiles = await StudentProfile.find({ tenantId, admissionNo: { $in: incomingAdmNos }, isdeleted: false }, { admissionNo: 1, studentId: 1, batchId: 1, centerId: 1, classNo: 1 })
-      .session(session)
-      .lean();
-    const profileMap = new Map(profiles.map((p) => [safeTrim(p.admissionNo), p]));
-    const validStudents = [];
-    const notFoundErrors = [];
-    for (const s of students) {
-      const admNo = safeTrim(s.admissionNo);
-      if (!admNo) continue;
-      const profile = profileMap.get(admNo);
-      if (!profile) {
-        notFoundErrors.push({ admissionNo: admNo, message: 'Student not found in profiles' });
-        continue;
-      }
-      validStudents.push({ ...s, _profile: profile });
-    }
     const nullableNum = (v) => (v !== null && v !== undefined ? toNum(v) : null);
     const resultDocs = validStudents.map((s) => {
-      const admNo = safeTrim(s.admissionNo);
       const profile = s._profile;
+      const admNo = safeTrim(profile.admissionNo);
+      const isAb = (v) => String(v ?? '').trim().toUpperCase() === 'AB';
       const secResults = (Array.isArray(s.sectionResults) ? s.sectionResults : []).map((sr) => {
         const sid = safeTrim(sr.sectionId);
         const secMeta = secMap.get(sid) || {};
+        const secAbsent = sr.isAbsent === true || isAb(sr.obtainedMarks);
         return {
           sectionId: sid,
           subjectId: secMeta.subjectId || null,
@@ -1002,11 +1053,14 @@ const bulkUploadHistorical = async (req, res, next) => {
           correctCount: nullableNum(sr.correctCount),
           wrongCount: nullableNum(sr.wrongCount),
           skippedCount: nullableNum(sr.skippedCount),
-          obtainedMarks: toNum(sr.obtainedMarks) || 0,
+          obtainedMarks: secAbsent ? 0 : (toNum(sr.obtainedMarks) || 0),
+          isAbsent: secAbsent,
           timeTaken: toNum(sr.timeTaken) || 0
         };
       });
-      const obtainedMarks = toNum(s.obtainedMarks) || 0;
+      const allSectionsAbsent = secResults.length > 0 && secResults.every((sr) => sr.isAbsent);
+      const isStudentAbsent = s.isAbsent === true || isAb(s.obtainedMarks) || allSectionsAbsent;
+      const obtainedMarks = isStudentAbsent ? 0 : (toNum(s.obtainedMarks) || 0);
       const totalQs = secResults.reduce((sum, sr) => sum + (sr.totalQuestions ?? 0), 0) || 0;
       const nullableSum = (field) => {
         const hasAny = secResults.some((sr) => sr[field] !== null && sr[field] !== undefined);
@@ -1022,10 +1076,11 @@ const bulkUploadHistorical = async (req, res, next) => {
         examId: newExamId,
         admissionNo: admNo,
         studentId: safeTrim(profile.studentId) || null,
-        batchId: safeTrim(s.batchId) || null,
+        batchId: safeTrim(s.batchId) || safeTrim(profile.batchId) || null,
         centerId: safeTrim(s.centerId) || safeTrim(profile.centerId) || null,
         classNo: s.classNo ? toNum(s.classNo) : profile.classNo || null,
         obtainedMarks,
+        isAbsent: isStudentAbsent,
         totalMarks,
         sectionResults: secResults,
         answers: [],

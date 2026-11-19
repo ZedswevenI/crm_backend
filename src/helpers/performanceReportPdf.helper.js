@@ -142,12 +142,14 @@ export const generatePerformanceReportPdfBuffer = (reportData) =>
         const useBold = isHeader || isTotal;
         for (let i = 0; i < cells.length; i++) {
           const w = colWidths[i];
+          const textVal = String(cells[i] ?? '');
+          const isAbCell = !isHeader && i === 1 && textVal.trim().toUpperCase() === 'AB';
           doc.rect(x, rowY, w, rowH).stroke();
           doc
-            .font(useBold ? 'Helvetica-Bold' : 'Helvetica')
+            .font(useBold || isAbCell ? 'Helvetica-Bold' : 'Helvetica')
             .fontSize(10)
-            .fillColor('#000000')
-            .text(String(cells[i] ?? ''), x + 6, rowY + 8, {
+            .fillColor(isAbCell ? '#dc2626' : '#000000')
+            .text(textVal, x + 6, rowY + 8, {
               width: w - 12,
               align: 'center',
               lineBreak: false,
