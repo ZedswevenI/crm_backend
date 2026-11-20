@@ -2024,23 +2024,38 @@ const sendStudentPerformanceEmail = async (req, res, next) => {
 
     const isSchool = reportType.toLowerCase() === 'school';
     const title = safeTrim(req.body?.title) || `${isSchool ? 'School' : 'Z7i'} Performance Report`;
+    const resolvedTemplateId = `PERF_REPORT_${Date.now()}`;
     const campaign = await CommunicationCampaign.create({
       tenantId,
       title,
-      channel: 'EMAIL',
+      templateId: resolvedTemplateId,
+      templateName: title,
+      category: 'EXAM_RESULT',
+      channel: 'email',
+      subject: `${isSchool ? 'School' : 'Z7i'} Performance Report`,
+      body: 'Academic Performance Report',
+      recipientFilters: {
+        studentId: studentId || null,
+        admissionNo: admissionNo || null,
+        admissionNos: admissionNos.length ? admissionNos : null,
+        batchId: batchId || null,
+        academicYear: academicYear || null,
+        reportType: isSchool ? 'school' : 'z7i',
+        examIds: examIds.length ? examIds : null,
+        fromDate: fromDate || null,
+        toDate: toDate || null,
+        note: note || null
+      },
       sendType,
       scheduledAt: sendType === 'SCHEDULED' ? scheduledAt : null,
       status: sendType === 'SCHEDULED' ? 'SCHEDULED' : 'QUEUED',
-      targetSummary: {
-        studentCount: profiles.length,
-        reportType: isSchool ? 'school' : 'z7i',
-        academicYear
-      },
+      isdeleted: false,
       createdBy: userId || null,
       updatedBy: userId || null
     });
 
     const recipientLogs = [];
+    let queuedCount = 0;
     let skippedNoRecordCount = 0;
     let skippedNoEmailCount = 0;
 
@@ -2058,44 +2073,48 @@ const sendStudentPerformanceEmail = async (req, res, next) => {
         continue;
       }
       const emails = collectStudentEmails(profile);
-      if (!emails.length) {
-        skippedNoEmailCount += 1;
-        continue;
-      }
+      const hasValidEmail = emails.length > 0;
       const { subject, html } = renderStudentPerformanceEmail(reportData, note);
-      for (const email of emails) {
-        recipientLogs.push({
-          tenantId,
-          campaignId: campaign.campaignId,
-          channel: 'EMAIL',
-          studentId: safeTrim(profile.studentId) || null,
-          admissionNo: safeTrim(profile.admissionNo) || null,
-          studentName: safeTrim(profile.student?.name) || safeTrim(profile.admissionNo),
-          recipientEmail: email,
-          subject,
-          body: html,
-          reportPayload: reportData,
-          status: 'QUEUED'
-        });
-      }
+      if (hasValidEmail) queuedCount += 1;
+      else skippedNoEmailCount += 1;
+      recipientLogs.push({
+        tenantId,
+        campaignId: campaign.campaignId,
+        channel: 'email',
+        admissionNo: safeTrim(profile.admissionNo) || null,
+        studentName: safeTrim(profile.student?.name) || safeTrim(profile.admissionNo),
+        recipientEmail: emails.join(', '),
+        batchId: safeTrim(profile.batchId) || null,
+        batchCode: batch?.batchCode || null,
+        centerId: profile.centerId || null,
+        centerCode: profile.centerCode || null,
+        programId: profile.programId || null,
+        programName: profile.programName || null,
+        subject,
+        body: html,
+        reportPayload: hasValidEmail ? reportData : null,
+        status: hasValidEmail ? 'QUEUED' : 'SKIPPED',
+        error: hasValidEmail ? null : 'Student email missing/invalid',
+        createdBy: userId || null,
+        updatedBy: userId || null
+      });
     }
 
     if (recipientLogs.length) {
       await CommunicationRecipientLog.insertMany(recipientLogs);
     }
 
-    campaign.counts = {
-      total: recipientLogs.length,
-      queued: recipientLogs.length,
-      sent: 0,
-      failed: 0
-    };
-    if (!recipientLogs.length) {
+    campaign.totalRecipients = recipientLogs.length;
+    campaign.validEmailCount = queuedCount;
+    campaign.missingEmailCount = skippedNoEmailCount;
+    campaign.queuedCount = queuedCount;
+    campaign.skippedCount = skippedNoEmailCount;
+    if (!queuedCount) {
       campaign.status = 'COMPLETED';
     }
     await campaign.save();
 
-    if (sendType === 'NOW' && recipientLogs.length) {
+    if (sendType === 'NOW' && queuedCount) {
       await processCommunicationCampaign({ tenantId, campaignId: campaign.campaignId });
     }
 
@@ -2103,11 +2122,11 @@ const sendStudentPerformanceEmail = async (req, res, next) => {
       status: true,
       message:
         sendType === 'SCHEDULED'
-          ? `Scheduled ${recipientLogs.length} performance report email(s)`
-          : `Queued/sent ${recipientLogs.length} performance report email(s)`,
+          ? `Scheduled ${queuedCount} performance report email(s)`
+          : `Queued/sent ${queuedCount} performance report email(s)`,
       data: {
         campaignId: campaign.campaignId,
-        queuedCount: recipientLogs.length,
+        queuedCount,
         skippedNoRecordCount,
         skippedNoEmailCount
       }
