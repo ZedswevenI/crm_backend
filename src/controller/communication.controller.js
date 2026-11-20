@@ -2122,6 +2122,9 @@ const listBatchSchoolExams = async (req, res, next) => {
     const tenantId = pickTenantId(req);
     const batchId = safeTrim(req.body?.batchId);
     const academicYear = safeTrim(req.body?.academicYear);
+    const reportType = safeTrim(req.body?.reportType) || 'school';
+    const isSchool = reportType.toLowerCase() !== 'z7i';
+    const dateField = isSchool ? 'examDate' : 'syncedAt';
     const fromDate = req.body?.fromDate ?? null;
     const toDate = req.body?.toDate ?? null;
 
@@ -2132,20 +2135,20 @@ const listBatchSchoolExams = async (req, res, next) => {
     const perfQuery = {
       tenantId,
       batchId,
-      performanceType: 'SCHOOL_EXAM',
+      performanceType: isSchool ? 'SCHOOL_EXAM' : 'MOCK_EXAM',
       isdeleted: false
     };
     if (academicYear) perfQuery.academicYear = academicYear;
     const { fromTs, toTs } = parseDateRange(fromDate, toDate);
     if (fromTs !== null || toTs !== null) {
-      perfQuery.examDate = {};
-      if (fromTs !== null) perfQuery.examDate.$gte = fromTs;
-      if (toTs !== null) perfQuery.examDate.$lte = toTs;
+      perfQuery[dateField] = {};
+      if (fromTs !== null) perfQuery[dateField].$gte = fromTs;
+      if (toTs !== null) perfQuery[dateField].$lte = toTs;
     }
 
     const [perfDocs, profiles] = await Promise.all([
-      StudentPerformance.find(perfQuery, { examId: 1, examName: 1, examDate: 1, studentId: 1 })
-        .sort({ examDate: -1 })
+      StudentPerformance.find(perfQuery, { examId: 1, examName: 1, examDate: 1, syncedAt: 1, studentId: 1 })
+        .sort({ [dateField]: -1 })
         .lean(),
       StudentProfile.find(
         { tenantId, batchId, isdeleted: false, status: 'ACTIVE' },
@@ -2163,7 +2166,7 @@ const listBatchSchoolExams = async (req, res, next) => {
         examMap.set(eid, {
           examId: eid,
           examName: safeTrim(d.examName) || eid,
-          examDate: d.examDate || null
+          examDate: (isSchool ? d.examDate : d.syncedAt) || null
         });
       }
       const sid = safeTrim(d.studentId);
