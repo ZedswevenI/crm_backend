@@ -12,8 +12,10 @@ import MockExam from '../models/mockExam.model.js';
 import MockExamResult from '../models/mockExamResult.model.js';
 import MockExamBatchAssign from '../models/mockExambatchmapping.model.js';
 import StudentProfile from '../models/studentProfile.model.js';
+import StudentPerformance from '../models/studentperformance.model.js';
 import Batch from '../models/batch.model.js';
 import { sendEmail } from '../services/mail.service.js';
+import AdmZip from 'adm-zip';
 import { buildPerformanceReportFilename, generatePerformanceReportPdfBuffer } from '../helpers/performanceReportPdf.helper.js';
 
 const pickTenantId = (req) => String(req.body?.entiId || req.body?.tenantId || '').trim();
@@ -33,6 +35,7 @@ const collectStudentEmails = (profile) => {
   return [
     ...new Set(
       raw
+        .flatMap((e) => String(e || '').split(/[,;\s]+/))
         .map((e) => safeTrim(e).toLowerCase())
         .filter((e) => isValidEmailAddress(e))
     )
@@ -274,6 +277,15 @@ const buildResultGridHtml = (reportData) => {
     </tbody>
   </table>`;
 };
+
+const buildMultiExamResultGridHtml = (exams = []) =>
+  (Array.isArray(exams) ? exams : [])
+    .map(
+      (ex) => `
+      <p style="font-weight:bold;margin:14px 0 4px;">Exam Name: ${escapeHtml(ex.examName || 'Exam')}</p>
+      ${buildResultGridHtml(ex)}`
+    )
+    .join('');
 
 const buildAbsentMessageHtml = ({ studentName, classNo, batchName, examName }) =>
   `<p style="margin-top:12px;">We like to inform you that <b>${escapeHtml(studentName)}</b> (Class ${escapeHtml(classNo || '-')}, Batch ${escapeHtml(batchName || '-')}) was marked absent for <b>${escapeHtml(examName)}</b>.<br/>Please reach out to the center if you believe this is incorrect.</p>`;
@@ -1573,6 +1585,692 @@ const listExamResultBatchStudents = async (req, res, next) => {
   }
 };
 
+const parseDateRange = (fromDate, toDate) => {
+  let fromTs = null;
+  let toTs = null;
+  if (fromDate !== undefined && fromDate !== null && String(fromDate).trim() !== '') {
+    const num = Number(fromDate);
+    if (Number.isFinite(num) && num > 0) {
+      fromTs = num;
+    } else {
+      const d = new Date(String(fromDate).trim());
+      if (!isNaN(d.getTime())) {
+        d.setHours(0, 0, 0, 0);
+        fromTs = d.getTime();
+      }
+    }
+  }
+  if (toDate !== undefined && toDate !== null && String(toDate).trim() !== '') {
+    const num = Number(toDate);
+    if (Number.isFinite(num) && num > 0) {
+      toTs = num;
+    } else {
+      const d = new Date(String(toDate).trim());
+      if (!isNaN(d.getTime())) {
+        d.setHours(23, 59, 59, 999);
+        toTs = d.getTime();
+      }
+    }
+  }
+  return { fromTs, toTs };
+};
+
+const buildStudentPerformanceMultiReport = async (
+  tenantId,
+  profile,
+  batch,
+  { academicYear, reportType = 'z7i', examIds = [], fromDate = null, toDate = null }
+) => {
+  const isSchool = safeTrim(reportType).toLowerCase() === 'school';
+  const perfType = isSchool ? 'SCHOOL_EXAM' : 'MOCK_EXAM';
+  const query = {
+    tenantId,
+    studentId: safeTrim(profile?.studentId),
+    performanceType: perfType,
+    isdeleted: false
+  };
+  if (academicYear) query.academicYear = academicYear;
+  if (Array.isArray(examIds) && examIds.length) {
+    query.examId = { $in: examIds.map(safeTrim).filter(Boolean) };
+  }
+  const { fromTs, toTs } = parseDateRange(fromDate, toDate);
+  if (fromTs !== null || toTs !== null) {
+    const dateField = isSchool ? 'examDate' : 'syncedAt';
+    query[dateField] = {};
+    if (fromTs !== null) query[dateField].$gte = fromTs;
+    if (toTs !== null) query[dateField].$lte = toTs;
+  }
+
+  const perfDocs = await StudentPerformance.find(query)
+    .sort(isSchool ? { examDate: 1 } : { syncedAt: 1 })
+    .lean();
+
+  if (!perfDocs.length) return null;
+
+  const studentName = safeTrim(profile?.student?.name) || safeTrim(profile?.admissionNo) || 'Student';
+  const enrollmentNo = safeTrim(profile?.admissionNo) || '-';
+  const regNo = safeTrim(profile?.registrationNumber) || enrollmentNo;
+  const batchName = safeTrim(batch?.batchName) || safeTrim(batch?.batchCode) || '-';
+  const programName = safeTrim(profile?.programName) || '-';
+  const reportLabel = isSchool ? 'School Performance Report' : 'Z7i Performance Report';
+
+  const exams = [];
+  if (isSchool) {
+    const schoolExamKeys = [...new Set(perfDocs.map((d) => safeTrim(d.examId) || safeTrim(d.examName)).filter(Boolean))];
+    const batchSchoolQuery = {
+      tenantId,
+      performanceType: 'SCHOOL_EXAM',
+      isdeleted: false
+    };
+    if (academicYear) batchSchoolQuery.academicYear = academicYear;
+    if (profile?.batchId) batchSchoolQuery.batchId = safeTrim(profile.batchId);
+    const allBatchSchoolDocs = await StudentPerformance.find(batchSchoolQuery, {
+      examId: 1,
+      examName: 1,
+      obtainedMarks: 1,
+      subjects: 1
+    }).lean();
+
+    const statsByExamKey = new Map();
+    for (const doc of allBatchSchoolDocs) {
+      const key = safeTrim(doc.examId) || safeTrim(doc.examName);
+      if (!key || !schoolExamKeys.includes(key)) continue;
+      const entry = statsByExamKey.get(key) || {
+        overallMax: 0,
+        overallSum: 0,
+        overallCount: 0,
+        subjects: new Map()
+      };
+      const tot = Number(doc.obtainedMarks ?? 0);
+      if (tot > entry.overallMax) entry.overallMax = tot;
+      entry.overallSum += tot;
+      entry.overallCount += 1;
+      for (const s of doc.subjects || []) {
+        const sName = safeTrim(s.subjectName);
+        if (!sName) continue;
+        const val = Number(s.obtainedMarks ?? 0);
+        const cur = entry.subjects.get(sName) || { max: -Infinity, sum: 0, count: 0 };
+        if (val > cur.max) cur.max = val;
+        cur.sum += val;
+        cur.count += 1;
+        entry.subjects.set(sName, cur);
+      }
+      statsByExamKey.set(key, entry);
+    }
+
+    for (const doc of perfDocs) {
+      const key = safeTrim(doc.examId) || safeTrim(doc.examName);
+      const exStats = statsByExamKey.get(key);
+      const rows = (doc.subjects || []).map((sub) => {
+        const sName = safeTrim(sub.subjectName) || '-';
+        const sStat = exStats?.subjects.get(sName);
+        const isAb = String(sub.obtainedMarks ?? '').trim().toUpperCase() === 'AB';
+        return {
+          subject: sName,
+          yourMarks: isAb ? 'AB' : Number(sub.obtainedMarks ?? 0),
+          outOf: Number(sub.maxMarks ?? 0),
+          highest: sStat && sStat.max !== -Infinity ? sStat.max : Number(sub.obtainedMarks ?? 0),
+          average: sStat && sStat.count > 0 ? Math.round(sStat.sum / sStat.count) : Number(sub.obtainedMarks ?? 0)
+        };
+      });
+      const outOfTotal = Number(doc.totalMarks ?? rows.reduce((a, r) => a + Number(r.outOf || 0), 0));
+      const yourTotal = Number(doc.obtainedMarks ?? 0);
+      exams.push({
+        examId: doc.examId,
+        examName: safeTrim(doc.examName) || 'School Exam',
+        rows,
+        total: {
+          yourMarks: yourTotal,
+          outOf: outOfTotal,
+          highest: exStats?.overallCount ? exStats.overallMax : yourTotal,
+          average: exStats?.overallCount ? Math.round(exStats.overallSum / exStats.overallCount) : yourTotal
+        }
+      });
+    }
+  } else {
+    const mockExamIds = [...new Set(perfDocs.map((d) => safeTrim(d.examId)).filter(Boolean))];
+    const [resultDocs, statsPairs] = await Promise.all([
+      mockExamIds.length
+        ? MockExamResult.find(
+            { tenantId, examId: { $in: mockExamIds }, admissionNo: enrollmentNo, isdeleted: false },
+            { examId: 1, obtainedMarks: 1, totalMarks: 1, isAbsent: 1, sectionResults: 1 }
+          ).lean()
+        : [],
+      Promise.all(mockExamIds.map(async (id) => [id, await computeExamStats(tenantId, id)]))
+    ]);
+    const resultByExamId = new Map(resultDocs.map((r) => [safeTrim(r.examId), r]));
+    const statsByExamId = new Map(statsPairs);
+
+    for (const doc of perfDocs) {
+      const eid = safeTrim(doc.examId);
+      const rawRes = resultByExamId.get(eid);
+      const exStats = statsByExamId.get(eid);
+      const rawSecMap = new Map((rawRes?.sectionResults || []).map((sr) => [safeTrim(sr.sectionId), sr]));
+      const rows = (doc.sectionResults || []).map((sec) => {
+        const sid = safeTrim(sec.sectionId);
+        const rawSec = rawSecMap.get(sid);
+        const isAb = Boolean(rawSec?.isAbsent);
+        const sStat = exStats?.sectionStats?.get(sid) || { highest: 0, average: 0 };
+        return {
+          subject: safeTrim(sec.subjectName) || sid || '-',
+          yourMarks: isAb ? 'AB' : Number(sec.obtainedMarks ?? 0),
+          outOf: Number(sec.totalMarks ?? 0),
+          highest: sStat.highest,
+          average: sStat.average
+        };
+      });
+      const outOfTotal = Number(doc.totalMarks ?? 0);
+      const yourTotal = Number(doc.obtainedMarks ?? 0);
+      const isOverallAb = Boolean(rawRes?.isAbsent) || (rows.length > 0 && rows.every((r) => r.yourMarks === 'AB'));
+      exams.push({
+        examId: eid,
+        examName: safeTrim(doc.examName) || 'Exam',
+        rows,
+        total: {
+          yourMarks: isOverallAb ? 'AB' : yourTotal,
+          outOf: outOfTotal,
+          highest: exStats?.overallHighest ?? yourTotal,
+          average: exStats?.overallAverage ?? yourTotal
+        }
+      });
+    }
+  }
+
+  return {
+    studentName,
+    regNo,
+    enrollmentNo,
+    batchName,
+    programName,
+    reportType: isSchool ? 'school' : 'z7i',
+    examName: reportLabel,
+    filename: buildPerformanceReportFilename(studentName, enrollmentNo),
+    exams
+  };
+};
+
+const renderStudentPerformanceEmail = (reportData, note = '') => {
+  const cleanNote = safeTrim(note);
+  const noteBlock = cleanNote
+    ? `<p style="margin-top:12px;color:#0d6efd;"><b>Note:</b> ${escapeHtml(cleanNote)}</p>`
+    : '';
+  const subject = `${reportData.examName} - ${reportData.studentName}`;
+  const html = `<p>Dear Parents,</p>
+<p>Please find the <b>${escapeHtml(reportData.examName)}</b> attached below.</p>
+${buildStudentDetailsHtml(reportData)}
+${buildMultiExamResultGridHtml(reportData.exams)}
+${noteBlock}
+<p style="margin-top:16px;">Regards,<br/><b>Team Z7i</b><br/>Coimbatore</p>`;
+  return { subject, html };
+};
+
+const previewStudentPerformanceEmail = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const studentId = safeTrim(req.body?.studentId);
+    const admissionNo = safeTrim(req.body?.admissionNo);
+    const batchId = safeTrim(req.body?.batchId);
+    const admissionNos = Array.isArray(req.body?.admissionNos)
+      ? req.body.admissionNos.map(safeTrim).filter(Boolean)
+      : [];
+    const academicYear = safeTrim(req.body?.academicYear);
+    const reportType = safeTrim(req.body?.reportType) || 'z7i';
+    const examIds = Array.isArray(req.body?.examIds) ? req.body.examIds : [];
+    const fromDate = req.body?.fromDate ?? null;
+    const toDate = req.body?.toDate ?? null;
+    const note = safeTrim(req.body?.note);
+
+    if (!tenantId || (!studentId && !admissionNo && !batchId)) {
+      return res.status(400).json({ status: false, message: 'tenantId and studentId, admissionNo, or batchId are required' });
+    }
+
+    const profileQuery = { tenantId, isdeleted: false };
+    if (studentId) profileQuery.studentId = studentId;
+    else if (admissionNo) profileQuery.admissionNo = admissionNo;
+    else {
+      profileQuery.batchId = batchId;
+      if (admissionNos.length) profileQuery.admissionNo = { $in: admissionNos };
+    }
+
+    const profiles = await StudentProfile.find(profileQuery, {
+      admissionNo: 1,
+      registrationNumber: 1,
+      studentId: 1,
+      batchId: 1,
+      programName: 1,
+      'student.name': 1,
+      'student.email': 1,
+      'student.email1': 1,
+      'student.email2': 1
+    })
+      .sort({ 'student.name': 1 })
+      .limit(studentId || admissionNo ? 1 : 25)
+      .lean();
+    if (!profiles.length) return res.status(404).json({ status: false, message: 'Student not found' });
+
+    const batchCache = new Map();
+    let chosenProfile = null;
+    let reportData = null;
+    for (const p of profiles) {
+      const bId = safeTrim(p.batchId);
+      let batch = batchCache.get(bId) || null;
+      if (bId && !batchCache.has(bId)) {
+        batch = await Batch.findOne(
+          { tenantId, $or: [{ batchId: bId }, { batchCode: bId }] },
+          { batchId: 1, batchCode: 1, batchName: 1 }
+        ).lean();
+        batchCache.set(bId, batch);
+      }
+      const candidate = await buildStudentPerformanceMultiReport(tenantId, p, batch, {
+        academicYear,
+        reportType,
+        examIds,
+        fromDate,
+        toDate
+      });
+      if (candidate) {
+        chosenProfile = p;
+        reportData = candidate;
+        break;
+      }
+    }
+
+    if (!reportData || !chosenProfile) {
+      return res.status(404).json({
+        status: false,
+        message: `No ${reportType === 'school' ? 'School' : 'Z7i'} exam records found for the selected criteria`
+      });
+    }
+
+    const { subject, html } = renderStudentPerformanceEmail(reportData, note);
+    const emails = collectStudentEmails(chosenProfile);
+    return res.status(200).json({
+      status: true,
+      data: {
+        subject,
+        html,
+        recipientEmails: emails,
+        reportData
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const downloadStudentPerformanceReportPdf = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const studentId = safeTrim(req.body?.studentId);
+    const admissionNo = safeTrim(req.body?.admissionNo);
+    const academicYear = safeTrim(req.body?.academicYear);
+    const reportType = safeTrim(req.body?.reportType) || 'z7i';
+    const examIds = Array.isArray(req.body?.examIds) ? req.body.examIds : [];
+    const fromDate = req.body?.fromDate ?? null;
+    const toDate = req.body?.toDate ?? null;
+
+    if (!tenantId || (!studentId && !admissionNo)) {
+      return res.status(400).json({ status: false, message: 'tenantId and studentId (or admissionNo) are required' });
+    }
+
+    const profileQuery = { tenantId, isdeleted: false };
+    if (studentId) profileQuery.studentId = studentId;
+    else profileQuery.admissionNo = admissionNo;
+
+    const profile = await StudentProfile.findOne(profileQuery, {
+      admissionNo: 1,
+      registrationNumber: 1,
+      studentId: 1,
+      batchId: 1,
+      programName: 1,
+      'student.name': 1
+    }).lean();
+    if (!profile) return res.status(404).json({ status: false, message: 'Student not found' });
+
+    const batch = profile.batchId
+      ? await Batch.findOne(
+          { tenantId, $or: [{ batchId: profile.batchId }, { batchCode: profile.batchId }] },
+          { batchId: 1, batchCode: 1, batchName: 1 }
+        ).lean()
+      : null;
+
+    const reportData = await buildStudentPerformanceMultiReport(tenantId, profile, batch, {
+      academicYear,
+      reportType,
+      examIds,
+      fromDate,
+      toDate
+    });
+    if (!reportData) {
+      return res.status(404).json({ status: false, message: 'No performance records found' });
+    }
+
+    const pdfBuffer = await generatePerformanceReportPdfBuffer(reportData);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${reportData.filename}"`);
+    res.setHeader('Content-Length', pdfBuffer.length);
+    return res.status(200).send(pdfBuffer);
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const sendStudentPerformanceEmail = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const userId = pickUserId(req);
+    const studentId = safeTrim(req.body?.studentId);
+    const admissionNo = safeTrim(req.body?.admissionNo);
+    const batchId = safeTrim(req.body?.batchId);
+    const admissionNos = Array.isArray(req.body?.admissionNos)
+      ? req.body.admissionNos.map(safeTrim).filter(Boolean)
+      : [];
+    const academicYear = safeTrim(req.body?.academicYear);
+    const reportType = safeTrim(req.body?.reportType) || 'z7i';
+    const examIds = Array.isArray(req.body?.examIds) ? req.body.examIds : [];
+    const fromDate = req.body?.fromDate ?? null;
+    const toDate = req.body?.toDate ?? null;
+    const note = safeTrim(req.body?.note);
+    const sendType = safeTrim(req.body?.sendType || 'NOW').toUpperCase();
+    const scheduledAt = req.body?.scheduledAt ? Number(req.body.scheduledAt) : null;
+
+    if (!tenantId || (!studentId && !admissionNo && !batchId)) {
+      return res.status(400).json({ status: false, message: 'tenantId and studentId, admissionNo, or batchId are required' });
+    }
+    if (sendType === 'SCHEDULED' && (!scheduledAt || !Number.isFinite(scheduledAt) || scheduledAt <= Date.now())) {
+      return res.status(400).json({ status: false, message: 'Valid future scheduledAt timestamp is required' });
+    }
+
+    const profileQuery = { tenantId, isdeleted: false };
+    if (studentId) profileQuery.studentId = studentId;
+    else if (admissionNo) profileQuery.admissionNo = admissionNo;
+    else {
+      profileQuery.batchId = batchId;
+      if (admissionNos.length) profileQuery.admissionNo = { $in: admissionNos };
+    }
+
+    const profiles = await StudentProfile.find(profileQuery, {
+      admissionNo: 1,
+      registrationNumber: 1,
+      studentId: 1,
+      batchId: 1,
+      centerId: 1,
+      centerCode: 1,
+      programId: 1,
+      programName: 1,
+      classNo: 1,
+      'student.name': 1,
+      'student.email': 1,
+      'student.email1': 1,
+      'student.email2': 1
+    }).lean();
+
+    if (!profiles.length) {
+      return res.status(404).json({ status: false, message: 'No matching students found' });
+    }
+
+    const batchIds = [...new Set(profiles.map((p) => safeTrim(p.batchId)).filter(Boolean))];
+    const batches = batchIds.length
+      ? await Batch.find(
+          { tenantId, $or: [{ batchId: { $in: batchIds } }, { batchCode: { $in: batchIds } }] },
+          { batchId: 1, batchCode: 1, batchName: 1 }
+        ).lean()
+      : [];
+    const batchMap = new Map();
+    for (const b of batches) {
+      batchMap.set(b.batchId, b);
+      batchMap.set(b.batchCode, b);
+    }
+
+    const isSchool = reportType.toLowerCase() === 'school';
+    const title = safeTrim(req.body?.title) || `${isSchool ? 'School' : 'Z7i'} Performance Report`;
+    const campaign = await CommunicationCampaign.create({
+      tenantId,
+      title,
+      channel: 'EMAIL',
+      sendType,
+      scheduledAt: sendType === 'SCHEDULED' ? scheduledAt : null,
+      status: sendType === 'SCHEDULED' ? 'SCHEDULED' : 'QUEUED',
+      targetSummary: {
+        studentCount: profiles.length,
+        reportType: isSchool ? 'school' : 'z7i',
+        academicYear
+      },
+      createdBy: userId || null,
+      updatedBy: userId || null
+    });
+
+    const recipientLogs = [];
+    let skippedNoRecordCount = 0;
+    let skippedNoEmailCount = 0;
+
+    for (const profile of profiles) {
+      const batch = batchMap.get(safeTrim(profile.batchId)) || null;
+      const reportData = await buildStudentPerformanceMultiReport(tenantId, profile, batch, {
+        academicYear,
+        reportType,
+        examIds,
+        fromDate,
+        toDate
+      });
+      if (!reportData) {
+        skippedNoRecordCount += 1;
+        continue;
+      }
+      const emails = collectStudentEmails(profile);
+      if (!emails.length) {
+        skippedNoEmailCount += 1;
+        continue;
+      }
+      const { subject, html } = renderStudentPerformanceEmail(reportData, note);
+      for (const email of emails) {
+        recipientLogs.push({
+          tenantId,
+          campaignId: campaign.campaignId,
+          channel: 'EMAIL',
+          studentId: safeTrim(profile.studentId) || null,
+          admissionNo: safeTrim(profile.admissionNo) || null,
+          studentName: safeTrim(profile.student?.name) || safeTrim(profile.admissionNo),
+          recipientEmail: email,
+          subject,
+          body: html,
+          reportPayload: reportData,
+          status: 'QUEUED'
+        });
+      }
+    }
+
+    if (recipientLogs.length) {
+      await CommunicationRecipientLog.insertMany(recipientLogs);
+    }
+
+    campaign.counts = {
+      total: recipientLogs.length,
+      queued: recipientLogs.length,
+      sent: 0,
+      failed: 0
+    };
+    if (!recipientLogs.length) {
+      campaign.status = 'COMPLETED';
+    }
+    await campaign.save();
+
+    if (sendType === 'NOW' && recipientLogs.length) {
+      await processCommunicationCampaign({ tenantId, campaignId: campaign.campaignId });
+    }
+
+    return res.status(200).json({
+      status: true,
+      message:
+        sendType === 'SCHEDULED'
+          ? `Scheduled ${recipientLogs.length} performance report email(s)`
+          : `Queued/sent ${recipientLogs.length} performance report email(s)`,
+      data: {
+        campaignId: campaign.campaignId,
+        queuedCount: recipientLogs.length,
+        skippedNoRecordCount,
+        skippedNoEmailCount
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const listBatchSchoolExams = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const batchId = safeTrim(req.body?.batchId);
+    const academicYear = safeTrim(req.body?.academicYear);
+    const fromDate = req.body?.fromDate ?? null;
+    const toDate = req.body?.toDate ?? null;
+
+    if (!tenantId || !batchId) {
+      return res.status(400).json({ status: false, message: 'tenantId and batchId are required' });
+    }
+
+    const perfQuery = {
+      tenantId,
+      batchId,
+      performanceType: 'SCHOOL_EXAM',
+      isdeleted: false
+    };
+    if (academicYear) perfQuery.academicYear = academicYear;
+    const { fromTs, toTs } = parseDateRange(fromDate, toDate);
+    if (fromTs !== null || toTs !== null) {
+      perfQuery.examDate = {};
+      if (fromTs !== null) perfQuery.examDate.$gte = fromTs;
+      if (toTs !== null) perfQuery.examDate.$lte = toTs;
+    }
+
+    const [perfDocs, profiles] = await Promise.all([
+      StudentPerformance.find(perfQuery, { examId: 1, examName: 1, examDate: 1, studentId: 1 })
+        .sort({ examDate: -1 })
+        .lean(),
+      StudentProfile.find(
+        { tenantId, batchId, isdeleted: false, status: 'ACTIVE' },
+        { studentId: 1, admissionNo: 1, 'student.name': 1, 'student.email': 1, 'student.email1': 1, 'student.email2': 1 }
+      )
+        .sort({ 'student.name': 1 })
+        .lean()
+    ]);
+
+    const examMap = new Map();
+    const studentExamMap = new Map();
+    for (const d of perfDocs) {
+      const eid = safeTrim(d.examId) || safeTrim(d.examName);
+      if (eid && !examMap.has(eid)) {
+        examMap.set(eid, {
+          examId: eid,
+          examName: safeTrim(d.examName) || eid,
+          examDate: d.examDate || null
+        });
+      }
+      const sid = safeTrim(d.studentId);
+      if (sid) {
+        const set = studentExamMap.get(sid) || new Set();
+        if (eid) set.add(eid);
+        studentExamMap.set(sid, set);
+      }
+    }
+
+    const students = profiles.map((p) => {
+      const emails = collectStudentEmails(p);
+      const exSet = studentExamMap.get(safeTrim(p.studentId));
+      return {
+        studentId: safeTrim(p.studentId),
+        admissionNo: safeTrim(p.admissionNo),
+        name: safeTrim(p.student?.name) || safeTrim(p.admissionNo),
+        email: emails.join(', ') || null,
+        examIds: exSet ? [...exSet] : [],
+        hasRecord: Boolean(exSet && exSet.size > 0)
+      };
+    });
+
+    return res.status(200).json({
+      status: true,
+      data: {
+        exams: [...examMap.values()],
+        students
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const downloadStudentPerformanceReportZip = async (req, res, next) => {
+  try {
+    const tenantId = pickTenantId(req);
+    const batchId = safeTrim(req.body?.batchId);
+    const academicYear = safeTrim(req.body?.academicYear);
+    const reportType = safeTrim(req.body?.reportType) || 'school';
+    const admissionNos = Array.isArray(req.body?.admissionNos)
+      ? req.body.admissionNos.map(safeTrim).filter(Boolean)
+      : [];
+    const examIds = Array.isArray(req.body?.examIds) ? req.body.examIds : [];
+    const fromDate = req.body?.fromDate ?? null;
+    const toDate = req.body?.toDate ?? null;
+
+    if (!tenantId || !batchId) {
+      return res.status(400).json({ status: false, message: 'tenantId and batchId are required' });
+    }
+
+    const profileQuery = { tenantId, batchId, isdeleted: false };
+    if (admissionNos.length) profileQuery.admissionNo = { $in: admissionNos };
+
+    const profiles = await StudentProfile.find(profileQuery, {
+      admissionNo: 1,
+      registrationNumber: 1,
+      studentId: 1,
+      batchId: 1,
+      programName: 1,
+      'student.name': 1
+    })
+      .sort({ 'student.name': 1 })
+      .lean();
+
+    if (!profiles.length) {
+      return res.status(404).json({ status: false, message: 'No matching students found' });
+    }
+
+    const batch = await Batch.findOne(
+      { tenantId, $or: [{ batchId }, { batchCode: batchId }] },
+      { batchId: 1, batchCode: 1, batchName: 1 }
+    ).lean();
+
+    const zip = new AdmZip();
+    let addedCount = 0;
+    for (const profile of profiles) {
+      const reportData = await buildStudentPerformanceMultiReport(tenantId, profile, batch, {
+        academicYear,
+        reportType,
+        examIds,
+        fromDate,
+        toDate
+      });
+      if (!reportData) continue;
+      const pdfBuffer = await generatePerformanceReportPdfBuffer(reportData);
+      zip.addFile(reportData.filename, pdfBuffer);
+      addedCount += 1;
+    }
+
+    if (!addedCount) {
+      return res.status(404).json({ status: false, message: 'No performance reports found for the selected students/filters' });
+    }
+
+    const zipBuffer = zip.toBuffer();
+    const batchLabel = safeTrim(batch?.batchCode || batch?.batchName || batchId).replace(/[^A-Za-z0-9_-]/g, '_');
+    const zipFilename = `${reportType === 'school' ? 'School' : 'Z7i'}_Performance_${batchLabel}.zip`;
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${zipFilename}"`);
+    res.setHeader('Content-Length', zipBuffer.length);
+    return res.status(200).send(zipBuffer);
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export default {
   createTemplate,
   updateTemplate,
@@ -1596,5 +2294,10 @@ export default {
   previewExamResultEmail,
   downloadPerformanceReportPdf,
   listExamResultBatchStudents,
-  sendAdmissionAcknowledgement
+  sendAdmissionAcknowledgement,
+  previewStudentPerformanceEmail,
+  downloadStudentPerformanceReportPdf,
+  downloadStudentPerformanceReportZip,
+  listBatchSchoolExams,
+  sendStudentPerformanceEmail
 };

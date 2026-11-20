@@ -107,18 +107,6 @@ export const generatePerformanceReportPdfBuffer = (reportData) =>
           align: 'center'
         });
 
-      // Exam Name below Score Card on the left side
-      y = doc.y + 10;
-      doc
-        .font('Helvetica-Bold')
-        .fontSize(11)
-        .fillColor('#111111')
-        .text(`Exam Name: ${reportData.examName || 'Exam Performance'}`, ml, y, {
-          width: contentW,
-          align: 'left'
-        });
-      y = doc.y + 10;
-
       // Grid: Subject | Your Marks | Out of | Highest | Average
       // Header row and Total row in bold; all data rows in normal weight
       const colWidths = [
@@ -134,6 +122,7 @@ export const generatePerformanceReportPdfBuffer = (reportData) =>
       ];
       const headers = ['Subject', 'Your Marks', 'Out of', 'Highest', 'Average'];
       const rowH = 26;
+      const pageBottom = doc.page.height - doc.page.margins.bottom;
 
       const drawRow = (cells, rowY, { isHeader = false, isTotal = false } = {}) => {
         let x = ml;
@@ -158,20 +147,66 @@ export const generatePerformanceReportPdfBuffer = (reportData) =>
         }
       };
 
-      drawRow(headers, y, { isHeader: true });
-      y += rowH;
+      const examList =
+        Array.isArray(reportData.exams) && reportData.exams.length
+          ? reportData.exams
+          : [
+              {
+                examName: reportData.examName || 'Exam Performance',
+                rows: Array.isArray(reportData.rows) ? reportData.rows : [],
+                total: reportData.total || { yourMarks: 0, outOf: 0, highest: 0, average: 0 }
+              }
+            ];
 
-      const rows = Array.isArray(reportData.rows) ? reportData.rows : [];
-      for (const r of rows) {
-        drawRow([r.subject, r.yourMarks, r.outOf, r.highest, r.average], y);
+      y = doc.y + 10;
+      for (const ex of examList) {
+        const exRows = Array.isArray(ex.rows) ? ex.rows : [];
+        const neededH = 24 + (exRows.length + 2) * rowH + 14;
+        if (y + neededH > pageBottom) {
+          doc.addPage();
+          y = doc.page.margins.top;
+        }
+
+        doc
+          .font('Helvetica-Bold')
+          .fontSize(11)
+          .fillColor('#111111')
+          .text(`Exam Name: ${ex.examName || 'Exam Performance'}`, ml, y, {
+            width: contentW,
+            align: 'left'
+          });
+        y = doc.y + 8;
+
+        drawRow(headers, y, { isHeader: true });
         y += rowH;
+
+        for (const r of exRows) {
+          if (y + rowH > pageBottom) {
+            doc.addPage();
+            y = doc.page.margins.top;
+            drawRow(headers, y, { isHeader: true });
+            y += rowH;
+          }
+          drawRow([r.subject, r.yourMarks, r.outOf, r.highest, r.average], y);
+          y += rowH;
+        }
+
+        const tot = ex.total || { yourMarks: 0, outOf: 0, highest: 0, average: 0 };
+        if (y + rowH > pageBottom) {
+          doc.addPage();
+          y = doc.page.margins.top;
+        }
+        drawRow(['Total', tot.yourMarks, tot.outOf, tot.highest, tot.average], y, { isTotal: true });
+        y += rowH + 16;
       }
 
-      const tot = reportData.total || { yourMarks: 0, outOf: 0, highest: 0, average: 0 };
-      drawRow(['Total', tot.yourMarks, tot.outOf, tot.highest, tot.average], y, { isTotal: true });
-
       // Regards footer
-      y += rowH + 24;
+      if (y + 56 > pageBottom) {
+        doc.addPage();
+        y = doc.page.margins.top;
+      } else {
+        y += 8;
+      }
       doc.font('Helvetica').fontSize(10.5).fillColor('#222222').text('Regards,', ml, y);
       doc.font('Helvetica-Bold').fontSize(10.5).fillColor('#111111').text('Team Z7i', ml, y + 15);
       doc.font('Helvetica').fontSize(10.5).fillColor('#222222').text('Coimbatore', ml, y + 30);

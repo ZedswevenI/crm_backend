@@ -19,6 +19,11 @@ routes.post('/exam-result/send', validatetoken, requirePermission('communication
 routes.post('/exam-result/preview', validatetoken, requirePermission('communication:send'), communicationCtrl.previewExamResultEmail);
 routes.post('/exam-result/report-pdf', validatetoken, requirePermission('communication:send'), communicationCtrl.downloadPerformanceReportPdf);
 routes.post('/exam-result/batch-students', validatetoken, requirePermission('communication:send'), communicationCtrl.listExamResultBatchStudents);
+routes.post('/student-performance/preview', validatetoken, requirePermission('communication:send'), communicationCtrl.previewStudentPerformanceEmail);
+routes.post('/student-performance/report-pdf', validatetoken, requirePermission('communication:send'), communicationCtrl.downloadStudentPerformanceReportPdf);
+routes.post('/student-performance/report-zip', validatetoken, requirePermission('communication:send'), communicationCtrl.downloadStudentPerformanceReportZip);
+routes.post('/student-performance/school-exams', validatetoken, requirePermission('performance:view'), communicationCtrl.listBatchSchoolExams);
+routes.post('/student-performance/send', validatetoken, requirePermission('communication:send'), communicationCtrl.sendStudentPerformanceEmail);
 routes.post('/acknowledgement/send', validatetoken, requirePermission('communication:send'), communicationCtrl.sendAdmissionAcknowledgement);
 routes.post('/campaign/list', validatetoken, requirePermission('communicationLog:list'), communicationCtrl.listCampaigns);
 routes.post('/logs/list', validatetoken, requirePermission('communicationLog:list'), communicationCtrl.listLogs);
